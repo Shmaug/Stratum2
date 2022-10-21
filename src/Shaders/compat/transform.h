@@ -47,47 +47,59 @@ struct TransformData {
 #endif
 		return r;
 	}
-};
 
-inline TransformData make_transform(const float3 t, const quatf r, const float3 s) {
-	TransformData result;
 #ifdef __cplusplus
-	result.m = Eigen::Affine3f(Eigen::Translation3f(t)).matrix().topRows<3>();
-	result.m.block<3, 3>(0, 0) = (Eigen::Quaternionf(r.w, r.xyz[0], r.xyz[1], r.xyz[2]) * Eigen::Scaling(s.matrix())).matrix();
+	TransformData() = default;
+	TransformData(TransformData&&) = default;
+	TransformData(const TransformData&) = default;
+	TransformData& operator=(TransformData&&) = default;
+	TransformData& operator=(const TransformData&) = default;
+
+	inline TransformData(const float3x4& t) : m(t) {}
+	inline TransformData(const float3& t, const quatf& r, const float3& s) {
+		m = Eigen::Affine3f(Eigen::Translation3f(t)).matrix().topRows<3>();
+		m.block<3, 3>(0, 0) = (Eigen::Quaternionf(r.w, r.xyz[0], r.xyz[1], r.xyz[2]) * Eigen::Scaling(s.matrix())).matrix();
+	}
 #else
-	// https://www.euclideanspace.com/maths/geometry/rotations/conversions/quaternionToMatrix/index.htm
-	float sqw = r.w * r.w;
-	float sqx = r.xyz[0] * r.xyz[0];
-	float sqy = r.xyz[1] * r.xyz[1];
-	float sqz = r.xyz[2] * r.xyz[2];
+	__init(const float3x4 t) {
+		m = t;
+	}
+	__init(const float3 t, const quatf r, const float3 s) {
+		// https://www.euclideanspace.com/maths/geometry/rotations/conversions/quaternionToMatrix/index.htm
+		float sqw = r.w * r.w;
+		float sqx = r.xyz[0] * r.xyz[0];
+		float sqy = r.xyz[1] * r.xyz[1];
+		float sqz = r.xyz[2] * r.xyz[2];
 
-	// invs (inverse square length) is only required if quaternion is not already normalised
-	float invs = 1 / (sqx + sqy + sqz + sqw);
-	result.m[0][0] = (sqx - sqy - sqz + sqw) * invs; // since sqw + sqx + sqy + sqz =1/invs*invs
-	result.m[1][1] = (-sqx + sqy - sqz + sqw) * invs;
-	result.m[2][2] = (-sqx - sqy + sqz + sqw) * invs;
+		// invs (inverse square length) is only required if quaternion is not already normalised
+		float invs = 1 / (sqx + sqy + sqz + sqw);
+		m[0][0] = (sqx - sqy - sqz + sqw) * invs; // since sqw + sqx + sqy + sqz =1/invs*invs
+		m[1][1] = (-sqx + sqy - sqz + sqw) * invs;
+		m[2][2] = (-sqx - sqy + sqz + sqw) * invs;
 
-	float tmp1 = r.xyz[0] * r.xyz[2];
-	float tmp2 = r.xyz[1] * r.w;
-	result.m[2][0] = 2 * (tmp1 + tmp2) * invs;
-	result.m[0][2] = 2 * (tmp1 - tmp2) * invs;
+		float tmp1 = r.xyz[0] * r.xyz[2];
+		float tmp2 = r.xyz[1] * r.w;
+		m[2][0] = 2 * (tmp1 + tmp2) * invs;
+		m[0][2] = 2 * (tmp1 - tmp2) * invs;
 
-	tmp1 = r.xyz[0] * r.xyz[1];
-	tmp2 = r.xyz[2] * r.w;
-	result.m[1][0] = 2 * (tmp1 - tmp2) * invs;
-	result.m[0][1] = 2 * (tmp1 + tmp2) * invs;
+		tmp1 = r.xyz[0] * r.xyz[1];
+		tmp2 = r.xyz[2] * r.w;
+		m[1][0] = 2 * (tmp1 - tmp2) * invs;
+		m[0][1] = 2 * (tmp1 + tmp2) * invs;
 
-	tmp1 = r.xyz[2] * r.xyz[1];
-	tmp2 = r.xyz[0] * r.w;
-	result.m[1][2] = 2 * (tmp1 + tmp2) * invs;
-	result.m[2][1] = 2 * (tmp1 - tmp2) * invs;
+		tmp1 = r.xyz[2] * r.xyz[1];
+		tmp2 = r.xyz[0] * r.w;
+		m[1][2] = 2 * (tmp1 + tmp2) * invs;
+		m[2][1] = 2 * (tmp1 - tmp2) * invs;
 
-	result.m[0][3] = t[0];
-	result.m[1][3] = t[1];
-	result.m[2][3] = t[2];
-#endif
-	return result;
-}
+		m[0][3] = t[0];
+		m[1][3] = t[1];
+		m[2][3] = t[2];
+	}
+	#endif
+
+	inline float3x4 to_float3x4() { return m; }
+};
 
 inline TransformData tmul(const TransformData lhs, const TransformData rhs) {
 	TransformData r;
@@ -106,9 +118,6 @@ inline TransformData tmul(const TransformData lhs, const TransformData rhs) {
 #endif
 	return r;
 }
-
-inline float3x4 to_float3x4(const TransformData t) { return t.m; }
-inline TransformData from_float3x4(const float3x4 m) { TransformData t = { m }; return t; }
 
 struct ProjectionData {
 	float2 scale;

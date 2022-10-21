@@ -105,7 +105,7 @@ namespace std {
 template<>
 struct hash<tinyvkpt::Mesh::Vertices::AttributeDescription> {
 	inline size_t operator()(const tinyvkpt::Mesh::Vertices::AttributeDescription& v) const {
-		return tinyvkpt::hash_args(v.mFormat, v.mOffset, v.mInputRate);
+		return tinyvkpt::hashArgs(v.mFormat, v.mOffset, v.mInputRate);
 	}
 };
 
@@ -114,11 +114,11 @@ struct hash<tinyvkpt::Mesh::VertexLayoutDescription> {
 	inline size_t operator()(const tinyvkpt::Mesh::VertexLayoutDescription& v) const {
 		size_t h = 0;
 		for (const auto[type, attribs] : v.mAttributes) {
-			h = tinyvkpt::hash_args(h, type);
+			h = tinyvkpt::hashArgs(h, type);
 			for (const auto&[a,i] : attribs)
-				h = tinyvkpt::hash_args(h, a, i);
+				h = tinyvkpt::hashArgs(h, a, i);
 		}
-		return tinyvkpt::hash_args(h, v.mTopology, v.mIndexType);
+		return tinyvkpt::hashArgs(h, v.mTopology, v.mIndexType);
 	}
 };
 

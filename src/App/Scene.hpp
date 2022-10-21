@@ -3,10 +3,10 @@
 #include <nanovdb/util/GridHandle.h>
 #include <imgui/imgui.h> // materials have ImGui calls
 
-#include "SceneGraph.hpp"
-
 #include <Core/Mesh.hpp>
 #include "Material.hpp"
+
+#include "SceneGraph.hpp"
 
 namespace tinyvkpt {
 
@@ -19,7 +19,7 @@ struct SpherePrimitive {
 	float mRadius;
 };
 
-TransformData nodeToWorld(const SceneNode& node);
+TransformData nodeToWorld(const Node& node);
 
 Mesh loadSerialized(CommandBuffer& commandBuffer, const filesystem::path& filename, int shape_idx = -1);
 Mesh loadObj(CommandBuffer& commandBuffer, const filesystem::path& filename);
@@ -42,12 +42,12 @@ struct Camera {
 
 class Scene {
 public:
-	struct SceneData {
+	struct RenderResources : public Device::Resource {
 		Buffer::View<byte> mAccelerationStructureBuffer;
 		vk::raii::AccelerationStructureKHR mAccelerationStructure;
 
 		unordered_map<const void* /* address of component */, pair<TransformData, uint32_t /* instance index */ >> mInstanceTransformMap;
-		vector<SceneNode*> mInstanceNodes;
+		vector<shared_ptr<Node>> mInstanceNodes;
 
 		Buffer::View<PackedVertexData> mVertices;
 		Buffer::View<byte> mIndices;
@@ -57,37 +57,35 @@ public:
 		Buffer::View<TransformData> mInstanceInverseTransforms;
 		Buffer::View<TransformData> mInstanceMotionTransforms;
 		Buffer::View<uint32_t> mLightInstanceMap;
-		Buffer::View<float> mDistributionData;
 		Buffer::View<uint32_t> mInstanceIndexMap;
 
-		MaterialResources mResources;
+		MaterialResources mMaterialResources;
 		uint32_t mEnvironmentMaterialAddress;
-
 		uint32_t mMaterialCount;
 		uint32_t mEmissivePrimitiveCount;
 	};
 
-	Scene();
+	Scene(Device& device);
 
 	void drawGui();
 
 	void createPipelines();
 
-	inline const shared_ptr<SceneData>& data() const { return mSceneData; }
+	inline const shared_ptr<RenderResources>& resources() const { return mResources; }
 
 	inline void markDirty() { mUpdateOnce = true; }
 	void update(CommandBuffer& commandBuffer, const float deltaTime);
 
-	void loadEnvironmentMap(SceneNode& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
-	void loadGltf(SceneNode& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
-	void loadMitsuba(SceneNode& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
-	void loadVol(SceneNode& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
-	void loadNvdb(SceneNode& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
+	void loadEnvironmentMap(Node& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
+	void loadGltf(Node& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
+	void loadMitsuba(Node& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
+	void loadVol(Node& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
+	void loadNvdb(Node& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
 #ifdef STRATUM_ENABLE_ASSIMP
-	void loadAssimp(SceneNode& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
+	void loadAssimp(Node& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
 #endif
 #ifdef STRATUM_ENABLE_OPENVDB
-	void loadVdb(SceneNode& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
+	void loadVdb(Node& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
 #endif
 
 	inline vector<string> loaderFilters() {
@@ -110,7 +108,7 @@ public:
 	#endif
 		};
 	}
-	inline void load(SceneNode& root, CommandBuffer& commandBuffer, const filesystem::path& filename) {
+	inline void load(Node& root, CommandBuffer& commandBuffer, const filesystem::path& filename) {
 		const string& ext = filename.extension().string();
 		if (ext == ".hdr") loadEnvironmentMap(root, commandBuffer, filename);
 		else if (ext == ".exr") loadEnvironmentMap(root, commandBuffer, filename);
@@ -139,25 +137,20 @@ public:
 	Material makeDiffuseSpecularMaterial(CommandBuffer& commandBuffer, const ImageValue3& diffuse, const ImageValue3& specular, const ImageValue1& roughness, const ImageValue3& transmission, const float eta, const ImageValue3& emission);
 
 private:
-	struct MeshBLAS {
-		Buffer::View<byte> mBuffer;
-		shared_ptr<vk::raii::AccelerationStructureKHR> mAccelerationStructure;
-		Buffer::StrideView mIndices;
-	};
+	using MeshBLAS = tuple<shared_ptr<vk::raii::AccelerationStructureKHR>, Buffer::View<byte> /* acceleration structure buffer */, Buffer::StrideView /* indices */ >;
 
-	unordered_map<size_t, shared_ptr<vk::raii::AccelerationStructureKHR>> mAABBs;
+	unordered_map<size_t, pair<shared_ptr<vk::raii::AccelerationStructureKHR>, Buffer::View<byte>>> mAABBs;
 
 	unordered_map<Mesh*, Buffer::View<PackedVertexData>> mMeshVertices;
 	unordered_map<size_t, MeshBLAS> mMeshAccelerationStructures;
 
-	shared_ptr<SceneData> mSceneData;
+	shared_ptr<RenderResources> mResources;
 
-	shared_ptr<ComputePipeline> mCopyVerticesPipeline;
-
-	shared_ptr<ComputePipeline> mConvertAlphaToRoughnessPipeline;
-	shared_ptr<ComputePipeline> mConvertShininessToRoughnessPipeline;
-	shared_ptr<ComputePipeline> mConvertPbrPipeline;
-	shared_ptr<ComputePipeline> mConvertDiffuseSpecularPipeline;
+	shared_ptr<ComputePipelineContext> mCopyVerticesPipeline;
+	shared_ptr<ComputePipelineContext> mConvertAlphaToRoughnessPipeline;
+	shared_ptr<ComputePipelineContext> mConvertShininessToRoughnessPipeline;
+	shared_ptr<ComputePipelineContext> mConvertPbrPipeline;
+	shared_ptr<ComputePipelineContext> mConvertDiffuseSpecularPipeline;
 
 	vector<string> mToLoad;
 

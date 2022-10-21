@@ -6,7 +6,8 @@
 
 namespace tinyvkpt {
 
-Swapchain::Swapchain(Device& device, const string& name, Window& window, const vk::SurfaceFormatKHR surfaceFormat, const vk::PresentModeKHR presentMode) : Device::Resource(device, name), mSwapchain(nullptr), mWindow(window) {
+Swapchain::Swapchain(Device& device, const string& name, Window& window, const uint32_t minImages, const vk::ImageUsageFlags backBufferUsage, const vk::SurfaceFormatKHR surfaceFormat, const vk::PresentModeKHR presentMode)
+	: Device::Resource(device, name), mSwapchain(nullptr), mWindow(window), mMinImageCount(minImages), mUsage(backBufferUsage) {
 	// select the format of the swapchain
 	const auto formats = mDevice.physical().getSurfaceFormatsKHR(*mWindow.surface());
 	mSurfaceFormat = formats.front();
@@ -45,7 +46,7 @@ void Swapchain::create() {
 	info.imageColorSpace = mSurfaceFormat.colorSpace;
 	info.imageExtent = mExtent;
 	info.imageArrayLayers = 1;
-	info.imageUsage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst;
+	info.imageUsage = mUsage;
 	info.imageSharingMode = vk::SharingMode::eExclusive;
 	info.preTransform = capabilities.currentTransform;
 	info.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
@@ -91,8 +92,8 @@ void Swapchain::present(const vk::raii::Queue queue, const vk::ArrayProxy<shared
 	ProfilerScope ps("Window::present");
 
 	vector<vk::Semaphore> semaphores(waitSemaphores.size() + 1);
-	semaphores[0] = **imageAvailableSemaphore();
-	ranges::transform(waitSemaphores, ++semaphores.begin(), [](const auto s) { return **s; });
+	ranges::transform(waitSemaphores, semaphores.begin(), [](const auto s) { return **s; });
+	semaphores.back() = **imageAvailableSemaphore();
 
 	const vk::Result result = queue.presentKHR(vk::PresentInfoKHR(semaphores, *mSwapchain, mBackBufferIndex));
 	if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eErrorSurfaceLostKHR)

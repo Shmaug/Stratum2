@@ -1,10 +1,11 @@
 #pragma once
 
 #include <unordered_set>
+#include <optional>
 #include <ranges>
 
+#include <Utils/fwd.hpp>
 #include <Utils/utils.hpp>
-#include <vulkan/vulkan_raii.hpp>
 
 namespace tinyvkpt {
 
@@ -14,10 +15,8 @@ public:
 
 	Instance(const vector<string>& args);
 
-	inline vk::raii::Instance& operator*() { return mInstance; }
-	inline vk::raii::Instance* operator->() { return &mInstance; }
-	inline const vk::raii::Instance& operator*() const { return mInstance; }
-	inline const vk::raii::Instance* operator->() const { return &mInstance; }
+	DECLARE_DEREFERENCE_OPERATORS(vk::raii::Instance, mInstance)
+
 	inline vk::raii::Context& context() { return mContext; }
 	inline const vk::raii::Context& context() const { return mContext; }
 

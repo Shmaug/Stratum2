@@ -1,12 +1,12 @@
 #include "Scene.hpp"
-
+#include <Core/Profiler.hpp>
 #include <Core/CommandBuffer.hpp>
 
 #include <portable-file-dialogs.h>
 
 namespace tinyvkpt {
-/*
-void buildAccelerationStructure(CommandBuffer& commandBuffer, const string& name, vk::AccelerationStructureTypeKHR type, const vk::ArrayProxy<const vk::AccelerationStructureGeometryKHR>& geometries,  const vk::ArrayProxy<const vk::AccelerationStructureBuildRangeInfoKHR>& buildRanges) {
+
+tuple<shared_ptr<vk::raii::AccelerationStructureKHR>, Buffer::View<byte>> buildAccelerationStructure(CommandBuffer& commandBuffer, const string& name, const vk::AccelerationStructureTypeKHR type, const vk::ArrayProxy<const vk::AccelerationStructureGeometryKHR>& geometries,  const vk::ArrayProxy<const vk::AccelerationStructureBuildRangeInfoKHR>& buildRanges) {
 	vk::AccelerationStructureBuildGeometryInfoKHR buildGeometry(type,vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastTrace, vk::BuildAccelerationStructureModeKHR::eBuild);
 	buildGeometry.setGeometries(geometries);
 
@@ -19,15 +19,19 @@ void buildAccelerationStructure(CommandBuffer& commandBuffer, const string& name
 	} else
 		buildSizes.accelerationStructureSize = buildSizes.buildScratchSize = 4;
 
-	mBuffer = make_shared<Buffer>(commandBuffer.mDevice, name, buildSizes.accelerationStructureSize, vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR|vk::BufferUsageFlagBits::eShaderDeviceAddress);
-	Buffer scratchBuf = make_shared<Buffer>(commandBuffer.mDevice, name + "/ScratchBuffer", buildSizes.buildScratchSize, vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR|vk::BufferUsageFlagBits::eShaderDeviceAddress|vk::BufferUsageFlagBits::eStorageBuffer);
+	Buffer::View<byte> buffer      = make_shared<Buffer>(commandBuffer.mDevice, name,                  buildSizes.accelerationStructureSize, vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR|vk::BufferUsageFlagBits::eShaderDeviceAddress);
+	Buffer::View<byte> scratchData = make_shared<Buffer>(commandBuffer.mDevice, name + "/scratchData", buildSizes.buildScratchSize         , vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR|vk::BufferUsageFlagBits::eShaderDeviceAddress|vk::BufferUsageFlagBits::eStorageBuffer);
+	shared_ptr<vk::raii::AccelerationStructureKHR> accelerationStructure = make_shared<vk::raii::AccelerationStructureKHR>(*commandBuffer.mDevice, vk::AccelerationStructureCreateInfoKHR({}, **buffer.buffer(), buffer.offset(), buffer.sizeBytes(), type));
 
-	mAccelerationStructure = commandBuffer.mDevice->createAccelerationStructureKHR(vk::AccelerationStructureCreateInfoKHR({}, **mBuffer.buffer(), mBuffer.offset(), mBuffer.size_bytes(), type));
+	buildGeometry.dstAccelerationStructure = **accelerationStructure;
+	buildGeometry.scratchData = scratchData.deviceAddress();
 
-	buildGeometry.dstAccelerationStructure = mAccelerationStructure;
-	buildGeometry.scratchData = scratchBuf.device_address();
 	commandBuffer->buildAccelerationStructuresKHR(buildGeometry, buildRanges.data());
-	commandBuffer.trackResource(scratchBuf);
+	commandBuffer.trackResource(buffer.buffer());
+	commandBuffer.trackResource(scratchData.buffer());
+	commandBuffer.trackVulkanResource(accelerationStructure);
+
+	return tie(accelerationStructure, buffer);
 }
 
 static float3 gAnimateTranslate = float3::Zero();
@@ -40,7 +44,9 @@ static TransformData* gAnimatedTransform = nullptr;
 
 static bool gChanged = false;
 
-inline void inspector_gui_fn(Inspector& inspector, Camera* cam) {
+
+/*
+inline void inspector_gui_fn(Camera* cam) {
 	bool ortho = cam->mProjection.orthographic();
 	if (ImGui::Checkbox("Orthographic", reinterpret_cast<bool*>(&ortho)))
 		cam->mProjection.vertical_fov = -cam->mProjection.vertical_fov;
@@ -60,7 +66,7 @@ inline void inspector_gui_fn(Inspector& inspector, Camera* cam) {
 	ImGui::InputInt2("ImageRect Offset", &cam->mImageRect.offset.x);
 	ImGui::InputInt2("ImageRect Extent", reinterpret_cast<int32_t*>(&cam->mImageRect.extent.width));
 }
-inline void inspector_gui_fn(Inspector& inspector, TransformData* t) {
+inline void inspector_gui_fn(TransformData* t) {
 	TransformData prev = *t;
 
 	float3 translate = t->m.topRightCorner(3, 1);
@@ -104,7 +110,7 @@ inline void inspector_gui_fn(Inspector& inspector, TransformData* t) {
 	} else if (ImGui::Button("Animate"))
 		gAnimatedTransform = t;
 }
-inline void inspector_gui_fn(Inspector& inspector, MeshPrimitive* mesh) {
+inline void inspector_gui_fn(MeshPrimitive* mesh) {
 	if (mesh->mMesh) {
 		ImGui::Text("%s", type_index(typeid(Mesh)).name());
 		ImGui::SameLine();
@@ -116,7 +122,7 @@ inline void inspector_gui_fn(Inspector& inspector, MeshPrimitive* mesh) {
 		inspector.component_ptr_field(mesh->mMaterial);
 	}
 }
-inline void inspector_gui_fn(Inspector& inspector, SpherePrimitive* sphere) {
+inline void inspector_gui_fn(SpherePrimitive* sphere) {
 	if (ImGui::DragFloat("Radius", &sphere->mRadius, .01f)) gChanged = true;
 	if (sphere->mMaterial) {
 		ImGui::Text("%s", type_index(typeid(Material)).name());
@@ -126,18 +132,23 @@ inline void inspector_gui_fn(Inspector& inspector, SpherePrimitive* sphere) {
 }
 
 TransformData nodeToWorld(const Node& node) {
-	TransformData transform = make_transform(float3::Zero(), quatf_identity(), float3::Ones());
-	const Node* p = &node;
-	while (p != nullptr) {
-		auto c = p->find<TransformData>();
-		if (c) transform = tmul(*c, transform);
+	TransformData transform;
+	if (auto c = node.getComponent<TransformData>(); c)
+		transform = *c;
+	else
+		transform = TransformData(float3::Zero(), quatf_identity(), float3::Ones());
+	shared_ptr<Node> p = node.parent();
+	while (p) {
+		if (auto c = p->getComponent<TransformData>(); c)
+			transform = tmul(*c, transform);
 		p = p->parent();
 	}
 	return transform;
 }
 
-void Scene::loadEnvironmentMap(Node& root, CommandBuffer& commandBuffer, const fs::path& filepath) {
-	root.make_component<Environment>(load_environment(commandBuffer, filepath));
+void Scene::loadEnvironmentMap(Node& root, CommandBuffer& commandBuffer, const filesystem::path& filepath) {
+	// TODO: load image
+	root.addComponent<Environment>();
 }
 
 ImageValue1 Scene::alphaToRoughness(CommandBuffer& commandBuffer, const ImageValue1& alpha) {
@@ -275,10 +286,7 @@ Material Scene::makeDiffuseSpecularMaterial(CommandBuffer& commandBuffer, const 
 	return dst;
 }
 
-Scene::Scene(Node& node) : mNode(node) {
-	auto app = mNode.find_in_ancestor<Application>();
-	app->OnUpdate.add_listener(mNode, bind_front(&Scene::update, this), Node::EventPriority::eDefault);
-
+Scene::Scene(Device& device) {
 	if (node.node_graph().component_count<Inspector>())
 		for (auto gui : node.node_graph().find_components<Inspector>()) {
 			gui->register_inspector_gui_fn<Scene>(&inspector_gui_fn);
@@ -293,25 +301,43 @@ Scene::Scene(Node& node) : mNode(node) {
 
 	gAnimatedTransform = nullptr;
 
-	mCopyVerticesPipeline 				 = make_shared<ComputePipelineState>("copy_vertices", make_shared<Shader>(app->window().mInstance.device(), "Shaders/copy_vertices.spv"));
-	mConvertDiffuseSpecularPipeline 	 = make_shared<ComputePipelineState>("material_convert_from_diffuse_specular", make_shared<Shader>(app->window().mInstance.device(), "Shaders/material_convert_from_diffuse_specular.spv"));
-	mConvertPbrPipeline 				 = make_shared<ComputePipelineState>("material_convert_from_gltf_pbr", make_shared<Shader>(app->window().mInstance.device(), "Shaders/material_convert_from_gltf_pbr.spv"));
-	mConvertAlphaToRoughnessPipeline 	 = make_shared<ComputePipelineState>("material_convert_alpha_to_roughness", make_shared<Shader>(app->window().mInstance.device(), "Shaders/material_convert_alpha_to_roughness.spv"));
-	mConvertShininessToRoughnessPipeline = make_shared<ComputePipelineState>("material_convert_shininess_to_roughness", make_shared<Shader>(app->window().mInstance.device(), "Shaders/material_convert_shininess_to_roughness.spv"));
 
-	for (const string& arg : app->window().mInstance.find_arguments("scene"))
+	ShaderSource copy_vertices("kernels/copy_vertices.hlsl");
+	ShaderSource material_convert_alpha_to_roughness("kernels/material_convert.hlsl", "alpha_to_roughness");
+	ShaderSource material_convert_shininess_to_roughness("kernels/material_convert.hlsl", "shininess_to_roughness");
+	ShaderSource material_convert_from_gltf_pbr("kernels/material_convert.hlsl", "from_gltf_pbr");
+	ShaderSource material_convert_from_diffuse_specular("kernels/material_convert.hlsl", "from_diffuse_specular");
+
+	//struct ComputePipeline::Metadata {
+	//	vk::PipelineShaderStageCreateFlags mStageLayoutFlags = {};
+	//	vk::PipelineLayoutCreateFlags mLayoutFlags = {};
+	//	vk::PipelineCreateFlags mFlags = {};
+	//	vk::DescriptorSetLayoutCreateFlags mDescriptorSetLayoutFlags = {};
+	//	unordered_map<string, vector<shared_ptr<vk::raii::Sampler>>> mImmutableSamplers;
+	//	unordered_map<string, vk::DescriptorBindingFlags> mBindingFlags;
+	//};
+
+	ComputePipeline::Metadata md();
+
+	mCopyVerticesPipeline                = make_shared<ComputePipelineContext>(make_shared<ComputePipeline>("copy_vertices"                          , Shader(device, copy_vertices                          ), md));
+	mConvertDiffuseSpecularPipeline 	 = make_shared<ComputePipelineContext>(make_shared<ComputePipeline>("material_convert_from_diffuse_specular" , Shader(device, material_convert_from_diffuse_specular ), md);
+	mConvertPbrPipeline 				 = make_shared<ComputePipelineContext>(make_shared<ComputePipeline>("material_convert_from_gltf_pbr"         , Shader(device, material_convert_from_gltf_pbr         ), md);
+	mConvertAlphaToRoughnessPipeline 	 = make_shared<ComputePipelineContext>(make_shared<ComputePipeline>("material_convert_alpha_to_roughness"    , Shader(device, material_convert_alpha_to_roughness    ), md);
+	mConvertShininessToRoughnessPipeline = make_shared<ComputePipelineContext>(make_shared<ComputePipeline>("material_convert_shininess_to_roughness", Shader(device, material_convert_shininess_to_roughness), md);
+
+	for (const string& arg : device.mInstance.findArguments("scene"))
 		mToLoad.emplace_back(arg);
 }
 
 void Scene::drawGui() {
-	if (mSceneData) {
-		ImGui::Text("%lu instances", mSceneData->mInstances.size());
-		ImGui::Text("%lu light instances", mSceneData->mLightInstanceMap.size());
-		ImGui::Text("%lu emissive primitives", mSceneData->mEmissivePrimitiveCount);
-		ImGui::Text("%u materials", mSceneData->mMaterialCount);
+	if (mResources) {
+		ImGui::Text("%lu instances", mResources->mInstances.size());
+		ImGui::Text("%lu light instances", mResources->mLightInstanceMap.size());
+		ImGui::Text("%lu emissive primitives", mResources->mEmissivePrimitiveCount);
+		ImGui::Text("%u materials", mResources->mMaterialCount);
 	}
 	if (ImGui::Button("Load File")) {
-		auto f = pfd::open_file("Open scene", "", loader_filters());
+		auto f = pfd::open_file("Open scene", "", loaderFilters());
 		for (const string& filepath : f.result())
 			mToLoad.emplace_back(filepath);
 	}
@@ -319,12 +345,12 @@ void Scene::drawGui() {
 }
 
 void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
-	ProfilerRegion s("Scene::update", commandBuffer);
+	ProfilerScope s("Scene::update", commandBuffer);
 
 	if (gAnimatedTransform) {
 		float r = length(gAnimateRotate);
 		quatf rotate = (r > 0) ? angle_axis(r * deltaTime, gAnimateRotate / r) : quatf_identity();
-		*gAnimatedTransform = tmul(*gAnimatedTransform, make_transform(gAnimateTranslate * deltaTime, rotate, float3::Ones()));
+		*gAnimatedTransform = tmul(*gAnimatedTransform, TransformData(gAnimateTranslate * deltaTime, rotate, float3::Ones()));
 		if (!gAnimateWiggleOffset.isZero()) {
 			gAnimatedTransform->m.topRightCorner(3, 1) = gAnimateWiggleBase + gAnimateWiggleOffset*sin(gAnimateWiggleTime);
 			gAnimateWiggleTime += deltaTime*gAnimateWiggleSpeed;
@@ -341,7 +367,7 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 
 	if (commandBuffer.mDevice.mInstance.window().input_state().pressed(KeyCode::eKeyControl) &&
 		commandBuffer.mDevice.mInstance.window().pressed_redge(KeyCode::eKeyO)) {
-		auto f = pfd::open_file("Open scene", "", loader_filters());
+		auto f = pfd::open_file("Open scene", "", loaderFilters());
 		for (const string& filepath : f.result())
 			mToLoad.emplace_back(filepath);
 	}
@@ -350,7 +376,7 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 
 	bool loaded = false;
 	for (const string& file : mToLoad) {
-		const fs::path filepath = file;
+		const filesystem::path filepath = file;
 		const string name = filepath.filename().string();
 		Node& n = mNode.make_child(name);
 		try {
@@ -371,15 +397,15 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 	uint32_t totalVertexCount = 0;
 	uint32_t totalIndexBufferSize = 0;
 
-	auto mPrevFrame = mSceneData;
-	mSceneData = make_shared<SceneData>();
+	auto mPrevFrame = mResources;
+	mResources = make_shared<RenderResources>();
 
-	mSceneData->mResources = {};
-	mSceneData->mInstanceTransformMap = {};
-	mSceneData->mResources.distribution_data_size = 0;
+	mResources->mResources = {};
+	mResources->mInstanceTransformMap = {};
+	mResources->mResources.distribution_data_size = 0;
 
-	mSceneData->mEmissivePrimitiveCount = 0;
-	mSceneData->mMaterialCount = 0;
+	mResources->mEmissivePrimitiveCount = 0;
+	mResources->mMaterialCount = 0;
 	ByteAppendBuffer materialData;
 	materialData.data.reserve(mPrevFrame && mPrevFrame->mMaterialData ? mPrevFrame->mMaterialData.size() / sizeof(uint32_t) : 1);
 	unordered_map<const Material*, uint32_t> materialMap;
@@ -387,7 +413,7 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 	vector<vk::AccelerationStructureInstanceKHR> instancesAS;
 	vector<vk::BufferMemoryBarrier> blasBarriers;
 
-	vector<tuple<MeshPrimitive*, MeshAS*, uint32_t>> meshInstanceIndices;
+	vector<tuple<MeshPrimitive*, MeshBLAS*, uint32_t>> meshInstanceIndices;
 	vector<InstanceData> instanceDatas;
 	vector<TransformData> instanceTransforms;
 	vector<TransformData> instanceInverseTransforms;
@@ -401,18 +427,18 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 	vector<uint32_t> lightInstanceMap;
 	vector<float> lightInstancePowers;
 
-	mSceneData->mInstanceNodes.clear();
+	mResources->mInstanceNodes.clear();
 
-	mSceneData->mInstanceIndexMap = make_shared<Buffer>(commandBuffer.mDevice, "InstanceIndexMap", sizeof(uint32_t) * max<size_t>(1, mPrevFrame ? mPrevFrame->mInstances.size() : 0), vk::BufferUsageFlagBits::eStorageBuffer, VMA_MEMORY_USAGE_CPU_TO_GPU);
-	ranges::fill(mSceneData->mInstanceIndexMap, -1);
+	mResources->mInstanceIndexMap = make_shared<Buffer>(commandBuffer.mDevice, "InstanceIndexMap", sizeof(uint32_t) * max<size_t>(1, mPrevFrame ? mPrevFrame->mInstances.size() : 0), vk::BufferUsageFlagBits::eStorageBuffer, VMA_MEMORY_USAGE_CPU_TO_GPU);
+	ranges::fill(mResources->mInstanceIndexMap, -1);
 
 	auto process_material = [&](const Material* material) {
 		// append unique materials to materials list
 		auto materialMap_it = materialMap.find(material);
 		if (materialMap_it == materialMap.end()) {
 			materialMap_it = materialMap.emplace(material, (uint32_t)(materialData.data.size() * sizeof(uint32_t))).first;
-			material->store(materialData, mSceneData->mResources);
-			mSceneData->mMaterialCount++;
+			material->store(materialData, mResources->mResources);
+			mResources->mMaterialCount++;
 		}
 		return materialMap_it->second;
 	};
@@ -420,7 +446,7 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 	auto process_instance = [&](const component_ptr<void>& prim, const InstanceData& instance, const TransformData& transform, const float emissive_power) {
 		const uint32_t instance_index = (uint32_t)instanceDatas.size();
 		instanceDatas.emplace_back(instance);
-		mSceneData->mInstanceNodes.emplace_back(&prim.node());
+		mResources->mInstanceNodes.emplace_back(&prim.node());
 
 		uint32_t light_index = INVALID_INSTANCE;
 		if (emissive_power > 0) {
@@ -436,10 +462,10 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 		if (mPrevFrame) {
 			if (auto it = mPrevFrame->mInstanceTransformMap.find(prim.get()); it != mPrevFrame->mInstanceTransformMap.end()) {
 				prevTransform = it->second.first;
-				mSceneData->mInstanceIndexMap[it->second.second] = instance_index;
+				mResources->mInstanceIndexMap[it->second.second] = instance_index;
 			}
 		}
-		mSceneData->mInstanceTransformMap.emplace(prim.get(), make_pair(transform, instance_index));
+		mResources->mInstanceTransformMap.emplace(prim.get(), make_pair(transform, instance_index));
 
 		const TransformData inv_transform = transform.inverse();
 		instanceTransforms.emplace_back(transform);
@@ -449,16 +475,16 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 	};
 
 	{ // mesh instances
-		ProfilerRegion s("Process mesh instances", commandBuffer);
+		ProfilerScope s("Process mesh instances", commandBuffer);
 		mNode.for_each_descendant<MeshPrimitive>([&](const component_ptr<MeshPrimitive>& prim) {
 			if (prim->mMesh->topology() != vk::PrimitiveTopology::eTriangleList) return;
 			if (!prim->mMaterial) return;
 
 			// build BLAS
-			const size_t key = hash_args(prim->mMesh.get(), prim->mMaterial->alpha_test());
+			const size_t key = hashArgs(prim->mMesh.get(), prim->mMaterial->alpha_test());
 			auto it = mMeshAccelerationStructures.find(key);
 			if (it == mMeshAccelerationStructures.end()) {
-				ProfilerRegion s("build acceleration structures", commandBuffer);
+				ProfilerScope s("build acceleration structures", commandBuffer);
 				const auto& [vertexPosDesc, positions] = prim->mMesh->vertices()->at(VertexArrayObject::AttributeType::ePosition)[0];
 
 				if (prim->mMesh->index_type() != vk::IndexType::eUint32 && prim->mMesh->index_type() != vk::IndexType::eUint16)
@@ -473,11 +499,11 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 				triangles.indexData = commandBuffer.hold_resource(prim->mMesh->indices()).device_address();
 				vk::AccelerationStructureGeometryKHR triangleGeometry(vk::GeometryTypeKHR::eTriangles, triangles, prim->mMaterial->alpha_test() ? vk::GeometryFlagBitsKHR{} : vk::GeometryFlagBitsKHR::eOpaque);
 				vk::AccelerationStructureBuildRangeInfoKHR range(prim->mMesh->indices().size() / (prim->mMesh->indices().stride() * 3));
-				auto as = make_shared<AccelerationStructure>(commandBuffer, prim.node().name() + "/BLAS", vk::AccelerationStructureTypeKHR::eBottomLevel, triangleGeometry, range);
+				auto[as, asbuf] = buildAccelerationStructure>(commandBuffer, prim.node().name() + "/BLAS", vk::AccelerationStructureTypeKHR::eBottomLevel, triangleGeometry, range);
 				blasBarriers.emplace_back(
 					vk::AccessFlagBits::eAccelerationStructureWriteKHR, vk::AccessFlagBits::eAccelerationStructureReadKHR,
 					VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-					**as->buffer().buffer(), as->buffer().offset(), as->buffer().size_bytes());
+					**asbuf.buffer(), asbuf.offset(), asbuf.size_bytes());
 
 				// copy vertex data
 				if (mMeshVertices.find(prim->mMesh.get()) == mMeshVertices.end()) {
@@ -485,19 +511,16 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 						make_shared<Buffer>(commandBuffer.mDevice, prim.node().name() + "/PackedVertexData", triangles.maxVertex * sizeof(PackedVertexData), vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eShaderDeviceAddress)).first->second;
 
 					auto positions = prim->mMesh->vertices()->at(VertexArrayObject::AttributeType::ePosition)[0];
-					auto normals = prim->mMesh->vertices()->at(VertexArrayObject::AttributeType::eNormal)[0];
+					auto normals   = prim->mMesh->vertices()->at(VertexArrayObject::AttributeType::eNormal)[0];
 					auto texcoords = prim->mMesh->vertices()->find(VertexArrayObject::AttributeType::eTexcoord);
-					//auto tangents = prim->mMesh->vertices()->find(VertexArrayObject::AttributeType::eTangent);
 
 					mCopyVerticesPipeline->descriptor("gVertices") = vertices;
 					mCopyVerticesPipeline->descriptor("gPositions") = Buffer::View(positions.second, positions.first.mOffset);
 					mCopyVerticesPipeline->descriptor("gNormals") = Buffer::View(normals.second, normals.first.mOffset);
-					//mCopyVerticesPipeline->descriptor("gTangents") = tangents ? Buffer::View(tangents->second, tangents->first.mOffset) : positions.second;
 					mCopyVerticesPipeline->descriptor("gTexcoords") = texcoords ? Buffer::View(texcoords->second, texcoords->first.mOffset) : positions.second;
 					mCopyVerticesPipeline->push_constant<uint32_t>("gCount") = vertices.size();
 					mCopyVerticesPipeline->push_constant<uint32_t>("gPositionStride") = positions.first.mStride;
 					mCopyVerticesPipeline->push_constant<uint32_t>("gNormalStride") = normals.first.mStride;
-					//mCopyVerticesPipeline->push_constant<uint32_t>("gTangentStride") = tangents ? tangents->first.mStride : 0;
 					mCopyVerticesPipeline->push_constant<uint32_t>("gTexcoordStride") = texcoords ? texcoords->first.mStride : 0;
 					commandBuffer.bind_pipeline(mCopyVerticesPipeline->get_pipeline());
 					mCopyVerticesPipeline->bind_descriptor_sets(commandBuffer);
@@ -506,7 +529,7 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 					commandBuffer.barrier({ vertices }, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderWrite, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferRead);
 				}
 
-				it = mMeshAccelerationStructures.emplace(key, MeshAS{ as, prim->mMesh->indices() }).first;
+				it = mMeshAccelerationStructures.emplace(key, MeshBLAS{ as, asbuf, prim->mMesh->indices() }).first;
 			}
 
 			const uint32_t material_address = process_material(prim->mMaterial.get());
@@ -516,10 +539,10 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 			const float area = 1;
 
 			if (prim->mMaterial->emission() > 0)
-				mSceneData->mEmissivePrimitiveCount += triCount;
+				mResources->mEmissivePrimitiveCount += triCount;
 
 			vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
-			Eigen::Matrix<float, 3, 4, Eigen::RowMajor>::Map(&instance.transform.matrix[0][0]) = to_float3x4(transform);
+			float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
 			instance.instanceCustomIndex = process_instance(component_ptr<void>(prim), make_instance_triangles(material_address, triCount, totalVertexCount, totalIndexBufferSize, (uint32_t)it->second.mIndices.stride()), transform, prim->mMaterial->emission() * area);
 			instance.mask = BVH_FLAG_TRIANGLES;
 			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(*commandBuffer.hold_resource(it->second.mAccelerationStructure));
@@ -531,13 +554,13 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 	}
 
 	{ // sphere instances
-		ProfilerRegion s("Process sphere instances", commandBuffer);
+		ProfilerScope s("Process sphere instances", commandBuffer);
 		mNode.for_each_descendant<SpherePrimitive>([&](const component_ptr<SpherePrimitive>& prim) {
 			if (!prim->mMaterial) return;
 			uint32_t material_address = process_material(prim->mMaterial.get());
 
 			if (prim->mMaterial->emission() > 0)
-				mSceneData->mEmissivePrimitiveCount++;
+				mResources->mEmissivePrimitiveCount++;
 
 			TransformData transform = node_to_world(prim.node());
 			const float r = prim->mRadius * transform.m.block<3, 3>(0, 0).matrix().determinant();
@@ -545,7 +568,7 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 
 			const float3 mn = -float3::Constant(r);
 			const float3 mx = float3::Constant(r);
-			const size_t key = hash_args(mn[0], mn[1], mn[2], mx[0], mx[1], mx[2], prim->mMaterial->alpha_test());
+			const size_t key = hashArgs(mn[0], mn[1], mn[2], mx[0], mx[1], mx[2], prim->mMaterial->alpha_test());
 			auto aabb_it = mAABBs.find(key);
 			if (aabb_it == mAABBs.end()) {
 				Buffer::View<vk::AabbPositionsKHR> aabb = make_shared<Buffer>(commandBuffer.mDevice, "aabb data", sizeof(vk::AabbPositionsKHR), vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress, VMA_MEMORY_USAGE_CPU_TO_GPU);
@@ -558,16 +581,16 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 				vk::AccelerationStructureGeometryAabbsDataKHR aabbs(commandBuffer.hold_resource(aabb).device_address(), sizeof(vk::AabbPositionsKHR));
 				vk::AccelerationStructureGeometryKHR aabbGeometry(vk::GeometryTypeKHR::eAabbs, aabbs, prim->mMaterial->alpha_test() ? vk::GeometryFlagBitsKHR{} : vk::GeometryFlagBitsKHR::eOpaque);
 				vk::AccelerationStructureBuildRangeInfoKHR range(1);
-				shared_ptr<AccelerationStructure> as = make_shared<AccelerationStructure>(commandBuffer, "aabb BLAS", vk::AccelerationStructureTypeKHR::eBottomLevel, aabbGeometry, range);
+				auto [ as, asbuf ] = buildAccelerationStructure(commandBuffer, "aabb BLAS", vk::AccelerationStructureTypeKHR::eBottomLevel, aabbGeometry, range);
 				blasBarriers.emplace_back(
 					vk::AccessFlagBits::eAccelerationStructureWriteKHR, vk::AccessFlagBits::eAccelerationStructureReadKHR,
 					VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-					**as->buffer().buffer(), as->buffer().offset(), as->buffer().size_bytes());
-				aabb_it = mAABBs.emplace(key, as).first;
+					**asbuf.buffer(), asbuf.offset(), asbuf.size_bytes());
+				aabb_it = mAABBs.emplace(key, make_pair(as, asbuf)).first;
 			}
 
 			vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
-			Eigen::Matrix<float, 3, 4, Eigen::RowMajor>::Map(&instance.transform.matrix[0][0]) = to_float3x4(transform);
+			float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
 			instance.instanceCustomIndex = process_instance(component_ptr<void>(prim), make_instance_sphere(material_address, r), transform, prim->mMaterial->emission() * (4*M_PI*r*r));
 			instance.mask = BVH_FLAG_SPHERES;
 			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**aabb_it->second);
@@ -575,15 +598,15 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 	}
 
 	{ // media
-		ProfilerRegion s("Process media", commandBuffer);
+		ProfilerScope s("Process media", commandBuffer);
 		mNode.for_each_descendant<Medium>([&](const component_ptr<Medium>& vol) {
 			if (!vol) return;
 
 			auto materialMap_it = materialMap.find(reinterpret_cast<Material*>(vol.get()));
 			if (materialMap_it == materialMap.end()) {
 				materialMap_it = materialMap.emplace(reinterpret_cast<Material*>(vol.get()), (uint32_t)(materialData.data.size() * sizeof(uint32_t))).first;
-				mSceneData->mMaterialCount++;
-				vol->store(materialData, mSceneData->mResources);
+				mResources->mMaterialCount++;
+				vol->store(materialData, mResources->mResources);
 			}
 
 			uint32_t material_address = materialMap_it->second;
@@ -591,7 +614,7 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 			auto density_grid = vol->density_grid->grid<float>();
 			const nanovdb::Vec3R& mn = density_grid->worldBBox().min();
 			const nanovdb::Vec3R& mx = density_grid->worldBBox().max();
-			const size_t key = hash_args((float)mn[0], (float)mn[1], (float)mn[2], (float)mx[0], (float)mx[1], (float)mx[2]);
+			const size_t key = hashArgs((float)mn[0], (float)mn[1], (float)mn[2], (float)mx[0], (float)mx[1], (float)mx[2]);
 			auto aabb_it = mAABBs.find(key);
 			if (aabb_it == mAABBs.end()) {
 				Buffer::View<vk::AabbPositionsKHR> aabb = make_shared<Buffer>(commandBuffer.mDevice, "aabb data", sizeof(vk::AabbPositionsKHR), vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress, VMA_MEMORY_USAGE_CPU_TO_GPU);
@@ -604,18 +627,18 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 				vk::AccelerationStructureGeometryAabbsDataKHR aabbs(commandBuffer.hold_resource(aabb).device_address(), sizeof(vk::AabbPositionsKHR));
 				vk::AccelerationStructureGeometryKHR aabbGeometry(vk::GeometryTypeKHR::eAabbs, aabbs, vk::GeometryFlagBitsKHR::eOpaque);
 				vk::AccelerationStructureBuildRangeInfoKHR range(1);
-				shared_ptr<AccelerationStructure> as = make_shared<AccelerationStructure>(commandBuffer, "aabb BLAS", vk::AccelerationStructureTypeKHR::eBottomLevel, aabbGeometry, range);
+				auto [ as, asbuf ] = buildAccelerationStructure(commandBuffer, "aabb BLAS", vk::AccelerationStructureTypeKHR::eBottomLevel, aabbGeometry, range);
 				blasBarriers.emplace_back(
 					vk::AccessFlagBits::eAccelerationStructureWriteKHR, vk::AccessFlagBits::eAccelerationStructureReadKHR,
 					VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-					**as->buffer().buffer(), as->buffer().offset(), as->buffer().size_bytes());
-				aabb_it = mAABBs.emplace(key, as).first;
+					**asbuf.buffer(), asbuf.offset(), asbuf.size_bytes());
+				aabb_it = mAABBs.emplace(key, make_pair(as, asbuf)).first;
 			}
 
 			const TransformData transform = node_to_world(vol.node());
 			vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
-			Eigen::Matrix<float, 3, 4, Eigen::RowMajor>::Map(&instance.transform.matrix[0][0]) = to_float3x4(transform);
-			instance.instanceCustomIndex = process_instance(component_ptr<void>(vol), make_instance_volume(material_address, mSceneData->mResources.volume_data_map.at(vol->density_buffer)), transform, false);
+			float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
+			instance.instanceCustomIndex = process_instance(component_ptr<void>(vol), make_instance_volume(material_address, mResources->mResources.volume_data_map.at(vol->density_buffer)), transform, false);
 			instance.mask = BVH_FLAG_VOLUME;
 			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**aabb_it->second);
 		});
@@ -623,18 +646,18 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 
 	// light distribution
 	if (lightInstancePowers.size() > 0) {
-		Buffer::View<float> lightPdf = make_shared<Buffer>(commandBuffer.mDevice, "light_pdf", lightInstancePowers.size()*sizeof(float), vk::BufferUsageFlagBits::eTransferSrc, VMA_MEMORY_USAGE_CPU_TO_GPU);
+		Buffer::View<float> lightPdf = make_shared<Buffer>(commandBuffer.mDevice, "light_pdf", lightInstancePowers.size()*sizeof(float)    , vk::BufferUsageFlagBits::eTransferSrc, VMA_MEMORY_USAGE_CPU_TO_GPU);
 		Buffer::View<float> lightCdf = make_shared<Buffer>(commandBuffer.mDevice, "light_cdf", (lightInstancePowers.size()+1)*sizeof(float), vk::BufferUsageFlagBits::eTransferSrc, VMA_MEMORY_USAGE_CPU_TO_GPU);
 		build_distribution(lightInstancePowers,
 			span(lightPdf.data(), lightPdf.size()),
 			span(lightCdf.data(), lightCdf.size()) );
-		mSceneData->mLightDistributionPDF = mSceneData->mResources.get_index(lightPdf);
-		mSceneData->mLightDistributionCDF = mSceneData->mResources.get_index(lightCdf);
+		mResources->mLightDistributionPDF = mResources->mResources.get_index(lightPdf);
+		mResources->mLightDistributionCDF = mResources->mResources.get_index(lightCdf);
 	} else
-		mSceneData->mLightDistributionPDF = mSceneData->mLightDistributionCDF = -1;
+		mResources->mLightDistributionPDF = mResources->mLightDistributionCDF = -1;
 
 	{ // Build TLAS
-		ProfilerRegion s("Build TLAS", commandBuffer);
+		ProfilerScope s("Build TLAS", commandBuffer);
 		commandBuffer.barrier(blasBarriers, vk::PipelineStageFlagBits::eAccelerationStructureBuildKHR, vk::PipelineStageFlagBits::eAccelerationStructureBuildKHR);
 		vk::AccelerationStructureGeometryKHR geom{ vk::GeometryTypeKHR::eInstances, vk::AccelerationStructureGeometryInstancesDataKHR() };
 		vk::AccelerationStructureBuildRangeInfoKHR range{ (uint32_t)instancesAS.size() };
@@ -644,66 +667,49 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 			commandBuffer.hold_resource(buf);
 			geom.geometry.instances.data = buf->device_address();
 		}
-		mSceneData->mScene = make_shared<AccelerationStructure>(commandBuffer, mNode.name() + "/TLAS", vk::AccelerationStructureTypeKHR::eTopLevel, geom, range);
-		commandBuffer.barrier({ commandBuffer.hold_resource(mSceneData->mScene).buffer() },
+		tie(mResources->mAccelerationStructure, mResources->mAccelerationStructureBuffer) = buildAccelerationStructure(commandBuffer, mNode.name() + "/TLAS", vk::AccelerationStructureTypeKHR::eTopLevel, geom, range);
+		commandBuffer.barrier({ commandBuffer.hold_resource(mResources->mScene).buffer() },
 			vk::PipelineStageFlagBits::eAccelerationStructureBuildKHR, vk::AccessFlagBits::eAccelerationStructureWriteKHR,
 			vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eAccelerationStructureReadKHR);
 	}
 
 	{ // environment material
-		ProfilerRegion s("Process environment", commandBuffer);
-		mSceneData->mEnvironmentMaterialAddress = -1;
+		ProfilerScope s("Process environment", commandBuffer);
+		mResources->mEnvironmentMaterialAddress = -1;
 		mNode.for_each_descendant<Environment>([&](const component_ptr<Environment> environment) {
-			if (environment && !environment->emission.value.isZero() && mSceneData->mEnvironmentMaterialAddress  == -1) {
-				mSceneData->mEnvironmentMaterialAddress = (uint32_t)(materialData.data.size() * sizeof(uint32_t));
-				mSceneData->mMaterialCount++;
-				environment->store(materialData, mSceneData->mResources);
+			if (environment && !environment->emission.value.isZero() && mResources->mEnvironmentMaterialAddress  == -1) {
+				mResources->mEnvironmentMaterialAddress = (uint32_t)(materialData.data.size() * sizeof(uint32_t));
+				mResources->mMaterialCount++;
+				environment->store(materialData, mResources->mResources);
 			}
 		});
 	}
 
 	{ // copy vertices and indices
-		ProfilerRegion s("Copy vertex data", commandBuffer);
+		ProfilerScope s("Copy vertex data", commandBuffer);
 
-		if (!mSceneData->mVertices || mSceneData->mVertices.size() < totalVertexCount)
-			mSceneData->mVertices = make_shared<Buffer>(commandBuffer.mDevice, "gVertices", max(totalVertexCount, 1u) * sizeof(PackedVertexData), vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer, VMA_MEMORY_USAGE_GPU_ONLY, 16);
-		if (!mSceneData->mIndices || mSceneData->mIndices.size() < totalIndexBufferSize)
-			mSceneData->mIndices = make_shared<Buffer>(commandBuffer.mDevice, "gIndices", align_up(max(totalIndexBufferSize, 1u), sizeof(uint32_t)), vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer, VMA_MEMORY_USAGE_GPU_ONLY, 4);
+		if (!mResources->mVertices || mResources->mVertices.size() < totalVertexCount)
+			mResources->mVertices = make_shared<Buffer>(commandBuffer.mDevice, "gVertices", max(totalVertexCount, 1u) * sizeof(PackedVertexData), vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal);
+		if (!mResources->mIndices || mResources->mIndices.size() < totalIndexBufferSize)
+			mResources->mIndices = make_shared<Buffer>(commandBuffer.mDevice, "gIndices", align_up(max(totalIndexBufferSize, 1u), sizeof(uint32_t)), vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal);
 
 		for (const auto& [prim, blas, instanceIndex] : meshInstanceIndices) {
 			const InstanceData& d = instanceDatas[instanceIndex];
 			Buffer::View<PackedVertexData>& meshVertices = mMeshVertices.at(prim->mMesh.get());
-			commandBuffer.copy_buffer(meshVertices, Buffer::View<PackedVertexData>(mSceneData->mVertices.buffer(), d.first_vertex() * sizeof(PackedVertexData), meshVertices.size()));
-			commandBuffer.copy_buffer(blas->mIndices, Buffer::View<std::byte>(mSceneData->mIndices.buffer(), d.indices_byte_offset(), blas->mIndices.size_bytes()));
+			commandBuffer.copy_buffer(meshVertices, Buffer::View<PackedVertexData>(mResources->mVertices.buffer(), d.first_vertex() * sizeof(PackedVertexData), meshVertices.size()));
+			commandBuffer.copy_buffer(blas->mIndices, Buffer::View<std::byte>(mResources->mIndices.buffer(), d.indices_byte_offset(), blas->mIndices.size_bytes()));
 		}
-		commandBuffer.barrier({ mSceneData->mIndices, mSceneData->mVertices }, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferWrite, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead);
+		commandBuffer.barrier({ mResources->mIndices, mResources->mVertices }, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferWrite, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead);
 	}
 
-	if (!mSceneData->mInstances || mSceneData->mInstances.size() < instanceDatas.size()) {
-		mSceneData->mInstances = make_shared<Buffer>(commandBuffer.mDevice, "gInstances", max<size_t>(1, instanceDatas.size()) * sizeof(InstanceData), vk::BufferUsageFlagBits::eStorageBuffer, VMA_MEMORY_USAGE_CPU_TO_GPU, 16);
-		mSceneData->mInstanceTransforms = make_shared<Buffer>(commandBuffer.mDevice, "gInstanceTransforms", max<size_t>(1, instanceDatas.size()) * sizeof(TransformData), vk::BufferUsageFlagBits::eStorageBuffer, VMA_MEMORY_USAGE_CPU_TO_GPU, 16);
-		mSceneData->mInstanceInverseTransforms = make_shared<Buffer>(commandBuffer.mDevice, "gInstanceInverseTransforms", max<size_t>(1, instanceDatas.size()) * sizeof(TransformData), vk::BufferUsageFlagBits::eStorageBuffer, VMA_MEMORY_USAGE_CPU_TO_GPU, 16);
-		mSceneData->mInstanceMotionTransforms = make_shared<Buffer>(commandBuffer.mDevice, "gInstanceMotionTransforms", max<size_t>(1, instanceDatas.size()) * sizeof(TransformData), vk::BufferUsageFlagBits::eStorageBuffer, VMA_MEMORY_USAGE_CPU_TO_GPU, 16);
-	}
-	if (!mSceneData->mMaterialData || mSceneData->mMaterialData.size_bytes() < materialData.data.size() * sizeof(uint32_t))
-		mSceneData->mMaterialData = make_shared<Buffer>(commandBuffer.mDevice, "gMaterialData", max<size_t>(1, materialData.data.size()) * sizeof(uint32_t), vk::BufferUsageFlagBits::eStorageBuffer, VMA_MEMORY_USAGE_CPU_TO_GPU, 16);
-	if (!mSceneData->mLightInstanceMap || mSceneData->mLightInstanceMap.size() < lightInstanceMap.size())
-		mSceneData->mLightInstanceMap = make_shared<Buffer>(commandBuffer.mDevice, "gLightInstanceMap", max<size_t>(1, lightInstanceMap.size()) * sizeof(uint32_t), vk::BufferUsageFlagBits::eStorageBuffer, VMA_MEMORY_USAGE_CPU_TO_GPU, 16);
-	if (!mSceneData->mDistributionData || mSceneData->mDistributionData.size() < mSceneData->mResources.distribution_data_size)
-		mSceneData->mDistributionData = make_shared<Buffer>(commandBuffer.mDevice, "gDistributionData", max<size_t>(1, mSceneData->mResources.distribution_data_size) * sizeof(float), vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer, VMA_MEMORY_USAGE_GPU_ONLY, 16);
-
-	memcpy(mSceneData->mInstances.data(), instanceDatas.data(), instanceDatas.size() * sizeof(InstanceData));
-	memcpy(mSceneData->mInstanceTransforms.data(), instanceTransforms.data(), instanceTransforms.size() * sizeof(TransformData));
-	memcpy(mSceneData->mInstanceInverseTransforms.data(), instanceInverseTransforms.data(), instanceInverseTransforms.size() * sizeof(TransformData));
-	memcpy(mSceneData->mInstanceMotionTransforms.data(), instanceMotionTransforms.data(), instanceMotionTransforms.size() * sizeof(TransformData));
-	memcpy(mSceneData->mMaterialData.data(), materialData.data.data(), materialData.data.size() * sizeof(uint32_t));
-	if (lightInstanceMap.size()) memcpy(mSceneData->mLightInstanceMap.data(), lightInstanceMap.data(), lightInstanceMap.size() * sizeof(uint32_t));
-	for (const auto& [buf, address] : mSceneData->mResources.distribution_data_map)
-		commandBuffer.copy_buffer(buf, Buffer::View<float>(mSceneData->mDistributionData, address, buf.size()));
-
-	commandBuffer.barrier({ mSceneData->mDistributionData }, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferWrite, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead);
-	commandBuffer.hold_resource(mSceneData->mDistributionData);
+	mResources->mInstances                .set(instanceDatas);
+	mResources->mInstanceTransforms       .set(instanceTransforms);
+	mResources->mInstanceInverseTransforms.set(instanceInverseTransforms);
+	mResources->mInstanceMotionTransforms .set(instanceMotionTransforms);
+	mResources->mMaterialData             .set(materialData.data);
+	if (lightInstanceMap.size()) mResources->mLightInstanceMap.set(lightInstanceMap.data());
 }
+
 */
 
 }

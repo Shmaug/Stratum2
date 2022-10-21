@@ -2,6 +2,7 @@
 
 namespace tinyvkpt {
 	using namespace std;
+	using byte = std::byte;
 
 	class CommandBuffer;
 	class Device;
@@ -10,6 +11,7 @@ namespace tinyvkpt {
 	class Instance;
 	class Mesh;
 	class ComputePipeline;
+	class ComputePipelineContext;
 	class Profiler;
 	class Shader;
 	class ShaderSource;

@@ -5,12 +5,12 @@
 #include "Buffer.hpp"
 #include "Image.hpp"
 #include "Pipeline.hpp"
+#include "ResourcePool.hpp"
 
 namespace tinyvkpt {
 
 using BufferDescriptor = Buffer::View<byte>;
 using ImageDescriptor = tuple<Image::View, vk::ImageLayout, vk::AccessFlagBits, shared_ptr<vk::raii::Sampler>>;
-
 using DescriptorValue = variant<BufferDescriptor, ImageDescriptor>;
 using Descriptors = unordered_map<pair<string, uint32_t>, DescriptorValue>;
 
@@ -65,7 +65,7 @@ private:
 	};
 
 	shared_ptr<ComputePipeline> mPipeline;
-	unordered_set<shared_ptr<DispatchResources>> mResources;
+	ResourcePool<DispatchResources> mResources;
 };
 
 }

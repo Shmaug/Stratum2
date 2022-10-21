@@ -18,8 +18,8 @@ namespace std {
 inline string to_string(const tinyvkpt::CompareMetric& m) {
 	switch (m) {
 		default: return "Unknown";
-		case tinyvkpt::CompareMetric::eSMAPE: return "SMAPE";
-		case tinyvkpt::CompareMetric::eMSE: return "MSE";
+		case tinyvkpt::CompareMetric::eSMAPE:   return "SMAPE";
+		case tinyvkpt::CompareMetric::eMSE:     return "MSE";
 		case tinyvkpt::CompareMetric::eAverage: return "Average";
 	}
 };

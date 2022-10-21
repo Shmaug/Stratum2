@@ -11,7 +11,7 @@
 namespace tinyvkpt {
 
 Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily, const vk::ImageLayout srcLayout, const vk::ImageLayout dstLayout, const bool clear)
-	: mRenderPass(nullptr), mQueueFamily(queueFamily, mDstLayout(dstLayout)) {
+	: mRenderPass(nullptr), mQueueFamily(queueFamily), mDstLayout(dstLayout) {
 
 	// create renderpass
 	vk::AttachmentReference attachmentReference(0, vk::ImageLayout::eColorAttachmentOptimal);

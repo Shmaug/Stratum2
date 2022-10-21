@@ -133,8 +133,11 @@ struct PackedVertexData {
 	float3 normal;
 	float v;
 	inline float2 uv() { return float2(u, v); }
-	SLANG_MUTATING
-	inline void set(const float3 p, const float3 n, const float2 uv) {
+#ifdef __cplusplus
+	inline PackedVertexData(const float3& p, const float3& n, const float2& uv) {
+#else
+	__init(const float3 p, const float3 n, const float2 uv) {
+#endif
 		position = p;
 		u = uv[0];
 		normal = n;

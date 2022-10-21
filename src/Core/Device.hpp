@@ -1,13 +1,11 @@
 #pragma once
 
-#include <mutex>
 #include <unordered_set>
-#include <stack>
 
 #include <vk_mem_alloc.h>
 
+#include <Utils/fwd.hpp>
 #include <Utils/utils.hpp>
-#include <vulkan/vulkan_raii.hpp>
 
 namespace tinyvkpt {
 
@@ -22,32 +20,17 @@ public:
 		inline string resourceName() const { return mName; }
 		inline bool inFlight() const { return !mInFlight.empty(); }
 	private:
-		friend class CommandBufferResourceTracker;
-		// maintained by CommandBuffers
-		unordered_set<CommandBuffer*> mInFlight;
 		const string mName;
-	};
 
-	template<typename T>
-	class ResourceWrapper : Resource {
-	public:
-		T mObject;
-		ResourceWrapper(ResourceWrapper&& v) = default;
-		ResourceWrapper& operator=(ResourceWrapper&& v) = default;
-		inline ResourceWrapper(Device& device, const string& name, T&& v) : mDevice(device), mName(name), mObject(move(v)) {}
-		inline T& operator*() { return mObject; }
-		inline T* operator->() { return &mObject; }
-		inline const T& operator*() const { return mObject; }
-		inline const T* operator->() const { return &mObject; }
+		friend class CommandBufferResourceTracker;
+		// list of CommandBuffers currently using the resource. Automatically maintained by CommandBufferResourceTracker
+		unordered_set<CommandBuffer*> mInFlight;
 	};
 
 	Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice);
 	~Device();
 
-	inline vk::raii::Device& operator*() { return mDevice; }
-	inline vk::raii::Device* operator->() { return &mDevice; }
-	inline const vk::raii::Device& operator*() const { return mDevice; }
-	inline const vk::raii::Device* operator->() const { return &mDevice; }
+	DECLARE_DEREFERENCE_OPERATORS(vk::raii::Device, mDevice)
 
 	inline vk::raii::PhysicalDevice physical() const { return mPhysicalDevice; }
 	inline vk::raii::PipelineCache& pipelineCache() { return mPipelineCache; }
@@ -75,7 +58,11 @@ public:
 	vk::raii::DescriptorPool& descriptorPool();
 
 	shared_ptr<CommandBuffer> getCommandBuffer(const uint32_t queueFamily);
-	void submit(const vk::raii::Queue queue, const vk::ArrayProxy<shared_ptr<CommandBuffer>>& commandBuffers);
+	void submit(
+		const vk::raii::Queue queue,
+		const vk::ArrayProxy<shared_ptr<CommandBuffer>>& commandBuffers,
+		const vk::ArrayProxy<pair<shared_ptr<vk::raii::Semaphore>, vk::PipelineStageFlags>>& waitSemaphores = {},
+		const vk::ArrayProxy<shared_ptr<vk::raii::Semaphore>>& signalSemaphores = {});
 
 	void checkCommandBuffers();
 

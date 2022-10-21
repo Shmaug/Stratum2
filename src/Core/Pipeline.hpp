@@ -17,10 +17,7 @@ public:
 
 	ComputePipeline(const string& name, const shared_ptr<Shader>& shader, const Metadata& metadata = {});
 
-	inline vk::raii::Pipeline& operator*() { return mPipeline; }
-	inline vk::raii::Pipeline* operator->() { return &mPipeline; }
-	inline const vk::raii::Pipeline& operator*() const { return mPipeline; }
-	inline const vk::raii::Pipeline* operator->() const { return &mPipeline; }
+	DECLARE_DEREFERENCE_OPERATORS(vk::raii::Pipeline, mPipeline)
 
 	inline const shared_ptr<Shader>& shader() const { return mShader; }
 	inline const shared_ptr<vk::raii::PipelineLayout>& layout() const { return mLayout; }

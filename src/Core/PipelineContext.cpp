@@ -6,18 +6,10 @@
 namespace tinyvkpt {
 
 void ComputePipelineContext::bindDescriptors(CommandBuffer& commandBuffer, const Descriptors& descriptors, const unordered_map<string, uint32_t>& dynamicOffsets) {
-	shared_ptr<DispatchResources> r;
-
-	for (auto it = mResources.begin(); it != mResources.end(); it++) {
-		if ((*it)->inFlight()) continue;
-		r = *it;
-		mResources.erase(it);
-		break;
-	}
-
+	shared_ptr<DispatchResources> r = mResources.get();
 	// create new resources if necessary
 	if (!r) {
-		r = *mResources.emplace(make_shared<DispatchResources>(commandBuffer.mDevice, mPipeline->resourceName() + "/Resources")).first;
+		r = mResources.emplace(make_shared<DispatchResources>(commandBuffer.mDevice, mPipeline->resourceName() + "/Resources"));
 
 		vector<vk::DescriptorSetLayout> layouts(mPipeline->descriptorSetLayouts().size());
 		ranges::transform(mPipeline->descriptorSetLayouts(), layouts.begin(), [](auto& l){ return **l; });
@@ -28,17 +20,17 @@ void ComputePipelineContext::bindDescriptors(CommandBuffer& commandBuffer, const
 		ranges::transform(sets, r->mDescriptorSets.begin(), [](vk::raii::DescriptorSet& ds) {
 			return make_shared<vk::raii::DescriptorSet>(move(ds));
 		});
+
+		mResources.emplace(r);
 	}
 
 	r->mDescriptors = descriptors;
-
 
 	// write descriptors
 
 	union DescriptorInfo {
 		vk::DescriptorBufferInfo buffer;
 		vk::DescriptorImageInfo image;
-		vk::BufferView texelBufferView;
 	};
 
 	vector<DescriptorInfo> descriptorInfos;
@@ -55,8 +47,8 @@ void ComputePipelineContext::bindDescriptors(CommandBuffer& commandBuffer, const
 			throw runtime_error(msg);
 		}
 		const Shader::DescriptorBinding& binding = it->second;
-		vk::WriteDescriptorSet& w = writes.emplace_back(vk::WriteDescriptorSet(**r->mDescriptorSets[binding.mSet], binding.mBinding, arrayIndex, 1, binding.mDescriptorType));
 
+		// TODO: warn/error on invalid descriptor
 		switch (binding.mDescriptorType) {
 			case vk::DescriptorType::eSampler:
 				break;
@@ -84,17 +76,19 @@ void ComputePipelineContext::bindDescriptors(CommandBuffer& commandBuffer, const
 				break;
 		}
 
+		vk::WriteDescriptorSet& w = writes.emplace_back(vk::WriteDescriptorSet(**r->mDescriptorSets[binding.mSet], binding.mBinding, arrayIndex, 1, binding.mDescriptorType));
 		DescriptorInfo& info = descriptorInfos.emplace_back(DescriptorInfo{});
 		switch (descriptorValue.index()) {
 		case 0: {
 			const BufferDescriptor& v = get<BufferDescriptor>(descriptorValue);
-			info.buffer = vk::DescriptorBufferInfo(***v.buffer(), v.offset(), v.sizeBytes());
+			info.buffer = vk::DescriptorBufferInfo(**v.buffer(), v.offset(), v.sizeBytes());
 			w.setBufferInfo(info.buffer);
 			break;
 		}
 		case 1: {
 			const auto& [image, layout, accessFlags, sampler] = get<ImageDescriptor>(descriptorValue);
 			info.image = vk::DescriptorImageInfo(**sampler, *image, layout);
+			image.barrier(commandBuffer, layout, vk::PipelineStageFlagBits::eComputeShader, accessFlags, commandBuffer.queueFamily());
 			w.setImageInfo(info.image);
 			break;
 		}
@@ -143,7 +137,7 @@ void ComputePipelineContext::pushConstants(CommandBuffer& commandBuffer, const P
 		for (const uint32_t c : it->second.mArraySize)
 			typeSize *= c;
 		if (typeSize != constants.size())
-			cerr << "Warning: " << "Push constant " << name << " size " << constants.size() << "B"
+			cerr << "Warning: " << "Push constant " << name << " with size " << constants.size() << "B"
 				 << " does not match size " << typeSize << "B declared by shader " + mPipeline->shader()->resourceName() << endl;
 
 		commandBuffer->pushConstants<byte>(**mPipeline->layout(), mPipeline->shader()->stage(), it->second.mOffset, pushConstant.data());

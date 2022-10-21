@@ -1,5 +1,4 @@
 struct Params {
-	RWTexture2D<float4> mInput;
 	RWTexture2D<float4> mOutput;
 };
 
@@ -14,5 +13,5 @@ struct PushConstants {
 SLANG_SHADER("compute")
 [numthreads(8,8,1)]
 void main(uint3 index : SV_DispatchThreadId) {
-	gOutput[index.xy] = gInput[index.xy] * gPushConstants.mBias + gPushConstants.mExposure;
+	gOutput[index.xy] = gPushConstants.mBias + gPushConstants.mExposure;
 }

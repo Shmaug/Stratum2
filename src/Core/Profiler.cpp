@@ -2,8 +2,6 @@
 
 #include <imgui/imgui.h>
 
-using namespace std;
-
 namespace tinyvkpt {
 
 shared_ptr<Profiler::ProfilerSample> Profiler::mCurrentSample;

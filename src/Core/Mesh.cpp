@@ -8,7 +8,7 @@ Mesh::VertexLayoutDescription Mesh::vertexLayout(const Shader& vertexShader) con
 
 	struct stride_view_hash {
 		inline size_t operator()(const Buffer::StrideView& v) const {
-			return hash_args(v.buffer().get(), v.offset(), v.sizeBytes(), v.stride());
+			return hashArgs(v.buffer().get(), v.offset(), v.sizeBytes(), v.stride());
 		}
 	};
 
@@ -40,7 +40,7 @@ void Mesh::Vertices::bind(CommandBuffer& commandBuffer) const {
 }
 void Mesh::bind(CommandBuffer& commandBuffer) const {
 	mVertices.bind(commandBuffer);
-	commandBuffer->bindIndexBuffer(***mIndices.buffer(), mIndices.offset(), indexType());
+	commandBuffer->bindIndexBuffer(**mIndices.buffer(), mIndices.offset(), indexType());
 }
 
 }

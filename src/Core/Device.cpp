@@ -157,7 +157,7 @@ shared_ptr<CommandBuffer> Device::getCommandBuffer(const uint32_t queueFamily) {
 	}
 }
 
-void Device::submit(const vk::raii::Queue queue, const vk::ArrayProxy<shared_ptr<CommandBuffer>>& commandBuffers) {
+void Device::submit(const vk::raii::Queue queue, const vk::ArrayProxy<shared_ptr<CommandBuffer>>& commandBuffers, const vk::ArrayProxy<pair<shared_ptr<vk::raii::Semaphore>, vk::PipelineStageFlags>>& waitSemaphores, const vk::ArrayProxy<shared_ptr<vk::raii::Semaphore>>& signalSemaphores) {
 	// create or reuse fence
 	shared_ptr<vk::raii::Fence> fence;
 	for (auto cb : commandBuffers)
@@ -175,9 +175,13 @@ void Device::submit(const vk::raii::Queue queue, const vk::ArrayProxy<shared_ptr
 		mCommandBuffersInFlight[cb->queueFamily()].emplace_back(cb);
 	}
 
-	vk::SubmitInfo submitInfo;
-	submitInfo.setCommandBuffers(vkbufs);
-	queue.submit(vk::ArrayProxy(submitInfo), **fence);
+	vector<vk::Semaphore> vkWaitSemaphores(waitSemaphores.size());
+	vector<vk::PipelineStageFlags> waitStages(waitSemaphores.size());
+	vector<vk::Semaphore> vkSignalSemaphores(signalSemaphores.size());
+	ranges::transform(waitSemaphores, vkWaitSemaphores.begin(), [](auto s){ return **s.first; } );
+	ranges::transform(waitSemaphores, waitStages.begin(), &pair<shared_ptr<vk::raii::Semaphore>, vk::PipelineStageFlags>::second);
+	ranges::transform(signalSemaphores, vkSignalSemaphores.begin(), [](auto s){ return **s; } );
+	queue.submit(vk::SubmitInfo(vkWaitSemaphores, waitStages, vkbufs, vkSignalSemaphores), **fence);
 }
 
 void Device::checkCommandBuffers() {

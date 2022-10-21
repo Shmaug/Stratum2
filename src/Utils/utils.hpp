@@ -1,15 +1,24 @@
 #pragma once
 
 #include <string>
-#include <stdint.h>
+#include <cstdint>
 #include <fstream>
 #include <filesystem>
+#include <stack>
+#include <list>
+#include <memory>
 
-#include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan_raii.hpp>
 
-#include "common.hpp"
+#define DECLARE_DEREFERENCE_OPERATORS(TYPE, VAR) \
+	inline TYPE & operator*() { return VAR ; } \
+	inline TYPE * operator->() { return & VAR ; } \
+	inline const TYPE & operator*() const { return VAR ; } \
+	inline const TYPE * operator->() const { return & VAR ; }
 
 namespace tinyvkpt {
+
+using namespace std;
 
 template<ranges::contiguous_range R>
 inline R readFile(const filesystem::path& filename) {
@@ -37,6 +46,25 @@ template<ranges::contiguous_range R>
 inline void writeFile(const filesystem::path& filename, const R& r) {
 	ofstream file(filename, ios::ate | ios::binary);
 	file.write(reinterpret_cast<char*>(r.data()), r.size()*sizeof(ranges::range_value_t<R>));
+}
+
+inline tuple<size_t, const char*> formatBytes(size_t bytes) {
+	const char* units[] { "B", "KiB", "MiB", "GiB", "TiB" };
+	uint32_t i = 0;
+	while (bytes > 1024 && i < ranges::size(units)-1) {
+		bytes /= 1024;
+		i++;
+	}
+	return tie(bytes, units[i]);
+}
+inline tuple<float, const char*> formatNumber(float number) {
+	const char* units[] { "", "K", "M", "B" };
+	uint32_t i = 0;
+	while (number > 1000 && i < ranges::size(units)-1) {
+		number /= 1000;
+		i++;
+	}
+	return tie(number, units[i]);
 }
 
 inline constexpr bool isDepthStencil(vk::Format format) {
@@ -351,25 +379,6 @@ inline constexpr T channelCount(const vk::Format format) {
 	case vk::Format::eBc1RgbaSrgbBlock:
 		return 4;
 	}
-}
-
-inline tuple<size_t, const char*> formatBytes(size_t bytes) {
-	const char* units[] { "B", "KiB", "MiB", "GiB", "TiB" };
-	uint32_t i = 0;
-	while (bytes > 1024 && i < ranges::size(units)-1) {
-		bytes /= 1024;
-		i++;
-	}
-	return tie(bytes, units[i]);
-}
-inline tuple<float, const char*> formatNumber(float number) {
-	const char* units[] { "", "K", "M", "B" };
-	uint32_t i = 0;
-	while (number > 1000 && i < ranges::size(units)-1) {
-		number /= 1000;
-		i++;
-	}
-	return tie(number, units[i]);
 }
 
 }

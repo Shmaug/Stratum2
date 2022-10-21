@@ -8,6 +8,7 @@
 #include <string>
 #include <chrono>
 
+#include <Utils/fwd.hpp>
 #include <Utils/math.hpp>
 
 namespace tinyvkpt {

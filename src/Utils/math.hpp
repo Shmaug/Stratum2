@@ -1,8 +1,10 @@
 #pragma once
 
-#include <Eigen/Dense>
+#include <cstdint>
+#include <concepts>
+#include <algorithm>
 
-#include "common.hpp"
+#include <Eigen/Dense>
 
 #ifdef min
 #undef min
@@ -13,9 +15,11 @@
 
 namespace tinyvkpt {
 
+using namespace std;
+
 using uint = uint32_t;
 
-template<typename T,int N> using VectorType = Eigen::Array<T, N, 1, Eigen::ColMajor, N, 1>;
+template<typename T, int N>        using VectorType = Eigen::Array<T, N, 1, Eigen::ColMajor, N, 1>;
 template<typename T, int M, int N> using MatrixType = Eigen::Array<T, M, N, Eigen::RowMajor, M, N>;
 
 using char2    	= VectorType<int8_t , 2>;

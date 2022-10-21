@@ -9,13 +9,12 @@ public:
 	Window& mWindow;
 
 	Swapchain(Device& device, const string& name, Window& window,
-		const vk::SurfaceFormatKHR mPreferredSurfaceFormat = vk::SurfaceFormatKHR(vk::Format::eR8G8B8A8Unorm, vk::ColorSpaceKHR::eSrgbNonlinear),
+		const uint32_t minImages = 2,
+		const vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst,
+		const vk::SurfaceFormatKHR preferredSurfaceFormat = vk::SurfaceFormatKHR(vk::Format::eR8G8B8A8Unorm, vk::ColorSpaceKHR::eSrgbNonlinear),
 		const vk::PresentModeKHR presentMode = vk::PresentModeKHR::eImmediate);
 
-	inline vk::raii::SwapchainKHR& operator*() { return mSwapchain; }
-	inline vk::raii::SwapchainKHR* operator->() { return &mSwapchain; }
-	inline const vk::raii::SwapchainKHR& operator*() const { return mSwapchain; }
-	inline const vk::raii::SwapchainKHR* operator->() const { return &mSwapchain; }
+	DECLARE_DEREFERENCE_OPERATORS(vk::raii::SwapchainKHR, mSwapchain)
 
 	inline vk::Extent2D extent() const { return mExtent; }
 	inline vk::SurfaceFormatKHR format() const { return mSurfaceFormat; }
@@ -47,9 +46,10 @@ private:
 	vk::Extent2D mExtent;
 	vector<shared_ptr<Image>> mImages;
 	vector<shared_ptr<vk::raii::Semaphore>> mImageAvailableSemaphores;
-	uint32_t mMinImageCount = 3;
-	uint32_t mBackBufferIndex = 0;
-	uint32_t mImageAvailableSemaphoreIndex = 0;
+	uint32_t mMinImageCount;
+	uint32_t mBackBufferIndex;
+	uint32_t mImageAvailableSemaphoreIndex;
+	vk::ImageUsageFlags mUsage;
 
 	vk::SurfaceFormatKHR mSurfaceFormat;
 	vk::PresentModeKHR mPresentMode;

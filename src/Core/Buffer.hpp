@@ -9,13 +9,11 @@ namespace tinyvkpt {
 class Buffer : public Device::Resource {
 public:
 	Buffer(Device& device, const string& name, const vk::DeviceSize size, const vk::BufferUsageFlags usage, const vk::MemoryPropertyFlags memoryFlags = vk::MemoryPropertyFlagBits::eDeviceLocal, const vk::SharingMode sharingMode = vk::SharingMode::eExclusive);
+	~Buffer();
 
-	inline vk::raii::Buffer& operator*() { return mBuffer; }
-	inline vk::raii::Buffer* operator->() { return &mBuffer; }
-	inline const vk::raii::Buffer& operator*() const { return mBuffer; }
-	inline const vk::raii::Buffer* operator->() const { return &mBuffer; }
+	DECLARE_DEREFERENCE_OPERATORS(vk::Buffer, mBuffer)
 
-	inline operator bool() const { return *mBuffer; }
+	inline operator bool() const { return mBuffer; }
 
 	inline void* data() const {
 		return nullptr; // TODO: ptr to mapped data from allocation
@@ -24,7 +22,7 @@ public:
 	inline vk::BufferUsageFlags usage() const { return mUsage; }
 	inline vk::MemoryPropertyFlags memoryUsage() const { return mMemoryFlags; }
 	inline vk::SharingMode sharingMode() const { return mSharingMode; }
-	inline vk::DeviceSize deviceAddress() const { return mDevice->getBufferAddress(*mBuffer); }
+	inline vk::DeviceSize deviceAddress() const { return mDevice->getBufferAddress(mBuffer); }
 
 	template<typename T = byte>
 	class View {
@@ -64,12 +62,12 @@ public:
 
 		inline bool empty() const { return !mBuffer || mSize == 0; }
 		inline void reset() { mBuffer.reset(); }
-		inline size_type size() const { return mSize; }
+		inline vk::DeviceSize size() const { return mSize; }
 		inline vk::DeviceSize sizeBytes() const { return mSize * sizeof(T); }
 		inline pointer data() const { return reinterpret_cast<pointer>(reinterpret_cast<char*>(mBuffer->data()) + offset()); }
 #if VK_KHR_buffer_device_address
-		inline vk::DeviceSize device_address() const {
-			return mBuffer->device_address() + mOffset;
+		inline vk::DeviceSize deviceAddress() const {
+			return mBuffer->deviceAddress() + mOffset;
 		}
 #endif
 
@@ -122,7 +120,9 @@ public:
 	};
 
 private:
-	vk::raii::Buffer mBuffer;
+	vk::Buffer mBuffer;
+	VmaAllocation mAllocation;
+	VmaAllocationInfo mAllocationInfo;
 	vk::DeviceSize mSize;
 	vk::BufferUsageFlags mUsage;
 	vk::MemoryPropertyFlags mMemoryFlags;

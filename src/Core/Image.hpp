@@ -27,10 +27,7 @@ public:
 	Image(Device& device, const string& name, const vk::Image image, const Metadata& metadata);
 	~Image();
 
-	inline vk::Image& operator*() { return mImage; }
-	inline vk::Image* operator->() { return &mImage; }
-	inline const vk::Image& operator*() const { return mImage; }
-	inline const vk::Image* operator->() const { return &mImage; }
+	DECLARE_DEREFERENCE_OPERATORS(vk::Image, mImage)
 
 	inline operator bool() const { return mImage; }
 
@@ -75,10 +72,7 @@ public:
 		View& operator=(const View&) = default;
 		View& operator=(View&& v) = default;
 
-		inline vk::ImageView& operator*() { return mView; }
-		inline vk::ImageView* operator->() { return &mView; }
-		inline const vk::ImageView& operator*() const { return mView; }
-		inline const vk::ImageView* operator->() const { return &mView; }
+		DECLARE_DEREFERENCE_OPERATORS(vk::ImageView, mView)
 
 		inline bool operator==(const View& rhs) const { return mView == rhs.mView; }
 		inline bool operator!=(const View& rhs) const { return mView != rhs.mView; }

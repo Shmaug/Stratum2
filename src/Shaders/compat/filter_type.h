@@ -21,10 +21,10 @@ namespace std {
 inline string to_string(const tinyvkpt::FilterKernelType& t) {
   switch (t) {
     default: return "Unknown";
-    case tinyvkpt::FilterKernelType::eAtrous: return "Atrous";
-    case tinyvkpt::FilterKernelType::eBox3: return "3x3 Box";
-    case tinyvkpt::FilterKernelType::eBox5: return "5x5 Box";
-    case tinyvkpt::FilterKernelType::eSubsampled: return "Subsampled";
+    case tinyvkpt::FilterKernelType::eAtrous:         return "Atrous";
+    case tinyvkpt::FilterKernelType::eBox3:           return "3x3 Box";
+    case tinyvkpt::FilterKernelType::eBox5:           return "5x5 Box";
+    case tinyvkpt::FilterKernelType::eSubsampled:     return "Subsampled";
     case tinyvkpt::FilterKernelType::eBox3Subsampled: return "3x3 Box, then Subsampled";
     case tinyvkpt::FilterKernelType::eBox5Subsampled: return "5x5 Box, then Subsampled";
   }
