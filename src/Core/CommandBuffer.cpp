@@ -26,4 +26,9 @@ CommandBuffer::CommandBuffer(Device& device, const string& name, const uint32_t 
 	device.setDebugName(*mCommandBuffer, resourceName());
 }
 
+void CommandBuffer::reset() {
+	mCommandBuffer.reset();
+	mResources.clear();
+}
+
 }

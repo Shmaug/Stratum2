@@ -1,6 +1,5 @@
 #include "Mesh.hpp"
 #include "CommandBuffer.hpp"
-#include "Shader.hpp"
 
 namespace tinyvkpt {
 

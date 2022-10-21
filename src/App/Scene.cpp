@@ -704,6 +704,6 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 	commandBuffer.barrier({ mSceneData->mDistributionData }, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferWrite, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead);
 	commandBuffer.hold_resource(mSceneData->mDistributionData);
 }
-
 */
+
 }

@@ -124,7 +124,7 @@ Device::~Device() {
 vk::raii::CommandPool& Device::commandPool(const uint32_t queueFamily) {
 	if (auto it = mCommandPools.find(queueFamily); it != mCommandPools.end())
 		return it->second;
-	return mCommandPools.emplace(queueFamily, vk::raii::CommandPool(mDevice, vk::CommandPoolCreateInfo({}, queueFamily))).first->second;
+	return mCommandPools.emplace(queueFamily, vk::raii::CommandPool(mDevice, vk::CommandPoolCreateInfo(vk::CommandPoolCreateFlagBits::eResetCommandBuffer, queueFamily))).first->second;
 }
 
 vk::raii::DescriptorPool& Device::descriptorPool() {
@@ -152,7 +152,6 @@ shared_ptr<CommandBuffer> Device::getCommandBuffer(const uint32_t queueFamily) {
 	else {
 		const shared_ptr<CommandBuffer> cb = pool.top();
 		pool.pop();
-		(*cb)->reset();
 		cb->mResources.clear();
 		return cb;
 	}
@@ -185,6 +184,7 @@ void Device::checkCommandBuffers() {
 	for (auto&[queueFamily, pool] : mCommandBuffersInFlight) {
 		for (auto it = pool.begin(); it != pool.end();) {
 			if ((*it)->fence()->getStatus() == vk::Result::eSuccess) {
+				(*it)->reset();
 				mCommandBufferPool[queueFamily].push(*it);
 				it = pool.erase(it);
 			} else

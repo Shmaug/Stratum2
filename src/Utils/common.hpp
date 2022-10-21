@@ -12,6 +12,7 @@ namespace tinyvkpt {
 	class ComputePipeline;
 	class Profiler;
 	class Shader;
+	class ShaderSource;
 	class Swapchain;
 	class Window;
 };

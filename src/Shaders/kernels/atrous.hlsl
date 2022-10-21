@@ -25,11 +25,6 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#if 0
-#pragma compile slangc -profile sm_6_6 -lang slang -entry main
-#pragma compile slangc -profile sm_6_6 -lang slang -entry copy_rgb
-#endif
-
 #ifndef gDebugMode
 #define gDebugMode 0
 #endif

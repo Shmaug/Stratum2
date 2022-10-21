@@ -16,9 +16,6 @@ private:
 	}
 
 public:
-	CommandBufferResourceTracker(const CommandBufferResourceTracker&) = delete;
-	CommandBufferResourceTracker& operator=(const CommandBufferResourceTracker&& r) = delete;
-
 	inline CommandBufferResourceTracker() : mResource(nullptr), mCommandBuffer(nullptr) {}
 	inline CommandBufferResourceTracker(CommandBufferResourceTracker&& r) {
 		mResource = move(r.mResource);
@@ -35,6 +32,9 @@ public:
 		r.mCommandBuffer = nullptr;
 		return *this;
 	}
+
+	CommandBufferResourceTracker(const CommandBufferResourceTracker&) = delete;
+	CommandBufferResourceTracker& operator=(const CommandBufferResourceTracker&& r) = delete;
 
 	inline shared_ptr<Device::Resource>& operator*() { return mResource; }
 	inline shared_ptr<Device::Resource>* operator->() { return &mResource; }
@@ -74,6 +74,8 @@ public:
 		CommandBufferResourceTracker t(r, this);
 		mResources.emplace(move(t));
 	}
+
+	void reset();
 
 private:
 	friend class Device;

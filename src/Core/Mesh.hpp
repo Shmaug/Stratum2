@@ -3,6 +3,7 @@
 #include <Utils/hash.hpp>
 
 #include "Buffer.hpp"
+#include "Shader.hpp"
 
 namespace tinyvkpt {
 

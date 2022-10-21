@@ -1,8 +1,3 @@
-#if 0
-#pragma compile slangc -profile sm_6_6 -lang slang -entry main
-#pragma compile slangc -profile sm_6_6 -lang slang -entry reduce_max
-#endif
-
 #include "../compat/common.h"
 #include "../compat/tonemap.h"
 

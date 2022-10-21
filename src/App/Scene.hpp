@@ -69,11 +69,11 @@ public:
 
 	Scene();
 
+	void drawGui();
+
 	void createPipelines();
 
 	inline const shared_ptr<SceneData>& data() const { return mSceneData; }
-
-	void drawGui();
 
 	inline void markDirty() { mUpdateOnce = true; }
 	void update(CommandBuffer& commandBuffer, const float deltaTime);
@@ -87,7 +87,7 @@ public:
 	void loadAssimp(SceneNode& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
 #endif
 #ifdef STRATUM_ENABLE_OPENVDB
-	void loadvdb(SceneNode& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
+	void loadVdb(SceneNode& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
 #endif
 
 	inline vector<string> loaderFilters() {
@@ -135,7 +135,7 @@ public:
 
 	ImageValue1 alphaToRoughness(CommandBuffer& commandBuffer, const ImageValue1& alpha);
 	ImageValue1 shininessToRoughness(CommandBuffer& commandBuffer, const ImageValue1& alpha);
-	Material makeMetallicRoughnessMaterial(CommandBuffer& commandBuffer, const ImageValue3& base_color, const ImageValue4& metallic_roughness, const ImageValue3& transmission, const float eta, const ImageValue3& emission);
+	Material makeMetallicRoughnessMaterial(CommandBuffer& commandBuffer, const ImageValue3& baseColor, const ImageValue4& metallicRoughness, const ImageValue3& transmission, const float eta, const ImageValue3& emission);
 	Material makeDiffuseSpecularMaterial(CommandBuffer& commandBuffer, const ImageValue3& diffuse, const ImageValue3& specular, const ImageValue1& roughness, const ImageValue3& transmission, const float eta, const ImageValue3& emission);
 
 private:

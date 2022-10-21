@@ -62,6 +62,7 @@ void Swapchain::create() {
 		m.mFormat = mSurfaceFormat.format;
 		m.mExtent = vk::Extent3D(mExtent, 1);
 		m.mUsage = info.imageUsage;
+		m.mQueueFamilies = mWindow.queueFamilies(mDevice.physical());
 		mImages[i] = make_shared<Image>(mDevice, "SwapchainImage " + to_string(i), images[i], m);
 		mImageAvailableSemaphores[i] = make_shared<vk::raii::Semaphore>(*mDevice, vk::SemaphoreCreateInfo{});
 	}

@@ -1,7 +1,3 @@
-#if 0
-#pragma compile slangc -profile sm_6_6 -lang slang -entry main
-#endif
-
 #include "../compat/common.h"
 #include "../compat/image_compare.h"
 

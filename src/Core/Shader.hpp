@@ -7,27 +7,40 @@
 
 namespace tinyvkpt {
 
-class Shader : public Device::Resource {
+class ShaderSource {
 public:
-	struct DefineValue {
-		variant<uint32_t, string> mValue;
-		const bool is_number() const { return mValue.index() == 0; }
-		const uint32_t get_number() const { return std::get<uint32_t>(mValue); }
-		const string get_string() const { return std::get<string>(mValue); }
-	};
+	inline ShaderSource(const filesystem::path& sourceFile, const string& entryPoint = "main", const string& profile = "sm_6_6", const vector<string>& compileArgs = {})
+		: mSourceFile(sourceFile), mEntryPoint(entryPoint), mShaderProfile(profile), mCompileArgs(compileArgs) {
+		if (!filesystem::exists(mSourceFile))
+			throw runtime_error(mSourceFile.string() + " does not exist");
+	}
 
+	inline const filesystem::path& sourceFile() const { return mSourceFile; }
+	inline const string& entryPoint() const { return mEntryPoint; }
+	inline const string& profile() const { return mShaderProfile; }
+	inline const vector<string>& compileArgs() const { return mCompileArgs; }
+
+private:
+	filesystem::path mSourceFile;
+	string mEntryPoint;
+	string mShaderProfile;
+	vector<string> mCompileArgs;
+};
+
+struct Shader : Device::Resource {
+public:
 	struct DescriptorBinding {
 		uint32_t mSet;
 		uint32_t mBinding;
 		vk::DescriptorType mDescriptorType;
-		vector<DefineValue> mArraySize;
+		vector<uint32_t> mArraySize;
 		uint32_t mInputAttachmentIndex;
 	};
 	struct PushConstant {
 		uint32_t mOffset;
 		uint32_t mTypeSize;
 		uint32_t mArrayStride;
-		vector<DefineValue> mArraySize; // uint32_t for literal, string for specialization constant
+		vector<uint32_t> mArraySize; // uint32_t for literal, string for specialization constant
 	};
 	struct Variable {
 		uint32_t mLocation;
@@ -36,37 +49,28 @@ public:
 		uint32_t mSemanticIndex;
 	};
 
-	Shader(Device& device, const filesystem::path& filepath, const string& entrypoint, const vector<string>& compile_args = {}, const unordered_map<string, DefineValue>& defines = {}, const string& profile = "sm_6_6");
+	Shader(Device& device, const shared_ptr<ShaderSource>& source, const unordered_map<string, string>& defines = {});
+	Shader(Shader&&) = default;
+	Shader& operator=(Shader&&) = default;
 
-	// lazily compiles spirv for the given defines
-	const vk::raii::ShaderModule& get(const unordered_map<string, DefineValue>& defines = {});
-
+	inline const shared_ptr<ShaderSource>& source() const { return mSource; }
 	inline const vk::ShaderStageFlagBits& stage() const { return mStage; }
-	inline const string& entryPoint() const { return mEntryPoint; }
-	inline const auto& specializationConstants() const { return mSpecializationConstants; }
-	inline const auto& descriptors() const { return mDescriptorMap; }
-	inline const auto& pushConstants() const { return mPushConstants; }
-	inline const auto& inputVariables() const { return mInputVariables; }
-	inline const auto& outputVariables() const { return mOutputVariables; }
+	inline const vk::raii::ShaderModule& module() const { return mModule; }
+	inline const unordered_map<string, DescriptorBinding>& descriptorMap() const { return mDescriptorMap; }
+	inline const unordered_map<string, PushConstant>& pushConstants() const { return mPushConstants; }
+	inline const unordered_map<string, Variable>& inputVariables() const { return mInputVariables; }
+	inline const unordered_map<string, Variable>& outputVariables() const { return mOutputVariables; }
 	inline const vk::Extent3D& workgroupSize() const { return mWorkgroupSize; }
 
 private:
-	filesystem::path mShaderFile;
-	unordered_map<string, vk::raii::ShaderModule> mShaderModules;
+	shared_ptr<ShaderSource> mSource;
 	vk::ShaderStageFlagBits mStage;
-	string mEntryPoint;
-	string mShaderProfile;
-	vector<string> mCompileArgs;
-
+	vk::raii::ShaderModule mModule;
 	unordered_map<string, DescriptorBinding> mDescriptorMap;
-	unordered_map<string, pair<uint32_t/*id*/,uint32_t/*default value*/>> mSpecializationConstants;
 	unordered_map<string, PushConstant> mPushConstants;
 	unordered_map<string, Variable> mInputVariables;
 	unordered_map<string, Variable> mOutputVariables;
 	vk::Extent3D mWorkgroupSize;
-
-	static string getKey(const unordered_map<string, DefineValue>& defines);
-	vector<uint32_t> compile_reflect(const unordered_map<string, DefineValue>& defines);
 };
 
 }

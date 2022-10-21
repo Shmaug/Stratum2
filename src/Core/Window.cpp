@@ -74,6 +74,15 @@ tuple<vk::raii::PhysicalDevice, uint32_t> Window::findPhysicalDevice() const {
 	return tuple<vk::raii::PhysicalDevice, uint32_t>( vk::raii::PhysicalDevice(nullptr), uint32_t(-1) );
 }
 
+vector<uint32_t> Window::queueFamilies(const vk::raii::PhysicalDevice& physicalDevice) const {
+	vector<uint32_t> families;
+	const auto queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
+	for (uint32_t i = 0; i < queueFamilyProperties.size(); i++)
+		if (glfwGetPhysicalDevicePresentationSupport(**mInstance, *physicalDevice, i))
+			families.emplace_back(i);
+	return families;
+}
+
 bool Window::isOpen() const {
 	return !glfwWindowShouldClose(mWindow);
 }

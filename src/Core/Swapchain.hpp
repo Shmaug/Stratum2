@@ -17,6 +17,7 @@ public:
 	inline const vk::raii::SwapchainKHR& operator*() const { return mSwapchain; }
 	inline const vk::raii::SwapchainKHR* operator->() const { return &mSwapchain; }
 
+	inline vk::Extent2D extent() const { return mExtent; }
 	inline vk::SurfaceFormatKHR format() const { return mSurfaceFormat; }
 	inline vk::PresentModeKHR presentMode() const { return mPresentMode; }
 	inline const shared_ptr<vk::raii::Semaphore>& imageAvailableSemaphore() const { return mImageAvailableSemaphores[mImageAvailableSemaphoreIndex]; }

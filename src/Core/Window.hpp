@@ -63,6 +63,7 @@ public:
 	inline vk::raii::SurfaceKHR& surface() { return mSurface; }
 	inline vk::SurfaceFormatKHR surfaceFormat() const { return mSurfaceFormat; }
 	tuple<vk::raii::PhysicalDevice, uint32_t> findPhysicalDevice() const;
+	vector<uint32_t> queueFamilies(const vk::raii::PhysicalDevice& physicalDevice) const;
 
 	bool isOpen() const;
 

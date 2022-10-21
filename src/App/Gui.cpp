@@ -10,19 +10,21 @@
 
 namespace tinyvkpt {
 
-Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily) : mRenderPass(nullptr) {
+Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily, const vk::ImageLayout srcLayout, const vk::ImageLayout dstLayout, const bool clear)
+	: mRenderPass(nullptr), mQueueFamily(queueFamily, mDstLayout(dstLayout)) {
+
 	// create renderpass
 	vk::AttachmentReference attachmentReference(0, vk::ImageLayout::eColorAttachmentOptimal);
 	vk::SubpassDescription subpass({}, vk::PipelineBindPoint::eGraphics, {}, attachmentReference, {}, {}, {});
 	vk::AttachmentDescription attachment({},
 		swapchain.format().format,
 		vk::SampleCountFlagBits::e1,
-		vk::AttachmentLoadOp::eClear,
+		clear ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad,
 		vk::AttachmentStoreOp::eStore,
 		vk::AttachmentLoadOp::eDontCare,
 		vk::AttachmentStoreOp::eDontCare,
-		vk::ImageLayout::eUndefined,
-		vk::ImageLayout::ePresentSrcKHR );
+		srcLayout,
+		dstLayout );
 	mRenderPass = vk::raii::RenderPass(*swapchain.mDevice, vk::RenderPassCreateInfo({}, attachment, subpass, {}));
 
 	ImGui::CreateContext();
@@ -37,7 +39,7 @@ Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily
 	init_info.Instance = **swapchain.mDevice.mInstance;
 	init_info.PhysicalDevice = *swapchain.mDevice.physical();
 	init_info.Device = **swapchain.mDevice;
-	init_info.QueueFamily = queueFamily;
+	init_info.QueueFamily = mQueueFamily;
 	init_info.Queue = *queue;
 	init_info.PipelineCache = *swapchain.mDevice.pipelineCache();
 	init_info.DescriptorPool = *swapchain.mDevice.descriptorPool();
@@ -76,7 +78,7 @@ void Gui::newFrame() {
 	ImGui::NewFrame();
 }
 
-void Gui::render(CommandBuffer& commandBuffer, Image& backBuffer) {
+void Gui::render(CommandBuffer& commandBuffer, const Image::View& backBuffer, const vk::ClearValue& clearValue) {
 	ImGui::Render();
 	ImDrawData* drawData = ImGui::GetDrawData();
 	if (drawData->DisplaySize.x <= 0.0f || drawData->DisplaySize.y <= 0.0f) return;
@@ -85,16 +87,14 @@ void Gui::render(CommandBuffer& commandBuffer, Image& backBuffer) {
 
 	// create framebuffer
 
-	auto it = mFramebuffers.find(**backBuffer);
+	auto it = mFramebuffers.find(**backBuffer.image());
 	if (it == mFramebuffers.end()) {
-		const vk::ImageView backBufferView = backBuffer.view(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
-		vk::raii::Framebuffer fb(*commandBuffer.mDevice, vk::FramebufferCreateInfo({}, *mRenderPass, backBufferView, extent.width, extent.height, 1));
-		it = mFramebuffers.emplace(**backBuffer, move(fb)).first;
+		vk::raii::Framebuffer fb(*commandBuffer.mDevice, vk::FramebufferCreateInfo({}, *mRenderPass, *backBuffer, extent.width, extent.height, 1));
+		it = mFramebuffers.emplace(**backBuffer.image(), move(fb)).first;
 	}
 
 	// render gui
 
-	vk::ClearValue clearValue;
 	commandBuffer->beginRenderPass(
 		vk::RenderPassBeginInfo(*mRenderPass, *it->second, vk::Rect2D({0,0}, extent), clearValue),
 		vk::SubpassContents::eInline);
@@ -104,6 +104,7 @@ void Gui::render(CommandBuffer& commandBuffer, Image& backBuffer) {
 
 	// Submit command buffer
 	commandBuffer->endRenderPass();
+	backBuffer.updateState(mDstLayout, vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::AccessFlagBits::eColorAttachmentRead);
 }
 
 }

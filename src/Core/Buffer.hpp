@@ -8,19 +8,21 @@ namespace tinyvkpt {
 
 class Buffer : public Device::Resource {
 public:
-	Buffer(Device& device, const string& name, const vk::DeviceSize size, const vk::BufferUsageFlags usage, const VmaMemoryUsage memoryUsage = VMA_MEMORY_USAGE_GPU_ONLY, const vk::SharingMode sharingMode = vk::SharingMode::eExclusive);
+	Buffer(Device& device, const string& name, const vk::DeviceSize size, const vk::BufferUsageFlags usage, const vk::MemoryPropertyFlags memoryFlags = vk::MemoryPropertyFlagBits::eDeviceLocal, const vk::SharingMode sharingMode = vk::SharingMode::eExclusive);
 
 	inline vk::raii::Buffer& operator*() { return mBuffer; }
 	inline vk::raii::Buffer* operator->() { return &mBuffer; }
 	inline const vk::raii::Buffer& operator*() const { return mBuffer; }
 	inline const vk::raii::Buffer* operator->() const { return &mBuffer; }
 
+	inline operator bool() const { return *mBuffer; }
+
 	inline void* data() const {
 		return nullptr; // TODO: ptr to mapped data from allocation
 	}
 	inline vk::DeviceSize size() const { return mSize; }
 	inline vk::BufferUsageFlags usage() const { return mUsage; }
-	inline VmaMemoryUsage memoryUsage() const { return mMemoryUsage; }
+	inline vk::MemoryPropertyFlags memoryUsage() const { return mMemoryFlags; }
 	inline vk::SharingMode sharingMode() const { return mSharingMode; }
 	inline vk::DeviceSize deviceAddress() const { return mDevice->getBufferAddress(*mBuffer); }
 
@@ -123,7 +125,7 @@ private:
 	vk::raii::Buffer mBuffer;
 	vk::DeviceSize mSize;
 	vk::BufferUsageFlags mUsage;
-	VmaMemoryUsage mMemoryUsage;
+	vk::MemoryPropertyFlags mMemoryFlags;
 	vk::SharingMode mSharingMode;
 };
 

@@ -1,5 +1,5 @@
-#include "bsdf.hlsli"
-#include "../microfacet.h"
+#include "../common/bsdf.hlsli"
+#include "../common/microfacet.hlsli"
 
 #define gMinRoughness 1e-4
 

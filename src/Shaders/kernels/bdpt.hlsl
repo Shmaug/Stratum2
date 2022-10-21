@@ -1,14 +1,3 @@
-#if 0
-#pragma compile slangc -capability GL_EXT_ray_tracing -profile sm_6_6 -lang slang -entry sample_visibility
-#pragma compile slangc -capability GL_EXT_ray_tracing -profile sm_6_6 -lang slang -entry sample_photons
-#pragma compile slangc -capability GL_EXT_ray_tracing -profile sm_6_6 -lang slang -entry trace_shadows
-#pragma compile slangc -capability GL_EXT_ray_tracing -profile sm_6_6 -lang slang -entry connect
-#pragma compile slangc -profile sm_6_6 -lang slang -entry presample_lights
-#pragma compile slangc -profile sm_6_6 -lang slang -entry add_light_trace
-#pragma compile slangc -profile sm_6_6 -lang slang -entry hashgrid_compute_indices
-#pragma compile slangc -profile sm_6_6 -lang slang -entry hashgrid_swizzle
-#endif
-
 #define GROUPSIZE_X 8
 #define GROUPSIZE_Y 4
 

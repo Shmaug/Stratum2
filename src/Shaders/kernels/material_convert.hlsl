@@ -1,10 +1,3 @@
-#if 0
-#pragma compile slangc -profile sm_6_6 -lang slang -entry alpha_to_roughness
-#pragma compile slangc -profile sm_6_6 -lang slang -entry shininess_to_roughness
-#pragma compile slangc -profile sm_6_6 -lang slang -entry from_gltf_pbr
-#pragma compile slangc -profile sm_6_6 -lang slang -entry from_diffuse_specular
-#endif
-
 #include "../compat/common.h"
 #include "../compat/disney_data.h"
 

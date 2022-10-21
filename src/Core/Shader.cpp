@@ -7,44 +7,61 @@
 
 namespace tinyvkpt {
 
-vector<uint32_t> Shader::compile_reflect(const unordered_map<string, DefineValue>& defines) {
+Shader::Shader(Device& device, const shared_ptr<ShaderSource>& source, const unordered_map<string, string>& defines)
+	: Device::Resource(device, source->sourceFile().stem().string() + "_" + source->entryPoint() + "/Specialization"), mSource(source), mModule(nullptr) {
+
 	SlangSession* session = spCreateSession();
 	SlangCompileRequest* request = spCreateCompileRequest(session);
 
-	// process mCompileArgs
+	// process compile args
 
 	vector<const char*> args;
-	for (const string& arg : mCompileArgs) args.emplace_back(arg.c_str());
+	for (const string& arg : mSource->compileArgs()) args.emplace_back(arg.c_str());
 	if (SLANG_FAILED(spProcessCommandLineArguments(request, args.data(), args.size())))
-		cout << "Failed to process compile arguments" << endl;
+		cerr << "Warning: Failed to process compile arguments while compiling " << resourceName() << endl;
 
 	// defines
 
 	int targetIndex = spAddCodeGenTarget(request, SLANG_SPIRV);
 	spAddPreprocessorDefine(request, "__SLANG__", "");
 	spAddPreprocessorDefine(request, "__HLSL__", "");
-	vector<string> uintDefs;
 	for (const auto&[n,d] : defines)
-		if (d.is_number())
-			spAddPreprocessorDefine(request, n.c_str(), uintDefs.emplace_back(to_string(d.get_number())).c_str());
-		else
-			spAddPreprocessorDefine(request, n.c_str(), d.get_string().c_str());
+		spAddPreprocessorDefine(request, n.c_str(), d.c_str());
 
 	// include paths
 
 	for (const string& inc : mDevice.mInstance.findArguments("shaderInclude"))
 		spAddSearchPath(request, inc.c_str());
 	int translationUnitIndex = spAddTranslationUnit(request, SLANG_SOURCE_LANGUAGE_SLANG, "");
-	spAddTranslationUnitSourceFile(request, translationUnitIndex, mShaderFile.string().c_str());
-	int entryPointIndex = spAddEntryPoint(request, translationUnitIndex, mEntryPoint.c_str(), SLANG_STAGE_NONE);
-	spSetTargetProfile(request, targetIndex, spFindProfile(session, mShaderProfile.c_str()));
+	spAddTranslationUnitSourceFile(request, translationUnitIndex, mSource->sourceFile().string().c_str());
+	int entryPointIndex = spAddEntryPoint(request, translationUnitIndex, mSource->entryPoint().c_str(), SLANG_STAGE_NONE);
+	spSetTargetProfile(request, targetIndex, spFindProfile(session, mSource->profile().c_str()));
 	spSetTargetFloatingPointMode(request, targetIndex, SLANG_FLOATING_POINT_MODE_FAST);
 
 	// compile
 
 	SlangResult r = spCompile(request);
 	cout << spGetDiagnosticOutput(request);
-	if (SLANG_FAILED(r)) throw runtime_error(spGetDiagnosticOutput(request));
+	if (SLANG_FAILED(r)) {
+		const char* msg = spGetDiagnosticOutput(request);
+		cerr << "Error: Failed to compile " << resourceName() << ": " << msg << endl;
+		throw runtime_error(msg);
+	}
+
+	// get spirv
+	slang::IBlob* blob;
+	r = spGetEntryPointCodeBlob(request, entryPointIndex, targetIndex, &blob);
+	if (SLANG_FAILED(r)) {
+		const string msg = to_string(r);
+		cerr << "Error: Failed to get code blob for " << resourceName() << ": " << msg << endl;
+		throw runtime_error(msg);
+	}
+	vector<uint32_t> spirv(blob->getBufferSize()/sizeof(uint32_t));
+	memcpy(spirv.data(), blob->getBufferPointer(), blob->getBufferSize());
+
+	mModule = vk::raii::ShaderModule(*mDevice, vk::ShaderModuleCreateInfo({}, spirv));
+
+	// reflection
 
 	slang::ShaderReflection* shaderReflection = slang::ShaderReflection::get(request);
 
@@ -172,7 +189,7 @@ vector<uint32_t> Shader::compile_reflect(const unordered_map<string, DefineValue
 		slang::TypeReflection* type = parameter->getType();
 		slang::TypeLayoutReflection* typeLayout = parameter->getTypeLayout();
 
-		vector<DefineValue> arraySize;
+		vector<uint32_t> arraySize;
 		if (typeLayout->getKind() == slang::TypeReflection::Kind::Array)
 			arraySize.emplace_back((uint32_t)typeLayout->getTotalArrayElementCount());
 
@@ -189,12 +206,13 @@ vector<uint32_t> Shader::compile_reflect(const unordered_map<string, DefineValue
 	};
 
 	for (uint32_t parameter_index = 0; parameter_index < shaderReflection->getParameterCount(); parameter_index++) {
-		slang::VariableLayoutReflection* parameter = shaderReflection->getParameterByIndex(parameter_index);
+		slang::VariableLayoutReflection* parameter	 = shaderReflection->getParameterByIndex(parameter_index);
 		slang::ParameterCategory category = parameter->getCategory();
 		slang::TypeReflection* type = parameter->getType();
 		slang::TypeLayoutReflection* typeLayout = parameter->getTypeLayout();
 
 		if (category == slang::ParameterCategory::PushConstantBuffer) {
+
 			// TODO: get offset from slang. currently assumes tightly packed scalar push constants
 			size_t offset = 0;
 			for (uint32_t i = 0; i < type->getElementType()->getFieldCount(); i++) {
@@ -213,12 +231,15 @@ vector<uint32_t> Shader::compile_reflect(const unordered_map<string, DefineValue
 				dst.mTypeSize = scalar_size_map.at((SlangScalarType)fieldType->getScalarType());
 				offset += max<size_t>(fieldType->getTotalArrayElementCount(), 1) * fieldTypeLayout->getStride();
 			}
+
 		} else if (category == slang::ParameterCategory::DescriptorTableSlot) {
+
 			const vk::DescriptorType descriptorType = descriptor_type_map.at((SlangBindingType)typeLayout->getBindingRangeType(0));
-			vector<DefineValue> array_size;
+			vector<uint32_t> arraySize;
 			if (typeLayout->getKind() == slang::TypeReflection::Kind::Array)
-				array_size.emplace_back((uint32_t)typeLayout->getTotalArrayElementCount());
-			mDescriptorMap.emplace(parameter->getName(), DescriptorBinding(parameter->getBindingSpace(), parameter->getBindingIndex(), descriptorType, array_size, 0));
+				arraySize.emplace_back((uint32_t)typeLayout->getTotalArrayElementCount());
+			mDescriptorMap.emplace(parameter->getName(), DescriptorBinding(parameter->getBindingSpace(), parameter->getBindingIndex(), descriptorType, arraySize, 0));
+
 		} else if (category == slang::ParameterCategory::RegisterSpace) {
 			for (uint32_t i = 0; i < type->getElementType()->getFieldCount(); i++)
 				reflectParameter(parameter->getBindingIndex(), parameter->getName(), typeLayout->getElementTypeLayout()->getFieldByIndex(i), 0);
@@ -226,67 +247,10 @@ vector<uint32_t> Shader::compile_reflect(const unordered_map<string, DefineValue
 			cerr << "Warning: Unsupported resource category: " << category_name_map.at((SlangParameterCategory)category) << endl;
 	}
 
-	slang::IBlob* blob;
-	r = spGetEntryPointCodeBlob(request, entryPointIndex, targetIndex, &blob);
-	if (SLANG_FAILED(r)) throw runtime_error(to_string(r));
-
-	vector<uint32_t> spirv(blob->getBufferSize()/sizeof(uint32_t));
-	memcpy(spirv.data(), blob->getBufferPointer(), blob->getBufferSize());
-
 	spDestroyCompileRequest(request);
 	spDestroySession(session);
-
-	return spirv;
 }
 
-Shader::Shader(Device& device, const filesystem::path& filename, const string& entrypoint, const vector<string>& args, const unordered_map<string, Shader::DefineValue>& defines, const string& profile) :
-	Device::Resource(device, filename.stem().string() + "_" + entrypoint), mShaderFile(filename), mEntryPoint(entrypoint), mCompileArgs(args) {
 
-	if (!filesystem::exists(filename)) throw runtime_error(filename.string() + " does not exist");
-
-	// Compile source with slang
-	vector<uint32_t> spv = compile_reflect(defines);
-	cout << "Compiled " << mShaderFile << ": " << mEntryPoint << " (" << spv.size()*sizeof(uint32_t) << " bytes)" << endl;
-
-	mShaderModules.emplace("", vk::raii::ShaderModule(*device, vk::ShaderModuleCreateInfo({}, spv)));
-}
-
-string Shader::getKey(const unordered_map<string, Shader::DefineValue>& defines) {
-	string define_args = "";
-	for (const auto&[n,d] : defines)
-		if (d.is_number())
-			define_args += " -D" + n + "=" + to_string(d.get_number());
-		else
-			define_args += " -D" + n + "=" + d.get_string();
-	return define_args;
-}
-
-const vk::raii::ShaderModule& Shader::get(const unordered_map<string, Shader::DefineValue>& defines) {
-	if (defines.empty())
-		return mShaderModules.at("");
-
-	const string key = getKey(defines);
-	if (auto it = mShaderModules.find(key); it != mShaderModules.end())
-		return it->second;
-
-	const filesystem::path spvpath = (filesystem::temp_directory_path().string() / mShaderFile.stem()).string() + "_" + mEntryPoint + ".spv";
-
-	string compile_cmd = "..\\..\\extern\\slang\\bin\\windows-x64\\release\\slangc.exe " + mShaderFile.string() + " -entry " + mEntryPoint;
-	compile_cmd += " -profile " + mShaderProfile + " -lang slang -target spirv -o " + spvpath.string();
-	for (const string& arg : mCompileArgs)
-		compile_cmd += " " + arg;
-	compile_cmd += " -D__HLSL__ -D__SLANG__";
-	for (const auto&[n,d] : defines)
-		if (d.is_number())
-			compile_cmd += " -D" + n + "=" + to_string(d.get_number());
-		else
-			compile_cmd += " -D" + n + "=" + d.get_string();
-	if (system(compile_cmd.c_str()) != EXIT_SUCCESS)
-		throw runtime_error("Error: Shader compilation failed");
-	cout << "Compiled " << mShaderFile << ": " << mEntryPoint << key << endl;
-
-	const vector<uint32_t> spv = readFile<vector<uint32_t>>(spvpath);
-	return mShaderModules.emplace(key, vk::raii::ShaderModule(*mDevice, vk::ShaderModuleCreateInfo({}, spv))).first->second;
-}
 
 }
