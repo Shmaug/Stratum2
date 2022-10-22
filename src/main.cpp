@@ -16,7 +16,7 @@
 using namespace tinyvkpt;
 
 
-// TODO: push constant reflection is wrong, synchronization is wrong
+// TODO: push constant reflection is wrong
 
 struct App {
 	Swapchain& mSwapchain;
