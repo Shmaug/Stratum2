@@ -11,21 +11,20 @@ namespace tinyvkpt {
 
 class Device {
 public:
-	Instance& mInstance;
-
 	class Resource {
 	public:
 		Device& mDevice;
 		inline Resource(Device& device, const string& name) : mDevice(device), mName(name) {}
 		inline string resourceName() const { return mName; }
-		inline bool inFlight() const { return !mInFlight.empty(); }
+		inline bool inFlight() const { return mLastFrameUsed >  mDevice.lastFrameDone(); }
+		inline void markUsed() { mLastFrameUsed = mDevice.frameIndex(); }
 	private:
 		const string mName;
-
-		friend class CommandBufferResourceTracker;
-		// list of CommandBuffers currently using the resource. Automatically maintained by CommandBufferResourceTracker
-		unordered_set<CommandBuffer*> mInFlight;
+		size_t mLastFrameUsed;
+		friend class Device;
 	};
+
+	Instance& mInstance;
 
 	Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice);
 	~Device();
@@ -57,6 +56,9 @@ public:
 	vk::raii::CommandPool& commandPool(const uint32_t queueFamily);
 	vk::raii::DescriptorPool& descriptorPool();
 
+	inline uint32_t frameIndex() const { return mFrameIndex; }
+	inline uint32_t lastFrameDone() const { return mLastFrameDone; }
+
 	shared_ptr<CommandBuffer> getCommandBuffer(const uint32_t queueFamily);
 	void submit(
 		const vk::raii::Queue queue,
@@ -64,7 +66,7 @@ public:
 		const vk::ArrayProxy<pair<shared_ptr<vk::raii::Semaphore>, vk::PipelineStageFlags>>& waitSemaphores = {},
 		const vk::ArrayProxy<shared_ptr<vk::raii::Semaphore>>& signalSemaphores = {});
 
-	void checkCommandBuffers();
+	void updateFrame();
 
 private:
 	vk::raii::Device mDevice;
@@ -76,6 +78,9 @@ private:
 	unordered_map<uint32_t, vector<shared_ptr<CommandBuffer>>> mCommandBuffersInFlight;
 	unordered_map<uint32_t, stack<shared_ptr<CommandBuffer>>> mCommandBufferPool;
 	VmaAllocator mAllocator;
+
+	size_t mFrameIndex;
+	size_t mLastFrameDone;
 
 	vk::PhysicalDeviceFeatures mFeatures;
 	vk::StructureChain<

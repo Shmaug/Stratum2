@@ -15,18 +15,36 @@
 
 using namespace tinyvkpt;
 
+
+// TODO: push constant reflection is wrong, synchronization is wrong
+
 struct App {
 	Swapchain& mSwapchain;
 	uint32_t mPresentQueueFamily;
 	vk::raii::Queue mPresentQueue;
-	Gui& mGui;
+	Gui mGui;
 
 	int mProfilerHistoryCount = 3;
 
-	ResourcePool<Image> mImages;
+	float3 mBias = float3::Zero();
+	float mExposure = 0;
+
+	ComputePipelineContext mTestPipeline;
+
+	inline App(Swapchain& swapchain, const uint32_t presentQueueFamily) :
+		mSwapchain(swapchain),
+		mPresentQueueFamily(presentQueueFamily),
+		mPresentQueue(*swapchain.mDevice, presentQueueFamily, 0),
+		mGui(mSwapchain, mPresentQueue, presentQueueFamily, vk::ImageLayout::ePresentSrcKHR, false) {
+
+		shared_ptr<ShaderSource> shaderSource = make_shared<ShaderSource>("../../src/Shaders/kernels/test.hlsl");
+		mTestPipeline = ComputePipelineContext(make_shared<ComputePipeline>("test", make_shared<Shader>(swapchain.mDevice, shaderSource), ComputePipeline::Metadata()));
+	}
 
 	void update() {
-		if (ImGui::Begin("Profiler")) {
+		mGui.newFrame();
+
+		if (ImGui::Begin("vkpt")) {
 			Profiler::frameTimesGui();
 
 			ImGui::SliderInt("Count", &mProfilerHistoryCount, 1, 256);
@@ -34,6 +52,12 @@ struct App {
 			if (ImGui::Button(Profiler::hasHistory() ? "Hide timeline" : "Show timeline"))
 				Profiler::resetHistory(Profiler::hasHistory() ? 0 : mProfilerHistoryCount);
 			ImGui::PopID();
+
+			ImGui::DragFloat3("Bias", mBias.data());
+			ImGui::DragFloat("Exposure", &mExposure);
+
+			ImGui::Text("%u Back buffers", mSwapchain.backBufferCount());
+			ImGui::Text("%u Pipeline resources", mTestPipeline.resourceCount());
 		}
 		ImGui::End();
 
@@ -48,63 +72,45 @@ struct App {
 	shared_ptr<vk::raii::Semaphore> render() {
 		Device& device = mSwapchain.mDevice;
 
-		Image::Metadata imageInfo = {};
-		imageInfo.mExtent = vk::Extent3D(1024,1024,1);
-		imageInfo.mFormat = vk::Format::eR8G8B8A8Unorm;
-		shared_ptr<Image> image = mImages.get();
-		if (!image) {
-			image = make_shared<Image>(device, "testImage", imageInfo);
-			mImages.emplace(image);
-		}
-
-
 		shared_ptr<CommandBuffer> commandBufferPtr = device.getCommandBuffer(mPresentQueueFamily);
 		CommandBuffer& commandBuffer = *commandBufferPtr;
 		commandBuffer->begin(vk::CommandBufferBeginInfo());
 
+		Image::View renderTarget(mSwapchain.backBuffer(), vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
 
-		commandBuffer.trackResource(image);
-		image->barrier(commandBuffer, vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1), vk::ImageLayout::eTransferDstOptimal, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferWrite);
-		commandBuffer->clearColorImage(**image, vk::ImageLayout::eTransferDstOptimal, vk::ClearColorValue(array<float,4>{1.f,1.f,0.f,1.f}), vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
+		mTestPipeline(commandBuffer, mTestPipeline.dispatchDimensions(renderTarget.extent()),
+			Descriptors{
+				{ { "gParams.mOutput", 0 }, DescriptorValue{ ImageDescriptor{ renderTarget, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} } } }
+			},
+			PushConstants{
+				{ "mBias"    , PushConstantValue(mBias) },
+				{ "mExposure", PushConstantValue(mExposure) }
+			} );
 
-		mSwapchain.backBuffer()->barrier(commandBuffer, vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1), vk::ImageLayout::eTransferDstOptimal, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferWrite);
-		image->barrier(commandBuffer, vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1), vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferRead);
-		commandBuffer->blitImage(
-			**image, vk::ImageLayout::eTransferSrcOptimal,
-			**mSwapchain.backBuffer(), vk::ImageLayout::eTransferDstOptimal,
-			vk::ImageBlit(
-				vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, 1), { vk::Offset3D(0,0,0), vk::Offset3D(image->extent().width, image->extent().height, 1) },
-				vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, 1), { vk::Offset3D(0,0,0), vk::Offset3D(mSwapchain.backBuffer()->extent().width, mSwapchain.backBuffer()->extent().height, 1) } ),
-			vk::Filter::eLinear);
-
-
-		mGui.render(commandBuffer, Image::View(mSwapchain.backBuffer(), vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1)), vk::ClearColorValue(array<float,4>{0.f,0.f,0.f,1.f}));
+		mGui.render(commandBuffer, renderTarget, vk::ClearColorValue(array<float,4>{0.f,0.f,0.f,1.f}));
 
 		commandBuffer->end();
 
-		shared_ptr<vk::raii::Semaphore> semaphore = make_shared<vk::raii::Semaphore>(*device, vk::SemaphoreCreateInfo());
-		commandBuffer.trackVulkanResource(semaphore);
-
-		device.submit(mPresentQueue, commandBufferPtr, {}, semaphore);
-
-		return semaphore;
+		pair<shared_ptr<vk::raii::Semaphore>, vk::PipelineStageFlags> waitSemaphore { mSwapchain.imageAvailableSemaphore(), vk::PipelineStageFlagBits::eComputeShader };
+		shared_ptr<vk::raii::Semaphore> signalSemaphore = make_shared<vk::raii::Semaphore>(*device, vk::SemaphoreCreateInfo());
+		commandBuffer.trackVulkanResource(signalSemaphore);
+		device.submit(mPresentQueue, commandBufferPtr, waitSemaphore, signalSemaphore);
+		return signalSemaphore;
 	}
 
 	void run() {
-		shared_ptr<ShaderSource> shaderSource = make_shared<ShaderSource>("../../src/Shaders/kernels/test.hlsl", "main");
-		//ComputePipelineContext pipelineContext(make_shared<ComputePipeline>("test", make_shared<Shader>(mDevice, shaderSource), ComputePipeline::Metadata());
-
 		while (mSwapchain.mWindow.isOpen()) {
 			Profiler::beginFrame();
 
-			mSwapchain.mDevice.checkCommandBuffers();
+			mSwapchain.mDevice.updateFrame();
 
-			if (mSwapchain.dirty())
-				mSwapchain.create();
+			bool valid = true;
+			if (mSwapchain.dirty()) {
+				mSwapchain.mDevice->waitIdle();
+				valid = mSwapchain.create();
+			}
 
-			mGui.newFrame();
-
-			if (mSwapchain.acquireImage()) {
+			if (valid && mSwapchain.acquireImage()) {
 				update();
 				auto semaphore = render();
 				mSwapchain.present(mPresentQueue, semaphore);
@@ -124,16 +130,13 @@ int main(int argc, char** argv) {
 		Window window(instance, "tinyvkpt", { 1600, 900 });
 		auto[physicalDevice, presentQueueFamily] = window.findPhysicalDevice();
 		Device device(instance, physicalDevice);
-		Swapchain swapchain(device, "tinyvkpt", window);
+		Swapchain swapchain(device, "tinyvkpt/Swapchain", window, 2, vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eColorAttachment);
 
-		vk::raii::Queue presentQueue(*device, presentQueueFamily, 0);
-		Gui gui(swapchain, presentQueue, presentQueueFamily, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::ePresentSrcKHR, false);
-
-		App app(swapchain, presentQueueFamily, presentQueue, gui);
+		App app(swapchain, presentQueueFamily);
 		app.run();
 
 		device->waitIdle();
-		device.checkCommandBuffers();
+		device.updateFrame();
 	}
 	glfwTerminate();
 

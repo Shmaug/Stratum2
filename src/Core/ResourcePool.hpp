@@ -11,12 +11,18 @@ private:
 	list<shared_ptr<T>> mInFlight;
 public:
 	inline void clear() {
+		mInFlight.clear();
 		mAvailable.clear();
+	}
+
+	inline size_t size() const {
+		return mAvailable.size() + mInFlight.size();
 	}
 
 	inline shared_ptr<T> get() {
 		shared_ptr<T> ret;
 
+		// return available resource, if any
 		if (!mAvailable.empty()) {
 			ret = mAvailable.top();
 			mAvailable.pop();
@@ -24,6 +30,7 @@ public:
 		}
 
 		for (auto it = mInFlight.begin(); it != mInFlight.end(); ) {
+			// skip in-flight resources
 			if ((*it)->inFlight()) {
 				it++;
 				continue;
@@ -31,7 +38,7 @@ public:
 
 			// return the first available resource, store other available resources in mAvailable
 			if (!ret)
-				ret = *it;
+				ret = *it; // returned resource stays in-flight
 			else
 				mAvailable.push(*it);
 			it = mInFlight.erase(it);
@@ -40,7 +47,7 @@ public:
 		return ret;
 	}
 
-	inline shared_ptr<T> emplace(const shared_ptr<T>& v) {
+	inline shared_ptr<T>& emplace(const shared_ptr<T>& v) {
 		return mInFlight.emplace_back(v);
 	}
 };

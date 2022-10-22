@@ -91,13 +91,12 @@ elseif(WIN32)
     target_compile_options(${TARGET_NAME} PUBLIC /bigobj /MP)
 
 	# Link slang
-    target_compile_definitions(${TARGET_NAME} PUBLIC SLANG_STATIC)
     target_link_libraries(${TARGET_NAME} PUBLIC "${SLANG_ROOT}/bin/windows-x64/release/slang.lib")
 
 	# Copy slang DLLs to output directory
-	configure_file("${SLANG_ROOT}/bin/windows-x64/release/slang.dll" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/slang.dll" COPYONLY)
-	configure_file("${SLANG_ROOT}/bin/windows-x64/release/slang-glslang.dll" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/slang-glslang.dll" COPYONLY)
 	configure_file("${SLANG_ROOT}/bin/windows-x64/release/gfx.dll" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/gfx.dll" COPYONLY)
+	configure_file("${SLANG_ROOT}/bin/windows-x64/release/slang-glslang.dll" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/slang-glslang.dll" COPYONLY)
+	configure_file("${SLANG_ROOT}/bin/windows-x64/release/slang.dll" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/slang.dll" COPYONLY)
 endif()
 
 if (assimp_FOUND)

@@ -32,7 +32,7 @@ public:
 	inline const shared_ptr<Image>& backBuffer(uint32_t i) const { return mImages[i]; }
 	inline bool dirty() const { return mDirty; }
 
-	void create();
+	bool create();
 
 	bool acquireImage();
 	// Waits on waitSemaphores

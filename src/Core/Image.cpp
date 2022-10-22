@@ -104,7 +104,7 @@ void Image::barrier(CommandBuffer& commandBuffer, const vk::ImageSubresourceRang
 				b.emplace_back(vk::ImageMemoryBarrier(
 					srcAccessMask, dstAccessMask,
 					oldLayout, newLayout,
-					dstQueueFamilyIndex == VK_QUEUE_FAMILY_IGNORED ? VK_QUEUE_FAMILY_IGNORED : srcQueueFamilyIndex, dstQueueFamilyIndex,
+					dstQueueFamilyIndex == VK_QUEUE_FAMILY_IGNORED ? VK_QUEUE_FAMILY_IGNORED : srcQueueFamilyIndex, srcQueueFamilyIndex == VK_QUEUE_FAMILY_IGNORED ? VK_QUEUE_FAMILY_IGNORED : dstQueueFamilyIndex,
 					mImage, vk::ImageSubresourceRange(subresource.aspectMask, level, 1, arrayLayer, 1) ));
 
 				oldState = newState;

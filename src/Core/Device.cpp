@@ -8,7 +8,7 @@
 
 namespace tinyvkpt {
 
-Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) : mInstance(instance), mPhysicalDevice(physicalDevice), mDevice(nullptr), mPipelineCache(nullptr), mDescriptorPool(nullptr) {
+Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) : mInstance(instance), mPhysicalDevice(physicalDevice), mDevice(nullptr), mPipelineCache(nullptr), mDescriptorPool(nullptr), mFrameIndex(0), mLastFrameDone(0) {
 	unordered_set<string> deviceExtensions;
 	for (const string& s : mInstance.findArguments("deviceExtension"))
 		deviceExtensions.emplace(s);
@@ -147,14 +147,15 @@ vk::raii::DescriptorPool& Device::descriptorPool() {
 
 shared_ptr<CommandBuffer> Device::getCommandBuffer(const uint32_t queueFamily) {
 	auto& pool = mCommandBufferPool[queueFamily];
+	shared_ptr<CommandBuffer> cb;
 	if (pool.empty())
-		return make_shared<CommandBuffer>(*this, "CommandBuffer", queueFamily);
+		cb = make_shared<CommandBuffer>(*this, "CommandBuffer", queueFamily);
 	else {
-		const shared_ptr<CommandBuffer> cb = pool.top();
+		cb = pool.top();
 		pool.pop();
 		cb->mResources.clear();
-		return cb;
 	}
+	return cb;
 }
 
 void Device::submit(const vk::raii::Queue queue, const vk::ArrayProxy<shared_ptr<CommandBuffer>>& commandBuffers, const vk::ArrayProxy<pair<shared_ptr<vk::raii::Semaphore>, vk::PipelineStageFlags>>& waitSemaphores, const vk::ArrayProxy<shared_ptr<vk::raii::Semaphore>>& signalSemaphores) {
@@ -163,9 +164,11 @@ void Device::submit(const vk::raii::Queue queue, const vk::ArrayProxy<shared_ptr
 	for (auto cb : commandBuffers)
 		if (cb->fence()) {
 			fence = cb->fence();
+			mDevice.resetFences(**fence);
 			break;
 		}
-	if (!fence) fence = make_shared<vk::raii::Fence>(mDevice, vk::FenceCreateInfo());
+	if (!fence)
+		fence = make_shared<vk::raii::Fence>(mDevice, vk::FenceCreateInfo());
 
 	// assign fence, track in-flight commandbuffers
 	vector<vk::CommandBuffer> vkbufs;
@@ -173,6 +176,7 @@ void Device::submit(const vk::raii::Queue queue, const vk::ArrayProxy<shared_ptr
 		cb->mFence = fence;
 		vkbufs.emplace_back(***cb);
 		mCommandBuffersInFlight[cb->queueFamily()].emplace_back(cb);
+		cb->markUsed();
 	}
 
 	vector<vk::Semaphore> vkWaitSemaphores(waitSemaphores.size());
@@ -184,10 +188,13 @@ void Device::submit(const vk::raii::Queue queue, const vk::ArrayProxy<shared_ptr
 	queue.submit(vk::SubmitInfo(vkWaitSemaphores, waitStages, vkbufs, vkSignalSemaphores), **fence);
 }
 
-void Device::checkCommandBuffers() {
+void Device::updateFrame() {
+	mFrameIndex++;
+	// move completed commandbuffers to pool, update mLastFrameDone
 	for (auto&[queueFamily, pool] : mCommandBuffersInFlight) {
 		for (auto it = pool.begin(); it != pool.end();) {
 			if ((*it)->fence()->getStatus() == vk::Result::eSuccess) {
+				mLastFrameDone = max((*it)->mLastFrameUsed, mLastFrameDone);
 				(*it)->reset();
 				mCommandBufferPool[queueFamily].push(*it);
 				it = pool.erase(it);

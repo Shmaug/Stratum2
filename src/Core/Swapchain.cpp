@@ -27,16 +27,16 @@ Swapchain::Swapchain(Device& device, const string& name, Window& window, const u
 	create();
 }
 
-void Swapchain::create() {
+bool Swapchain::create() {
 	ProfilerScope ps("Swapchain::create");
 
 	// get the size of the swapchain
 	const vk::SurfaceCapabilitiesKHR capabilities = mDevice.physical().getSurfaceCapabilitiesKHR(*mWindow.surface());
 	mExtent = capabilities.currentExtent;
 	if (mExtent.width == 0 || mExtent.height == 0 || mExtent.width > mDevice.limits().maxImageDimension2D || mExtent.height > mDevice.limits().maxImageDimension2D)
-		throw runtime_error("Invalid currentExtent");
+		return false;
 
-	vk::raii::SwapchainKHR oldSwapchain(move(mSwapchain));
+ 	vk::raii::SwapchainKHR oldSwapchain(move(mSwapchain));
 
 	vk::SwapchainCreateInfoKHR info = {};
 	info.surface = *mWindow.surface();
@@ -70,6 +70,8 @@ void Swapchain::create() {
 
 	mBackBufferIndex = 0;
 	mImageAvailableSemaphoreIndex = 0;
+	mDirty = false;
+	return true;
 }
 
 bool Swapchain::acquireImage() {
@@ -91,9 +93,8 @@ bool Swapchain::acquireImage() {
 void Swapchain::present(const vk::raii::Queue queue, const vk::ArrayProxy<shared_ptr<vk::raii::Semaphore>>& waitSemaphores) {
 	ProfilerScope ps("Window::present");
 
-	vector<vk::Semaphore> semaphores(waitSemaphores.size() + 1);
+	vector<vk::Semaphore> semaphores(waitSemaphores.size());
 	ranges::transform(waitSemaphores, semaphores.begin(), [](const auto s) { return **s; });
-	semaphores.back() = **imageAvailableSemaphore();
 
 	const vk::Result result = queue.presentKHR(vk::PresentInfoKHR(semaphores, *mSwapchain, mBackBufferIndex));
 	if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eErrorSurfaceLostKHR)

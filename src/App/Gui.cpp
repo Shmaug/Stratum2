@@ -10,7 +10,7 @@
 
 namespace tinyvkpt {
 
-Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily, const vk::ImageLayout srcLayout, const vk::ImageLayout dstLayout, const bool clear)
+Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily, const vk::ImageLayout dstLayout, const bool clear)
 	: mRenderPass(nullptr), mQueueFamily(queueFamily), mDstLayout(dstLayout) {
 
 	// create renderpass
@@ -23,7 +23,7 @@ Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily
 		vk::AttachmentStoreOp::eStore,
 		vk::AttachmentLoadOp::eDontCare,
 		vk::AttachmentStoreOp::eDontCare,
-		srcLayout,
+		vk::ImageLayout::eColorAttachmentOptimal,
 		dstLayout );
 	mRenderPass = vk::raii::RenderPass(*swapchain.mDevice, vk::RenderPassCreateInfo({}, attachment, subpass, {}));
 
@@ -41,11 +41,11 @@ Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily
 	init_info.Device = **swapchain.mDevice;
 	init_info.QueueFamily = mQueueFamily;
 	init_info.Queue = *queue;
-	init_info.PipelineCache = *swapchain.mDevice.pipelineCache();
+	init_info.PipelineCache  = *swapchain.mDevice.pipelineCache();
 	init_info.DescriptorPool = *swapchain.mDevice.descriptorPool();
 	init_info.Subpass = 0;
 	init_info.MinImageCount = swapchain.backBufferCount();
-	init_info.ImageCount = swapchain.backBufferCount();
+	init_info.ImageCount    = swapchain.backBufferCount();
 	init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 	init_info.Allocator = nullptr;
 	//init_info.CheckVkResultFn = check_vk_result;
@@ -67,9 +67,11 @@ Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily
 	ImGui_ImplVulkan_DestroyFontUploadObjects();
 }
 Gui::~Gui() {
-	ImGui_ImplVulkan_Shutdown();
-	ImGui_ImplGlfw_Shutdown();
-	ImGui::DestroyContext();
+	if (*mRenderPass) {
+		ImGui_ImplVulkan_Shutdown();
+		ImGui_ImplGlfw_Shutdown();
+		ImGui::DestroyContext();
+	}
 }
 
 void Gui::newFrame() {
@@ -92,6 +94,8 @@ void Gui::render(CommandBuffer& commandBuffer, const Image::View& backBuffer, co
 		vk::raii::Framebuffer fb(*commandBuffer.mDevice, vk::FramebufferCreateInfo({}, *mRenderPass, *backBuffer, extent.width, extent.height, 1));
 		it = mFramebuffers.emplace(**backBuffer.image(), move(fb)).first;
 	}
+
+	backBuffer.barrier(commandBuffer, vk::ImageLayout::eColorAttachmentOptimal, vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::AccessFlagBits::eColorAttachmentWrite);
 
 	// render gui
 

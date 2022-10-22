@@ -62,7 +62,7 @@ ComputePipeline::ComputePipeline(const string& name, const shared_ptr<Shader>& s
 			if (!p.mArraySize.empty()) {
 				sz = p.mArrayStride;
 				for (const uint32_t v : p.mArraySize)
-				sz *= v;
+					sz *= v;
 			}
 			rangeBegin = std::min(rangeBegin, p.mOffset);
 			rangeEnd   = std::max(rangeEnd  , p.mOffset + sz);

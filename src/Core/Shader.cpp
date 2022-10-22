@@ -10,60 +10,68 @@ namespace tinyvkpt {
 Shader::Shader(Device& device, const shared_ptr<ShaderSource>& source, const unordered_map<string, string>& defines)
 	: Device::Resource(device, source->sourceFile().stem().string() + "_" + source->entryPoint() + "/Specialization"), mSource(source), mModule(nullptr) {
 
-	SlangSession* session = spCreateSession();
-	SlangCompileRequest* request = spCreateCompileRequest(session);
+	slang::IGlobalSession* session;
+	slang::createGlobalSession(&session);
+
+	slang::ICompileRequest* request;
+	session->createCompileRequest(&request);
 
 	// process compile args
 
 	vector<const char*> args;
 	for (const string& arg : mSource->compileArgs()) args.emplace_back(arg.c_str());
-	if (SLANG_FAILED(spProcessCommandLineArguments(request, args.data(), args.size())))
+	if (SLANG_FAILED(request->processCommandLineArguments(args.data(), args.size())))
 		cerr << "Warning: Failed to process compile arguments while compiling " << resourceName() << endl;
 
 	// defines
 
-	int targetIndex = spAddCodeGenTarget(request, SLANG_SPIRV);
-	spAddPreprocessorDefine(request, "__SLANG__", "");
-	spAddPreprocessorDefine(request, "__HLSL__", "");
+	int targetIndex = request->addCodeGenTarget(SLANG_SPIRV);
+	request->addPreprocessorDefine("__SLANG__", "");
+	request->addPreprocessorDefine("__HLSL__", "");
 	for (const auto&[n,d] : defines)
-		spAddPreprocessorDefine(request, n.c_str(), d.c_str());
+		request->addPreprocessorDefine(n.c_str(), d.c_str());
 
 	// include paths
 
 	for (const string& inc : mDevice.mInstance.findArguments("shaderInclude"))
-		spAddSearchPath(request, inc.c_str());
-	int translationUnitIndex = spAddTranslationUnit(request, SLANG_SOURCE_LANGUAGE_SLANG, "");
-	spAddTranslationUnitSourceFile(request, translationUnitIndex, mSource->sourceFile().string().c_str());
-	int entryPointIndex = spAddEntryPoint(request, translationUnitIndex, mSource->entryPoint().c_str(), SLANG_STAGE_NONE);
-	spSetTargetProfile(request, targetIndex, spFindProfile(session, mSource->profile().c_str()));
-	spSetTargetFloatingPointMode(request, targetIndex, SLANG_FLOATING_POINT_MODE_FAST);
+		request->addSearchPath(inc.c_str());
+
+	const int translationUnitIndex = request->addTranslationUnit(SLANG_SOURCE_LANGUAGE_SLANG, nullptr);
+	request->addTranslationUnitSourceFile(translationUnitIndex, mSource->sourceFile().string().c_str());
+
+	const int entryPointIndex = request->addEntryPoint(translationUnitIndex, mSource->entryPoint().c_str(), SLANG_STAGE_NONE);
+	request->setTargetProfile(targetIndex, session->findProfile(mSource->profile().c_str()));
+	request->setTargetFloatingPointMode(targetIndex, SLANG_FLOATING_POINT_MODE_FAST);
 
 	// compile
 
-	SlangResult r = spCompile(request);
-	cout << spGetDiagnosticOutput(request);
-	if (SLANG_FAILED(r)) {
-		const char* msg = spGetDiagnosticOutput(request);
-		cerr << "Error: Failed to compile " << resourceName() << ": " << msg << endl;
+	SlangResult r = request->compile();
+	const char* msg = request->getDiagnosticOutput();
+	cout << "Compiled " << source->sourceFile() << " " << source->entryPoint() << " " << msg << endl;
+	if (SLANG_FAILED(r))
 		throw runtime_error(msg);
-	}
 
 	// get spirv
+
 	slang::IBlob* blob;
-	r = spGetEntryPointCodeBlob(request, entryPointIndex, targetIndex, &blob);
-	if (SLANG_FAILED(r)) {
-		const string msg = to_string(r);
-		cerr << "Error: Failed to get code blob for " << resourceName() << ": " << msg << endl;
-		throw runtime_error(msg);
-	}
+	r = request->getEntryPointCodeBlob(entryPointIndex, targetIndex, &blob);
+	//if (SLANG_FAILED(r)) {
+	//	std::stringstream stream;
+	//	stream << "facility 0x" << std::setfill('0') << std::setw(4) << std::hex << SLANG_GET_RESULT_FACILITY(r);
+	//	stream << ", result 0x" << std::setfill('0') << std::setw(4) << std::hex << SLANG_GET_RESULT_CODE(r);
+	//	const string msg = stream.str();
+	//	cerr << "Error: Failed to get code blob for " << resourceName() << ": " << msg << endl;
+	//	throw runtime_error(msg);
+	//}
+
 	vector<uint32_t> spirv(blob->getBufferSize()/sizeof(uint32_t));
 	memcpy(spirv.data(), blob->getBufferPointer(), blob->getBufferSize());
-
 	mModule = vk::raii::ShaderModule(*mDevice, vk::ShaderModuleCreateInfo({}, spirv));
+	blob->Release();
 
 	// reflection
 
-	slang::ShaderReflection* shaderReflection = slang::ShaderReflection::get(request);
+	slang::ShaderReflection* shaderReflection = (slang::ShaderReflection*)request->getReflection();
 
 	static const unordered_map<SlangTypeKind, const char*> type_kind_name_map = {
 		{ SLANG_TYPE_KIND_NONE, "None" },
@@ -206,7 +214,7 @@ Shader::Shader(Device& device, const shared_ptr<ShaderSource>& source, const uno
 	};
 
 	for (uint32_t parameter_index = 0; parameter_index < shaderReflection->getParameterCount(); parameter_index++) {
-		slang::VariableLayoutReflection* parameter	 = shaderReflection->getParameterByIndex(parameter_index);
+		slang::VariableLayoutReflection* parameter = shaderReflection->getParameterByIndex(parameter_index);
 		slang::ParameterCategory category = parameter->getCategory();
 		slang::TypeReflection* type = parameter->getType();
 		slang::TypeLayoutReflection* typeLayout = parameter->getTypeLayout();
@@ -220,7 +228,7 @@ Shader::Shader(Device& device, const shared_ptr<ShaderSource>& source, const uno
 				slang::TypeLayoutReflection* fieldTypeLayout = typeLayout->getElementTypeLayout()->getFieldByIndex(i)->getTypeLayout();
 				slang::TypeReflection* fieldType = field->getType();
 				if (fieldType->getScalarType() == slang::TypeReflection::ScalarType::None) {
-					cerr << "Warning: Non-scalar push constants unsupported" << endl;
+					cerr << "Warning: Non-scalar push constant " << field->getName() << " unsupported" << endl;
 					continue;
 				}
 				auto& dst = mPushConstants[field->getName()];
@@ -228,7 +236,7 @@ Shader::Shader(Device& device, const shared_ptr<ShaderSource>& source, const uno
 				dst.mArrayStride = fieldTypeLayout->getStride();
 				if (fieldType->getTotalArrayElementCount())
 					dst.mArraySize.emplace_back((uint32_t)fieldType->getTotalArrayElementCount());
-				dst.mTypeSize = scalar_size_map.at((SlangScalarType)fieldType->getScalarType());
+				dst.mTypeSize = scalar_size_map.at((SlangScalarType)fieldType->getScalarType()) * fieldType->getRowCount() * fieldType->getColumnCount();
 				offset += max<size_t>(fieldType->getTotalArrayElementCount(), 1) * fieldTypeLayout->getStride();
 			}
 
@@ -241,14 +249,16 @@ Shader::Shader(Device& device, const shared_ptr<ShaderSource>& source, const uno
 			mDescriptorMap.emplace(parameter->getName(), DescriptorBinding(parameter->getBindingSpace(), parameter->getBindingIndex(), descriptorType, arraySize, 0));
 
 		} else if (category == slang::ParameterCategory::RegisterSpace) {
+
 			for (uint32_t i = 0; i < type->getElementType()->getFieldCount(); i++)
 				reflectParameter(parameter->getBindingIndex(), parameter->getName(), typeLayout->getElementTypeLayout()->getFieldByIndex(i), 0);
+
 		} else
 			cerr << "Warning: Unsupported resource category: " << category_name_map.at((SlangParameterCategory)category) << endl;
 	}
 
-	spDestroyCompileRequest(request);
-	spDestroySession(session);
+	request->Release();
+	session->Release();
 }
 
 

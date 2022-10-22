@@ -9,7 +9,8 @@ void ComputePipelineContext::bindDescriptors(CommandBuffer& commandBuffer, const
 	shared_ptr<DispatchResources> r = mResources.get();
 	// create new resources if necessary
 	if (!r) {
-		r = mResources.emplace(make_shared<DispatchResources>(commandBuffer.mDevice, mPipeline->resourceName() + "/Resources"));
+		r = make_shared<DispatchResources>(commandBuffer.mDevice, mPipeline->resourceName() + "/Resources");
+		mResources.emplace(r);
 
 		vector<vk::DescriptorSetLayout> layouts(mPipeline->descriptorSetLayouts().size());
 		ranges::transform(mPipeline->descriptorSetLayouts(), layouts.begin(), [](auto& l){ return **l; });
@@ -20,11 +21,9 @@ void ComputePipelineContext::bindDescriptors(CommandBuffer& commandBuffer, const
 		ranges::transform(sets, r->mDescriptorSets.begin(), [](vk::raii::DescriptorSet& ds) {
 			return make_shared<vk::raii::DescriptorSet>(move(ds));
 		});
-
-		mResources.emplace(r);
 	}
 
-	r->mDescriptors = descriptors;
+	commandBuffer.trackResource(r);
 
 	// write descriptors
 
@@ -41,12 +40,31 @@ void ComputePipelineContext::bindDescriptors(CommandBuffer& commandBuffer, const
 	for (const auto& [id, descriptorValue] : descriptors) {
 		const auto& [name, arrayIndex] = id;
 		auto it = mPipeline->shader()->descriptorMap().find(name);
-		if (it == mPipeline->shader()->descriptorMap().end()) {
-			const string msg = "Descriptor " + name + " does not exist in shader " + mPipeline->shader()->resourceName();
-			cerr << "Error: " << msg << endl;
-			throw runtime_error(msg);
-		}
+		if (it == mPipeline->shader()->descriptorMap().end())
+			cerr << "Warning: Descriptor " << name << " does not exist in shader " << mPipeline->shader()->resourceName() << endl;
 		const Shader::DescriptorBinding& binding = it->second;
+
+		// track descriptor resource(s)
+		switch (descriptorValue.index()) {
+		case 0:
+			commandBuffer.trackResource(get<BufferDescriptor>(descriptorValue).buffer());
+			break;
+		case 1: {
+			// transition image descriptor to required layout
+			const auto& [image, layout, accessFlags, sampler] = get<ImageDescriptor>(descriptorValue);
+			image.barrier(commandBuffer, layout, vk::PipelineStageFlagBits::eComputeShader, accessFlags, commandBuffer.queueFamily());
+			commandBuffer.trackResource(image.image());
+			if (sampler)
+				commandBuffer.trackVulkanResource(sampler);
+				break;
+		}
+		}
+
+		// detect if descriptor already bound
+		if (auto dit = r->mDescriptors.find(id); dit != r->mDescriptors.end() && dit->second == descriptorValue)
+			continue;
+
+		r->mDescriptors[id] = descriptorValue;
 
 		// TODO: warn/error on invalid descriptor
 		switch (binding.mDescriptorType) {
@@ -76,6 +94,8 @@ void ComputePipelineContext::bindDescriptors(CommandBuffer& commandBuffer, const
 				break;
 		}
 
+		// write descriptor
+
 		vk::WriteDescriptorSet& w = writes.emplace_back(vk::WriteDescriptorSet(**r->mDescriptorSets[binding.mSet], binding.mBinding, arrayIndex, 1, binding.mDescriptorType));
 		DescriptorInfo& info = descriptorInfos.emplace_back(DescriptorInfo{});
 		switch (descriptorValue.index()) {
@@ -87,8 +107,7 @@ void ComputePipelineContext::bindDescriptors(CommandBuffer& commandBuffer, const
 		}
 		case 1: {
 			const auto& [image, layout, accessFlags, sampler] = get<ImageDescriptor>(descriptorValue);
-			info.image = vk::DescriptorImageInfo(**sampler, *image, layout);
-			image.barrier(commandBuffer, layout, vk::PipelineStageFlagBits::eComputeShader, accessFlags, commandBuffer.queueFamily());
+			info.image = vk::DescriptorImageInfo(sampler ? **sampler : nullptr, *image, layout);
 			w.setImageInfo(info.image);
 			break;
 		}
@@ -121,7 +140,6 @@ void ComputePipelineContext::bindDescriptors(CommandBuffer& commandBuffer, const
 	vector<vk::DescriptorSet> descriptorSets(r->mDescriptorSets.size());
 	ranges::transform(r->mDescriptorSets, descriptorSets.begin(), [](const auto& ds) { return **ds; });
 	commandBuffer->bindDescriptorSets(vk::PipelineBindPoint::eCompute, **mPipeline->layout(), 0, descriptorSets, dynamicOffsetValues);
-	commandBuffer.trackResource(r);
 }
 
 void ComputePipelineContext::pushConstants(CommandBuffer& commandBuffer, const PushConstants& constants) const {
