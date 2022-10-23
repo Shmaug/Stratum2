@@ -6,28 +6,26 @@
 
 namespace tinyvkpt {
 
-struct ByteAppendBuffer {
-	vector<uint32_t> data;
-
-	inline uint Load(uint32_t address) {
-		return data[address / 4];
+struct ByteAppendBuffer : public vector<uint32_t> {
+	inline uint Load(const uint32_t address) {
+		return operator[](address / 4);
 	}
 
 	template<typename T, int N>
 	inline void AppendN(const VectorType<T, N>& x) {
 		for (uint i = 0; i < N; i++)
-			data.emplace_back(x[i]);
+			emplace_back(x[i]);
 	}
 	template<int N>
 	inline void AppendN(const VectorType<float, N>& x) {
 		for (uint i = 0; i < N; i++)
-			data.emplace_back(asuint(x[i]));
+			emplace_back(asuint(x[i]));
 	}
 	inline void Append(const uint32_t x) {
-		data.emplace_back(x);
+		emplace_back(x);
 	}
 	inline void Appendf(const float x) {
-		data.emplace_back(asuint(x));
+		emplace_back(asuint(x));
 	}
 };
 

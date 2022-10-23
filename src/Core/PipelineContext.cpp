@@ -42,34 +42,6 @@ void DescriptorSets::write(const Descriptors& descriptors) {
 		if (auto dit = mDescriptors.find(id); dit != mDescriptors.end() && dit->second == descriptorValue)
 			continue;
 
-		// TODO: warn/error on invalid descriptor
-		switch (binding.mDescriptorType) {
-			case vk::DescriptorType::eSampler:
-				break;
-			case vk::DescriptorType::eCombinedImageSampler:
-				break;
-			case vk::DescriptorType::eSampledImage:
-				break;
-			case vk::DescriptorType::eStorageImage:
-				break;
-			case vk::DescriptorType::eUniformTexelBuffer:
-				break;
-			case vk::DescriptorType::eStorageTexelBuffer:
-				break;
-			case vk::DescriptorType::eUniformBuffer:
-				break;
-			case vk::DescriptorType::eStorageBuffer:
-				break;
-			case vk::DescriptorType::eUniformBufferDynamic:
-				break;
-			case vk::DescriptorType::eStorageBufferDynamic:
-				break;
-			case vk::DescriptorType::eInputAttachment:
-				break;
-			case vk::DescriptorType::eInlineUniformBlock:
-				break;
-		}
-
 		// write descriptor
 
 		vk::WriteDescriptorSet& w = writes.emplace_back(vk::WriteDescriptorSet(**mDescriptorSets[binding.mSet], binding.mBinding, arrayIndex, 1, binding.mDescriptorType));
@@ -77,15 +49,55 @@ void DescriptorSets::write(const Descriptors& descriptors) {
 		switch (descriptorValue.index()) {
 		case 0: {
 			const BufferDescriptor& v = get<BufferDescriptor>(descriptorValue);
+
+			switch (binding.mDescriptorType) {
+			case vk::DescriptorType::eUniformBuffer:
+			case vk::DescriptorType::eStorageBuffer:
+			case vk::DescriptorType::eInlineUniformBlock:
+			case vk::DescriptorType::eUniformBufferDynamic:
+			case vk::DescriptorType::eStorageBufferDynamic:
+			case vk::DescriptorType::eUniformTexelBuffer:
+			case vk::DescriptorType::eStorageTexelBuffer:
+				if (!v) cerr << "Warning: Writing null buffer at " << id.first << " array index " << id.second << endl;
+				break;
+
+			default:
+				cerr << "Warning: Invalid descriptor type " << to_string(binding.mDescriptorType) << " while writing " << id.first << " array index " << id.second << endl;
+				break;
+			}
+
 			info.buffer = vk::DescriptorBufferInfo(**v.buffer(), v.offset(), v.sizeBytes());
 			w.setBufferInfo(info.buffer);
 			break;
 		}
 		case 1: {
 			const auto& [image, layout, accessFlags, sampler] = get<ImageDescriptor>(descriptorValue);
+
+			switch (binding.mDescriptorType) {
+			case vk::DescriptorType::eSampler:
+				if (!sampler) cerr << "Warning: Writing null sampler at " << id.first << " array index " << id.second << endl;
+				break;
+			case vk::DescriptorType::eCombinedImageSampler:
+				if (!sampler) cerr << "Warning: Writing null sampler at " << id.first << " array index " << id.second << endl;
+			case vk::DescriptorType::eSampledImage:
+			case vk::DescriptorType::eStorageImage:
+				if (!image) cerr << "Warning: Writing null image at " << id.first << " array index " << id.second << endl;
+				break;
+			default:
+				cerr << "Warning: Invalid descriptor type " << to_string(binding.mDescriptorType) << " while writing " << id.first << " array index " << id.second << endl;
+				break;
+			}
+
 			info.image = vk::DescriptorImageInfo(sampler ? **sampler : nullptr, *image, layout);
 			w.setImageInfo(info.image);
 			break;
+		}
+		case 2: {
+			const auto& v = get<shared_ptr<vk::raii::AccelerationStructureKHR>>(descriptorValue);
+			if (!v) cerr << "Warning: Writing null acceleration structure at " << id.first << " array index " << id.second << endl;
+			if (binding.mDescriptorType != vk::DescriptorType::eAccelerationStructureKHR)
+				cerr << "Warning: Invalid descriptor type " << to_string(binding.mDescriptorType) << " while writing " << id.first << " array index " << id.second << endl;
+			// TODO: write acceleration structure descriptor
 		}
 		}
 	}

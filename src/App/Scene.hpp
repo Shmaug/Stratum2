@@ -4,6 +4,7 @@
 #include <imgui/imgui.h> // materials have ImGui calls
 
 #include <Core/Mesh.hpp>
+#include <Core/ResourcePool.hpp>
 #include "Material.hpp"
 
 #include "SceneGraph.hpp"
@@ -51,7 +52,7 @@ public:
 
 		Buffer::View<PackedVertexData> mVertices;
 		Buffer::View<byte> mIndices;
-		Buffer::View<byte> mMaterialData;
+		Buffer::View<uint32_t> mMaterialData;
 		Buffer::View<InstanceData> mInstances;
 		Buffer::View<TransformData> mInstanceTransforms;
 		Buffer::View<TransformData> mInstanceInverseTransforms;
@@ -144,6 +145,7 @@ private:
 	unordered_map<Mesh*, Buffer::View<PackedVertexData>> mMeshVertices;
 	unordered_map<size_t, MeshBLAS> mMeshAccelerationStructures;
 
+	ResourcePool<RenderResources> mResourcePool;
 	shared_ptr<RenderResources> mResources;
 
 	shared_ptr<ComputePipelineContext> mCopyVerticesPipeline;

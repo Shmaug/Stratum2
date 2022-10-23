@@ -131,7 +131,7 @@ void Profiler::frameTimesGui() {
 }
 
 
-ProfilerScope::ProfilerScope(const string& label, CommandBuffer* cmd, const float4& color) : mCommandBuffer(cmd) {
+ProfilerScope::ProfilerScope(const string& label, const CommandBuffer* cmd, const float4& color) : mCommandBuffer(cmd) {
 	Profiler::beginSample(label, color);
 	if (mCommandBuffer) {
 		vk::DebugUtilsLabelEXT info = {};

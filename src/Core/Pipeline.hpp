@@ -7,10 +7,10 @@ namespace tinyvkpt {
 class ComputePipeline : public Device::Resource {
 public:
 	struct Metadata {
-		vk::PipelineShaderStageCreateFlags mStageLayoutFlags = {};
-		vk::PipelineLayoutCreateFlags mLayoutFlags = {};
-		vk::PipelineCreateFlags mFlags = {};
-		vk::DescriptorSetLayoutCreateFlags mDescriptorSetLayoutFlags = {};
+		vk::PipelineShaderStageCreateFlags mStageLayoutFlags;
+		vk::PipelineLayoutCreateFlags mLayoutFlags;
+		vk::PipelineCreateFlags mFlags;
+		vk::DescriptorSetLayoutCreateFlags mDescriptorSetLayoutFlags;
 		unordered_map<string, vector<shared_ptr<vk::raii::Sampler>>> mImmutableSamplers;
 		unordered_map<string, vk::DescriptorBindingFlags> mBindingFlags;
 	};

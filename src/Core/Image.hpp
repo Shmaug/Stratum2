@@ -11,6 +11,7 @@ public:
 	using SubresourceLayoutState = tuple<vk::ImageLayout, vk::PipelineStageFlags, vk::AccessFlags, uint32_t /*queueFamily*/>;
 
 	struct Metadata {
+		vk::ImageCreateFlags mCreateFlags;
 		vk::ImageType mType = vk::ImageType::e2D;
 		vk::Format mFormat;
 		vk::Extent3D mExtent;
@@ -115,8 +116,6 @@ public:
 private:
 	vk::Image mImage;
 	VmaAllocation mAllocation;
-	VmaAllocationInfo mAllocationInfo;
-	bool mOwnsImage;
 	Metadata mMetadata;
 	unordered_map<tuple<vk::ImageSubresourceRange, vk::ImageViewType, vk::ComponentMapping>, vk::raii::ImageView> mViews;
 	vector<vector<SubresourceLayoutState>> mSubresourceStates; // mSubresourceStates[arrayLayer][level]

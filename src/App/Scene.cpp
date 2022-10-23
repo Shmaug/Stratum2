@@ -344,8 +344,9 @@ void Scene::drawGui() {
 	ImGui::Checkbox("Always Update", &mAlwaysUpdate);
 }
 
+
 void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
-	ProfilerScope s("Scene::update", commandBuffer);
+	ProfilerScope s("Scene::update", &commandBuffer);
 
 	if (gAnimatedTransform) {
 		float r = length(gAnimateRotate);
@@ -363,8 +364,6 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 		gChanged = false;
 	}
 
-	bool update = mAlwaysUpdate || mUpdateOnce;
-
 	if (commandBuffer.mDevice.mInstance.window().input_state().pressed(KeyCode::eKeyControl) &&
 		commandBuffer.mDevice.mInstance.window().pressed_redge(KeyCode::eKeyO)) {
 		auto f = pfd::open_file("Open scene", "", loaderFilters());
@@ -374,6 +373,7 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 	for (const string& file : commandBuffer.mDevice.mInstance.window().input_state().files())
 		mToLoad.emplace_back(file);
 
+	bool update = mAlwaysUpdate || mUpdateOnce;
 	bool loaded = false;
 	for (const string& file : mToLoad) {
 		const filesystem::path filepath = file;
@@ -390,6 +390,9 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 	}
 	mToLoad.clear();
 
+	if (mResources)
+		mResources->markUsed();
+
 	if (!update) return;
 
 	mUpdateOnce = loaded && !mAlwaysUpdate;
@@ -397,17 +400,20 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 	uint32_t totalVertexCount = 0;
 	uint32_t totalIndexBufferSize = 0;
 
-	auto mPrevFrame = mResources;
-	mResources = make_shared<RenderResources>();
+	auto prevFrame = mResources;
 
-	mResources->mResources = {};
+	mResources = mResourcePool.get();
+
+	if (!mResources)
+		mResources = make_shared<RenderResources>();
+
+	mResources->mMaterialResources = {};
 	mResources->mInstanceTransformMap = {};
-	mResources->mResources.distribution_data_size = 0;
 
 	mResources->mEmissivePrimitiveCount = 0;
 	mResources->mMaterialCount = 0;
 	ByteAppendBuffer materialData;
-	materialData.data.reserve(mPrevFrame && mPrevFrame->mMaterialData ? mPrevFrame->mMaterialData.size() / sizeof(uint32_t) : 1);
+	materialData.reserve(prevFrame && prevFrame->mMaterialData ? prevFrame->mMaterialData.size() / sizeof(uint32_t) : 1);
 	unordered_map<const Material*, uint32_t> materialMap;
 
 	vector<vk::AccelerationStructureInstanceKHR> instancesAS;
@@ -418,26 +424,26 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 	vector<TransformData> instanceTransforms;
 	vector<TransformData> instanceInverseTransforms;
 	vector<TransformData> instanceMotionTransforms;
-	if (mPrevFrame) {
-		instanceDatas.reserve(mPrevFrame->mInstances.size());
-		instanceTransforms.reserve(mPrevFrame->mInstances.size());
-		instanceInverseTransforms.reserve(mPrevFrame->mInstances.size());
-		instanceMotionTransforms.reserve(mPrevFrame->mInstances.size());
+	if (prevFrame) {
+		instanceDatas.reserve(prevFrame->mInstances.size());
+		instanceTransforms.reserve(prevFrame->mInstances.size());
+		instanceInverseTransforms.reserve(prevFrame->mInstances.size());
+		instanceMotionTransforms.reserve(prevFrame->mInstances.size());
 	}
 	vector<uint32_t> lightInstanceMap;
 	vector<float> lightInstancePowers;
 
 	mResources->mInstanceNodes.clear();
 
-	mResources->mInstanceIndexMap = make_shared<Buffer>(commandBuffer.mDevice, "InstanceIndexMap", sizeof(uint32_t) * max<size_t>(1, mPrevFrame ? mPrevFrame->mInstances.size() : 0), vk::BufferUsageFlagBits::eStorageBuffer, VMA_MEMORY_USAGE_CPU_TO_GPU);
+	mResources->mInstanceIndexMap = make_shared<Buffer>(commandBuffer.mDevice, "InstanceIndexMap", sizeof(uint32_t) * max<size_t>(1, prevFrame ? prevFrame->mInstances.size() : 0), vk::BufferUsageFlagBits::eStorageBuffer, VMA_MEMORY_USAGE_CPU_TO_GPU);
 	ranges::fill(mResources->mInstanceIndexMap, -1);
 
 	auto process_material = [&](const Material* material) {
 		// append unique materials to materials list
 		auto materialMap_it = materialMap.find(material);
 		if (materialMap_it == materialMap.end()) {
-			materialMap_it = materialMap.emplace(material, (uint32_t)(materialData.data.size() * sizeof(uint32_t))).first;
-			material->store(materialData, mResources->mResources);
+			materialMap_it = materialMap.emplace(material, (uint32_t)(materialData.size() * sizeof(uint32_t))).first;
+			material->store(materialData, mResources->mMaterialResources);
 			mResources->mMaterialCount++;
 		}
 		return materialMap_it->second;
@@ -459,8 +465,8 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 		// transforms
 
 		TransformData prevTransform;
-		if (mPrevFrame) {
-			if (auto it = mPrevFrame->mInstanceTransformMap.find(prim.get()); it != mPrevFrame->mInstanceTransformMap.end()) {
+		if (prevFrame) {
+			if (auto it = prevFrame->mInstanceTransformMap.find(prim.get()); it != prevFrame->mInstanceTransformMap.end()) {
 				prevTransform = it->second.first;
 				mResources->mInstanceIndexMap[it->second.second] = instance_index;
 			}
@@ -475,7 +481,7 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 	};
 
 	{ // mesh instances
-		ProfilerScope s("Process mesh instances", commandBuffer);
+		ProfilerScope s("Process mesh instances", &commandBuffer);
 		mNode.for_each_descendant<MeshPrimitive>([&](const component_ptr<MeshPrimitive>& prim) {
 			if (prim->mMesh->topology() != vk::PrimitiveTopology::eTriangleList) return;
 			if (!prim->mMaterial) return;
@@ -535,7 +541,7 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 			const uint32_t material_address = process_material(prim->mMaterial.get());
 
 			const uint32_t triCount = prim->mMesh->indices().size_bytes() / (prim->mMesh->indices().stride() * 3);
-			const TransformData transform = node_to_world(prim.node());
+			const TransformData transform = nodeToWorld(prim.node());
 			const float area = 1;
 
 			if (prim->mMaterial->emission() > 0)
@@ -554,7 +560,7 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 	}
 
 	{ // sphere instances
-		ProfilerScope s("Process sphere instances", commandBuffer);
+		ProfilerScope s("Process sphere instances", &commandBuffer);
 		mNode.for_each_descendant<SpherePrimitive>([&](const component_ptr<SpherePrimitive>& prim) {
 			if (!prim->mMaterial) return;
 			uint32_t material_address = process_material(prim->mMaterial.get());
@@ -562,9 +568,9 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 			if (prim->mMaterial->emission() > 0)
 				mResources->mEmissivePrimitiveCount++;
 
-			TransformData transform = node_to_world(prim.node());
+			TransformData transform = nodeToWorld(prim.node());
 			const float r = prim->mRadius * transform.m.block<3, 3>(0, 0).matrix().determinant();
-			transform = make_transform(transform.m.col(3).head<3>(), quatf_identity(), float3::Ones());
+			transform = TransformData(transform.m.col(3).head<3>(), quatf_identity(), float3::Ones());
 
 			const float3 mn = -float3::Constant(r);
 			const float3 mx = float3::Constant(r);
@@ -598,15 +604,15 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 	}
 
 	{ // media
-		ProfilerScope s("Process media", commandBuffer);
+		ProfilerScope s("Process media", &commandBuffer);
 		mNode.for_each_descendant<Medium>([&](const component_ptr<Medium>& vol) {
 			if (!vol) return;
 
 			auto materialMap_it = materialMap.find(reinterpret_cast<Material*>(vol.get()));
 			if (materialMap_it == materialMap.end()) {
-				materialMap_it = materialMap.emplace(reinterpret_cast<Material*>(vol.get()), (uint32_t)(materialData.data.size() * sizeof(uint32_t))).first;
+				materialMap_it = materialMap.emplace(reinterpret_cast<Material*>(vol.get()), (uint32_t)(materialData.size() * sizeof(uint32_t))).first;
 				mResources->mMaterialCount++;
-				vol->store(materialData, mResources->mResources);
+				vol->store(materialData, mResources->mMaterialResources);
 			}
 
 			uint32_t material_address = materialMap_it->second;
@@ -631,62 +637,50 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 				blasBarriers.emplace_back(
 					vk::AccessFlagBits::eAccelerationStructureWriteKHR, vk::AccessFlagBits::eAccelerationStructureReadKHR,
 					VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-					**asbuf.buffer(), asbuf.offset(), asbuf.size_bytes());
+					**asbuf.buffer(), asbuf.offset(), asbuf.sizeBytes());
 				aabb_it = mAABBs.emplace(key, make_pair(as, asbuf)).first;
 			}
 
-			const TransformData transform = node_to_world(vol.node());
+			const TransformData transform = nodeToWorld(vol.node());
 			vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
 			float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
-			instance.instanceCustomIndex = process_instance(component_ptr<void>(vol), make_instance_volume(material_address, mResources->mResources.volume_data_map.at(vol->density_buffer)), transform, false);
+			instance.instanceCustomIndex = process_instance(component_ptr<void>(vol), make_instance_volume(material_address, mResources->mMaterialResources.volume_data_map.at(vol->density_buffer)), transform, false);
 			instance.mask = BVH_FLAG_VOLUME;
 			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**aabb_it->second);
 		});
 	}
 
-	// light distribution
-	if (lightInstancePowers.size() > 0) {
-		Buffer::View<float> lightPdf = make_shared<Buffer>(commandBuffer.mDevice, "light_pdf", lightInstancePowers.size()*sizeof(float)    , vk::BufferUsageFlagBits::eTransferSrc, VMA_MEMORY_USAGE_CPU_TO_GPU);
-		Buffer::View<float> lightCdf = make_shared<Buffer>(commandBuffer.mDevice, "light_cdf", (lightInstancePowers.size()+1)*sizeof(float), vk::BufferUsageFlagBits::eTransferSrc, VMA_MEMORY_USAGE_CPU_TO_GPU);
-		build_distribution(lightInstancePowers,
-			span(lightPdf.data(), lightPdf.size()),
-			span(lightCdf.data(), lightCdf.size()) );
-		mResources->mLightDistributionPDF = mResources->mResources.get_index(lightPdf);
-		mResources->mLightDistributionCDF = mResources->mResources.get_index(lightCdf);
-	} else
-		mResources->mLightDistributionPDF = mResources->mLightDistributionCDF = -1;
-
 	{ // Build TLAS
-		ProfilerScope s("Build TLAS", commandBuffer);
+		ProfilerScope s("Build TLAS", &commandBuffer);
 		commandBuffer.barrier(blasBarriers, vk::PipelineStageFlagBits::eAccelerationStructureBuildKHR, vk::PipelineStageFlagBits::eAccelerationStructureBuildKHR);
 		vk::AccelerationStructureGeometryKHR geom{ vk::GeometryTypeKHR::eInstances, vk::AccelerationStructureGeometryInstancesDataKHR() };
 		vk::AccelerationStructureBuildRangeInfoKHR range{ (uint32_t)instancesAS.size() };
 		if (!instancesAS.empty()) {
 			auto buf = make_shared<Buffer>(commandBuffer.mDevice, "TLAS instance buffer", sizeof(vk::AccelerationStructureInstanceKHR) * instancesAS.size(), vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress, VMA_MEMORY_USAGE_CPU_TO_GPU, 16);
 			memcpy(buf->data(), instancesAS.data(), buf->size());
-			commandBuffer.hold_resource(buf);
-			geom.geometry.instances.data = buf->device_address();
+			commandBuffer.trackResource(buf);
+			geom.geometry.instances.data = buf->deviceAddress();
 		}
 		tie(mResources->mAccelerationStructure, mResources->mAccelerationStructureBuffer) = buildAccelerationStructure(commandBuffer, mNode.name() + "/TLAS", vk::AccelerationStructureTypeKHR::eTopLevel, geom, range);
-		commandBuffer.barrier({ commandBuffer.hold_resource(mResources->mScene).buffer() },
+		commandBuffer.barrier({ mResources->mAccelerationStructureBuffer },
 			vk::PipelineStageFlagBits::eAccelerationStructureBuildKHR, vk::AccessFlagBits::eAccelerationStructureWriteKHR,
 			vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eAccelerationStructureReadKHR);
 	}
 
 	{ // environment material
-		ProfilerScope s("Process environment", commandBuffer);
+		ProfilerScope s("Process environment", &commandBuffer);
 		mResources->mEnvironmentMaterialAddress = -1;
 		mNode.for_each_descendant<Environment>([&](const component_ptr<Environment> environment) {
 			if (environment && !environment->emission.value.isZero() && mResources->mEnvironmentMaterialAddress  == -1) {
-				mResources->mEnvironmentMaterialAddress = (uint32_t)(materialData.data.size() * sizeof(uint32_t));
+				mResources->mEnvironmentMaterialAddress = (uint32_t)(materialData.size() * sizeof(uint32_t));
 				mResources->mMaterialCount++;
-				environment->store(materialData, mResources->mResources);
+				environment->store(materialData, mResources->mMaterialResources);
 			}
 		});
 	}
 
 	{ // copy vertices and indices
-		ProfilerScope s("Copy vertex data", commandBuffer);
+		ProfilerScope s("Copy vertex data", &commandBuffer);
 
 		if (!mResources->mVertices || mResources->mVertices.size() < totalVertexCount)
 			mResources->mVertices = make_shared<Buffer>(commandBuffer.mDevice, "gVertices", max(totalVertexCount, 1u) * sizeof(PackedVertexData), vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal);
@@ -702,14 +696,14 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 		commandBuffer.barrier({ mResources->mIndices, mResources->mVertices }, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferWrite, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead);
 	}
 
-	mResources->mInstances                .set(instanceDatas);
-	mResources->mInstanceTransforms       .set(instanceTransforms);
-	mResources->mInstanceInverseTransforms.set(instanceInverseTransforms);
-	mResources->mInstanceMotionTransforms .set(instanceMotionTransforms);
-	mResources->mMaterialData             .set(materialData.data);
-	if (lightInstanceMap.size()) mResources->mLightInstanceMap.set(lightInstanceMap.data());
+	ranges::copy(instanceDatas, mResources->mInstances.begin());
+	ranges::copy(instanceTransforms, mResources->mInstanceTransforms.begin());
+	ranges::copy(instanceInverseTransforms, mResources->mInstanceInverseTransforms.begin());
+	ranges::copy(instanceMotionTransforms, mResources->mInstanceMotionTransforms.begin());
+	ranges::copy(materialData, mResources->mMaterialData.begin());
+	if (lightInstanceMap.size())
+		ranges::copy(lightInstanceMap, mResources->mLightInstanceMap.begin());
 }
 
 */
-
 }

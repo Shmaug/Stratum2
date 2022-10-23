@@ -15,9 +15,6 @@
 
 using namespace tinyvkpt;
 
-
-// TODO: push constant reflection is wrong
-
 struct App {
 	Swapchain& mSwapchain;
 	uint32_t mPresentQueueFamily;

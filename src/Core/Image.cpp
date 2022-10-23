@@ -7,7 +7,7 @@ namespace tinyvkpt {
 Image::Image(Device& device, const string& name, const Metadata& metadata, const vk::MemoryPropertyFlags memoryFlags) : Device::Resource(device, name), mImage(nullptr), mMetadata(metadata) {
 	VmaAllocationCreateInfo allocationCreateInfo;
 	allocationCreateInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-    allocationCreateInfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    allocationCreateInfo.usage = (memoryFlags & vk::MemoryPropertyFlagBits::eDeviceLocal) ? VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE : VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
     allocationCreateInfo.requiredFlags = (VkMemoryPropertyFlags)memoryFlags;
     allocationCreateInfo.memoryTypeBits = 0;
     allocationCreateInfo.pool = VK_NULL_HANDLE;
@@ -15,7 +15,7 @@ Image::Image(Device& device, const string& name, const Metadata& metadata, const
     allocationCreateInfo.priority = 0;
 
 	vk::ImageCreateInfo createInfo(
-		{},
+		mMetadata.mCreateFlags,
 		type(),
 		format(),
 		extent(),
@@ -28,8 +28,7 @@ Image::Image(Device& device, const string& name, const Metadata& metadata, const
 		queueFamilies(),
 		vk::ImageLayout::eUndefined );
 
-	vmaCreateImage(mDevice.allocator(), &(const VkImageCreateInfo&)createInfo, &allocationCreateInfo, &(VkImage&)mImage, &mAllocation, &mAllocationInfo);
-	mOwnsImage = true;
+	vmaCreateImage(mDevice.allocator(), &(const VkImageCreateInfo&)createInfo, &allocationCreateInfo, &(VkImage&)mImage, &mAllocation, nullptr);
 	device.setDebugName(mImage, resourceName());
 	mSubresourceStates = vector<vector<Image::SubresourceLayoutState>>(
 		metadata.mLayers,
@@ -41,8 +40,7 @@ Image::Image(Device& device, const string& name, const Metadata& metadata, const
 				vk::AccessFlagBits::eNone,
 				queueFamilies().empty() ? VK_QUEUE_FAMILY_IGNORED : queueFamilies().front() }));
 }
-Image::Image(Device& device, const string& name, const vk::Image image, const Metadata& metadata) : Device::Resource(device, name), mImage(image), mMetadata(metadata) {
-	mOwnsImage = false;
+Image::Image(Device& device, const string& name, const vk::Image image, const Metadata& metadata) : Device::Resource(device, name), mImage(image), mMetadata(metadata), mAllocation(nullptr) {
 	mAllocation = nullptr;
 	if (mImage) device.setDebugName(mImage, resourceName());
 	mSubresourceStates = vector<vector<Image::SubresourceLayoutState>>(
@@ -56,7 +54,7 @@ Image::Image(Device& device, const string& name, const vk::Image image, const Me
 				queueFamilies().empty() ? VK_QUEUE_FAMILY_IGNORED : queueFamilies().front() }));
 }
 Image::~Image() {
-	if (mOwnsImage && mImage && mAllocation)
+	if (mImage && mAllocation)
 		vmaDestroyImage(mDevice.allocator(), mImage, mAllocation);
 }
 

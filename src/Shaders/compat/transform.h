@@ -98,7 +98,7 @@ struct TransformData {
 	}
 	#endif
 
-	inline float3x4 to_float3x4() { return m; }
+	inline float3x4 to_float3x4() CONST_CPP { return m; }
 };
 
 inline TransformData tmul(const TransformData lhs, const TransformData rhs) {

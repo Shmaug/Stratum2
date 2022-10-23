@@ -82,10 +82,10 @@ private:
 
 class ProfilerScope {
 private:
-	CommandBuffer* mCommandBuffer;
+	const CommandBuffer* mCommandBuffer;
 
 public:
-	ProfilerScope(const string& label, CommandBuffer* cmd = nullptr, const float4& color = float4::Ones());
+	ProfilerScope(const string& label, const CommandBuffer* cmd = nullptr, const float4& color = float4::Ones());
 	~ProfilerScope();
 };
 

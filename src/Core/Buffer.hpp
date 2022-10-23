@@ -8,16 +8,16 @@ namespace tinyvkpt {
 
 class Buffer : public Device::Resource {
 public:
-	Buffer(Device& device, const string& name, const vk::DeviceSize size, const vk::BufferUsageFlags usage, const vk::MemoryPropertyFlags memoryFlags = vk::MemoryPropertyFlagBits::eDeviceLocal, const vk::SharingMode sharingMode = vk::SharingMode::eExclusive);
+	Buffer(Device& device, const string& name, const vk::BufferCreateInfo& createInfo, const vk::MemoryPropertyFlags memoryFlags = vk::MemoryPropertyFlagBits::eDeviceLocal, const bool randomHostAccess = false);
+	inline Buffer(Device& device, const string& name, const vk::DeviceSize& size, const vk::BufferUsageFlags usage, const vk::MemoryPropertyFlags memoryFlags = vk::MemoryPropertyFlagBits::eDeviceLocal, const bool randomHostAccess = false) :
+		Buffer(device, name, vk::BufferCreateInfo({}, size, usage), memoryFlags, randomHostAccess) {}
 	~Buffer();
 
 	DECLARE_DEREFERENCE_OPERATORS(vk::Buffer, mBuffer)
 
 	inline operator bool() const { return mBuffer; }
 
-	inline void* data() const {
-		return nullptr; // TODO: ptr to mapped data from allocation
-	}
+	inline void* data() const { return mAllocationInfo.pMappedData; }
 	inline vk::DeviceSize size() const { return mSize; }
 	inline vk::BufferUsageFlags usage() const { return mUsage; }
 	inline vk::MemoryPropertyFlags memoryUsage() const { return mMemoryFlags; }

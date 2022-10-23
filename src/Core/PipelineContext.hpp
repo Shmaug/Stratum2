@@ -33,7 +33,7 @@ using PushConstants = unordered_map<string, PushConstantValue>;
 
 using BufferDescriptor = Buffer::View<byte>;
 using ImageDescriptor = tuple<Image::View, vk::ImageLayout, vk::AccessFlags, shared_ptr<vk::raii::Sampler>>;
-using DescriptorValue = variant<BufferDescriptor, ImageDescriptor>;
+using DescriptorValue = variant<BufferDescriptor, ImageDescriptor, shared_ptr<vk::raii::AccelerationStructureKHR>>;
 using Descriptors = unordered_map<pair<string, uint32_t>, DescriptorValue>;
 
 
