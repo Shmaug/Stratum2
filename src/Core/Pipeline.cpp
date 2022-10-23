@@ -58,14 +58,8 @@ ComputePipeline::ComputePipeline(const string& name, const shared_ptr<Shader>& s
 		uint32_t rangeBegin = numeric_limits<uint32_t>::max();
 		uint32_t rangeEnd = 0;
 		for (const auto& [id, p] : shader->pushConstants()) {
-			uint32_t sz = p.mTypeSize;
-			if (!p.mArraySize.empty()) {
-				sz = p.mArrayStride;
-				for (const uint32_t v : p.mArraySize)
-					sz *= v;
-			}
 			rangeBegin = std::min(rangeBegin, p.mOffset);
-			rangeEnd   = std::max(rangeEnd  , p.mOffset + sz);
+			rangeEnd   = std::max(rangeEnd  , p.mOffset + p.mTypeSize);
 		}
 		pushConstantRanges.emplace_back(shader->stage(), rangeBegin, rangeEnd - rangeBegin);
     }
@@ -85,7 +79,7 @@ ComputePipeline::ComputePipeline(const string& name, const shared_ptr<Shader>& s
 
 	mPipeline = vk::raii::Pipeline(*shader->mDevice, shader->mDevice.pipelineCache(), vk::ComputePipelineCreateInfo(
 		mMetadata.mFlags,
-		vk::PipelineShaderStageCreateInfo(mMetadata.mStageLayoutFlags, vk::ShaderStageFlagBits::eCompute, *shader->module(), shader->source()->entryPoint().c_str()),
+		vk::PipelineShaderStageCreateInfo(mMetadata.mStageLayoutFlags, vk::ShaderStageFlagBits::eCompute, *shader->module(), "main"),
 		**mLayout));
 }
 

@@ -9,11 +9,6 @@
 
 namespace tinyvkpt {
 
-using BufferDescriptor = Buffer::View<byte>;
-using ImageDescriptor = tuple<Image::View, vk::ImageLayout, vk::AccessFlagBits, shared_ptr<vk::raii::Sampler>>;
-using DescriptorValue = variant<BufferDescriptor, ImageDescriptor>;
-using Descriptors = unordered_map<pair<string, uint32_t>, DescriptorValue>;
-
 class PushConstantValue {
 public:
 	template<typename T>
@@ -35,6 +30,31 @@ private:
 
 using PushConstants = unordered_map<string, PushConstantValue>;
 
+
+using BufferDescriptor = Buffer::View<byte>;
+using ImageDescriptor = tuple<Image::View, vk::ImageLayout, vk::AccessFlags, shared_ptr<vk::raii::Sampler>>;
+using DescriptorValue = variant<BufferDescriptor, ImageDescriptor>;
+using Descriptors = unordered_map<pair<string, uint32_t>, DescriptorValue>;
+
+
+class DescriptorSets : public Device::Resource {
+public:
+	shared_ptr<ComputePipeline> mPipeline;
+	vector<shared_ptr<vk::raii::DescriptorSet>> mDescriptorSets;
+	Descriptors mDescriptors;
+
+	DescriptorSets(Device& device, const string& name, const shared_ptr<ComputePipeline>& pipeline, const Descriptors& descriptors = {});
+	DescriptorSets() = default;
+	DescriptorSets(const DescriptorSets&) = default;
+	DescriptorSets(DescriptorSets&&) = default;
+	DescriptorSets& operator=(const DescriptorSets&) = default;
+	DescriptorSets& operator=(DescriptorSets&&) = default;
+
+	void write(const Descriptors& descriptors = {});
+
+	void bind(CommandBuffer& commandBuffer, const unordered_map<string, uint32_t>& dynamicOffsets = {});
+};
+
 // Handles DescriptorSet creation and re-use. operator() binds and dispatches the pipeline with the given arguments.
 class ComputePipelineContext {
 public:
@@ -54,32 +74,20 @@ public:
 			(extent.height + s.height - 1) / s.height,
 			(extent.depth  + s.depth - 1)  / s.depth };
 	}
-
-	void bindDescriptors(CommandBuffer& commandBuffer, const Descriptors& descriptors = {}, const unordered_map<string, uint32_t>& dynamicOffsets = {});
-	void pushConstants(CommandBuffer& commandBuffer, const PushConstants& constants) const;
 	inline size_t resourceCount() const { return mResources.size(); }
 
+	// gets descriptorsets
+	shared_ptr<DescriptorSets> getDescriptorSets(Device& device, const Descriptors& descriptors = {});
+
+	void pushConstants(CommandBuffer& commandBuffer, const PushConstants& constants) const;
+
+	// binds the descriptors and calls pushConstants
+	void operator()(CommandBuffer& commandBuffer, const vk::Extent3D& dim, const shared_ptr<DescriptorSets>& descriptors, const unordered_map<string, uint32_t>& dynamicOffsets = {}, const PushConstants& constants = {});
 	void operator()(CommandBuffer& commandBuffer, const vk::Extent3D& dim, const Descriptors& descriptors = {}, const unordered_map<string, uint32_t>& dynamicOffsets = {}, const PushConstants& constants = {});
-	inline void operator()(CommandBuffer& commandBuffer, const vk::Extent3D& dim, const Descriptors& descriptors = {}, const PushConstants& constants = {}) {
-		operator()(commandBuffer, dim, descriptors, {}, constants);
-	}
 
 private:
-	class DispatchResources : public Device::Resource {
-    public:
-		vector<shared_ptr<vk::raii::DescriptorSet>> mDescriptorSets;
-		Descriptors mDescriptors;
-
-		DispatchResources(Device& device, const string& name) : Device::Resource(device, name) {}
-		DispatchResources() = default;
-		DispatchResources(const DispatchResources&) = default;
-		DispatchResources(DispatchResources&&) = default;
-		DispatchResources& operator=(const DispatchResources&) = default;
-		DispatchResources& operator=(DispatchResources&&) = default;
-	};
-
 	shared_ptr<ComputePipeline> mPipeline;
-	ResourcePool<DispatchResources> mResources;
+	ResourcePool<DescriptorSets> mResources;
 };
 
 }

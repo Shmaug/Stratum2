@@ -1,4 +1,5 @@
 #include "Profiler.hpp"
+#include "CommandBuffer.hpp"
 
 #include <imgui/imgui.h>
 
@@ -127,6 +128,22 @@ void Profiler::frameTimesGui() {
 	ImGui::Text("%.1f fps (%.1f ms)", fps_counter/(fps_timer/1000), fps_timer/fps_counter);
 	ImGui::SliderInt("Frame Time Count", reinterpret_cast<int*>(&mFrameTimeCount), 2, 256);
 	if (frame_times.size() > 1) ImGui::PlotLines("Frame Times", frame_times.data(), (uint32_t)frame_times.size(), 0, nullptr, FLT_MAX, FLT_MAX, ImVec2(0, 64));
+}
+
+
+ProfilerScope::ProfilerScope(const string& label, CommandBuffer* cmd, const float4& color) : mCommandBuffer(cmd) {
+	Profiler::beginSample(label, color);
+	if (mCommandBuffer) {
+		vk::DebugUtilsLabelEXT info = {};
+		copy_n(color.data(), 4, info.color.data());
+		info.pLabelName = label.c_str();
+		(*mCommandBuffer)->beginDebugUtilsLabelEXT(info);
+	}
+}
+ProfilerScope::~ProfilerScope() {
+	if (mCommandBuffer)
+		(*mCommandBuffer)->endDebugUtilsLabelEXT();
+	Profiler::endSample();
 }
 
 }

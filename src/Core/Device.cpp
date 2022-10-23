@@ -2,6 +2,7 @@
 #include "Device.hpp"
 #include "Instance.hpp"
 #include "CommandBuffer.hpp"
+#include "Profiler.hpp"
 
 #include <iostream>
 #include <algorithm>
@@ -189,6 +190,7 @@ void Device::submit(const vk::raii::Queue queue, const vk::ArrayProxy<shared_ptr
 }
 
 void Device::updateFrame() {
+	ProfilerScope ps("Device::render");
 	mFrameIndex++;
 	// move completed commandbuffers to pool, update mLastFrameDone
 	for (auto&[queueFamily, pool] : mCommandBuffersInFlight) {

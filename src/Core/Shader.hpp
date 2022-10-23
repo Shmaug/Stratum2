@@ -7,7 +7,7 @@
 
 namespace tinyvkpt {
 
-class ShaderSource {
+struct ShaderSource {
 public:
 	inline ShaderSource(const filesystem::path& sourceFile, const string& entryPoint = "main", const string& profile = "sm_6_6", const vector<string>& compileArgs = {})
 		: mSourceFile(sourceFile), mEntryPoint(entryPoint), mShaderProfile(profile), mCompileArgs(compileArgs) {
@@ -39,8 +39,6 @@ public:
 	struct PushConstant {
 		uint32_t mOffset;
 		uint32_t mTypeSize;
-		uint32_t mArrayStride;
-		vector<uint32_t> mArraySize; // uint32_t for literal, string for specialization constant
 	};
 	struct Variable {
 		uint32_t mLocation;
@@ -49,11 +47,14 @@ public:
 		uint32_t mSemanticIndex;
 	};
 
-	Shader(Device& device, const shared_ptr<ShaderSource>& source, const unordered_map<string, string>& defines = {});
+	Shader(Device& device, const ShaderSource& source, const unordered_map<string, string>& defines = {})
+		: Device::Resource(device, source.sourceFile().stem().string() + "_" + source.entryPoint() + "/Specialization"), mSource(source), mModule(nullptr) {
+		compile(defines);
+	}
 	Shader(Shader&&) = default;
 	Shader& operator=(Shader&&) = default;
 
-	inline const shared_ptr<ShaderSource>& source() const { return mSource; }
+	inline const ShaderSource& source() const { return mSource; }
 	inline const vk::ShaderStageFlagBits& stage() const { return mStage; }
 	inline const vk::raii::ShaderModule& module() const { return mModule; }
 	inline const unordered_map<string, DescriptorBinding>& descriptorMap() const { return mDescriptorMap; }
@@ -63,7 +64,7 @@ public:
 	inline const vk::Extent3D& workgroupSize() const { return mWorkgroupSize; }
 
 private:
-	shared_ptr<ShaderSource> mSource;
+	ShaderSource mSource;
 	vk::ShaderStageFlagBits mStage;
 	vk::raii::ShaderModule mModule;
 	unordered_map<string, DescriptorBinding> mDescriptorMap;
@@ -71,6 +72,8 @@ private:
 	unordered_map<string, Variable> mInputVariables;
 	unordered_map<string, Variable> mOutputVariables;
 	vk::Extent3D mWorkgroupSize;
+
+	void compile(const unordered_map<string, string>& defines);
 };
 
 }

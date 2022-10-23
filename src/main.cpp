@@ -29,7 +29,7 @@ struct App {
 	float3 mBias = float3::Zero();
 	float mExposure = 0;
 
-	ComputePipelineContext mTestPipeline;
+	ComputePipelineContext computePass1, computePass2;
 
 	inline App(Swapchain& swapchain, const uint32_t presentQueueFamily) :
 		mSwapchain(swapchain),
@@ -37,11 +37,12 @@ struct App {
 		mPresentQueue(*swapchain.mDevice, presentQueueFamily, 0),
 		mGui(mSwapchain, mPresentQueue, presentQueueFamily, vk::ImageLayout::ePresentSrcKHR, false) {
 
-		shared_ptr<ShaderSource> shaderSource = make_shared<ShaderSource>("../../src/Shaders/kernels/test.hlsl");
-		mTestPipeline = ComputePipelineContext(make_shared<ComputePipeline>("test", make_shared<Shader>(swapchain.mDevice, shaderSource), ComputePipeline::Metadata()));
+		computePass1 = ComputePipelineContext(make_shared<ComputePipeline>("testPass1", make_shared<Shader>(swapchain.mDevice, ShaderSource("../../src/Shaders/kernels/test.hlsl", "pass1")), ComputePipeline::Metadata()));
+		computePass2 = ComputePipelineContext(make_shared<ComputePipeline>("testPass2", make_shared<Shader>(swapchain.mDevice, ShaderSource("../../src/Shaders/kernels/test.hlsl", "pass2")), ComputePipeline::Metadata()));
 	}
 
 	void update() {
+		ProfilerScope ps("App::update");
 		mGui.newFrame();
 
 		if (ImGui::Begin("vkpt")) {
@@ -57,7 +58,7 @@ struct App {
 			ImGui::DragFloat("Exposure", &mExposure);
 
 			ImGui::Text("%u Back buffers", mSwapchain.backBufferCount());
-			ImGui::Text("%u Pipeline resources", mTestPipeline.resourceCount());
+			ImGui::Text("%u Pipeline resources", computePass1.resourceCount() + computePass2.resourceCount());
 		}
 		ImGui::End();
 
@@ -70,6 +71,7 @@ struct App {
 	}
 
 	shared_ptr<vk::raii::Semaphore> render() {
+		ProfilerScope ps("App::render");
 		Device& device = mSwapchain.mDevice;
 
 		shared_ptr<CommandBuffer> commandBufferPtr = device.getCommandBuffer(mPresentQueueFamily);
@@ -78,10 +80,13 @@ struct App {
 
 		Image::View renderTarget(mSwapchain.backBuffer(), vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
 
-		mTestPipeline(commandBuffer, mTestPipeline.dispatchDimensions(renderTarget.extent()),
-			Descriptors{
-				{ { "gParams.mOutput", 0 }, DescriptorValue{ ImageDescriptor{ renderTarget, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} } } }
-			},
+		auto descriptors = computePass1.getDescriptorSets(commandBuffer.mDevice, Descriptors{
+			{ { "gParams.mInput" , 0 }, DescriptorValue{ ImageDescriptor{ renderTarget, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite, {} } } },
+			{ { "gParams.mOutput", 0 }, DescriptorValue{ ImageDescriptor{ renderTarget, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite, {} } } }
+		});
+
+		computePass1(commandBuffer, computePass1.dispatchDimensions(renderTarget.extent()), descriptors);
+		computePass2(commandBuffer, computePass2.dispatchDimensions(renderTarget.extent()), descriptors, {},
 			PushConstants{
 				{ "mBias"    , PushConstantValue(mBias) },
 				{ "mExposure", PushConstantValue(mExposure) }
@@ -130,8 +135,7 @@ int main(int argc, char** argv) {
 		Window window(instance, "tinyvkpt", { 1600, 900 });
 		auto[physicalDevice, presentQueueFamily] = window.findPhysicalDevice();
 		Device device(instance, physicalDevice);
-		Swapchain swapchain(device, "tinyvkpt/Swapchain", window, 2, vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eColorAttachment);
-
+		Swapchain swapchain(device, "tinyvkpt/Swapchain", window, 2, vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eColorAttachment);
 		App app(swapchain, presentQueueFamily);
 		app.run();
 
