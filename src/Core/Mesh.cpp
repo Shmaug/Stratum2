@@ -14,21 +14,27 @@ Mesh::VertexLayoutDescription Mesh::vertexLayout(const Shader& vertexShader) con
 
 	unordered_map<Buffer::StrideView, uint32_t, stride_view_hash> uniqueBuffers;
 	for (const auto&[id, v] : vertexShader.inputVariables()) {
-		Vertices::AttributeType attributeType;
+		VertexAttributeType attributeType;
 		// TODO: attributeType from v.mSemantic
-		optional<Vertices::Attribute> attrib = mVertices.find(attributeType, v.mSemanticIndex);
+		optional<VertexAttributeData> attrib = mVertices.find(attributeType, v.mSemanticIndex);
 		if (!attrib) throw logic_error("Mesh does not contain required shader input " + to_string(attributeType) + "." + to_string(v.mSemanticIndex));
 
+		// get/create attribute in attribute array
 		auto& dstAttribs = layout.mAttributes[attributeType];
 		if (dstAttribs.size() <= v.mSemanticIndex)
 		dstAttribs.resize(v.mSemanticIndex + 1);
 
-		dstAttribs[v.mSemanticIndex].first = attrib->first;
-		if (auto it = uniqueBuffers.find(attrib->second); it != uniqueBuffers.end())
+		auto&[vertexBuffer, attributeDescription] = *attrib;
+
+		// store attribute description
+		dstAttribs[v.mSemanticIndex].first = attributeDescription;
+
+		// get unique binding index for buffer
+		if (auto it = uniqueBuffers.find(vertexBuffer); it != uniqueBuffers.end())
 			dstAttribs[v.mSemanticIndex].second = it->second;
 		else {
-			dstAttribs[v.mSemanticIndex].second =  (uint32_t)uniqueBuffers.size();
-			uniqueBuffers.emplace(attrib->second, dstAttribs[v.mSemanticIndex].second);
+			dstAttribs[v.mSemanticIndex].second = (uint32_t)uniqueBuffers.size();
+			uniqueBuffers.emplace(vertexBuffer, dstAttribs[v.mSemanticIndex].second);
 		}
 	}
 
@@ -36,7 +42,7 @@ Mesh::VertexLayoutDescription Mesh::vertexLayout(const Shader& vertexShader) con
 }
 
 void Mesh::Vertices::bind(CommandBuffer& commandBuffer) const {
-	// TODO
+	// TODO: bind mesh
 }
 void Mesh::bind(CommandBuffer& commandBuffer) const {
 	mVertices.bind(commandBuffer);

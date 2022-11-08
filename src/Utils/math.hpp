@@ -124,6 +124,8 @@ template<typename T, int N> inline VectorType<T,N> normalize(const VectorType<T,
 
 template<typename T> inline VectorType<T,3> cross(const VectorType<T,3> a, const VectorType<T,3> b) { return a.matrix().cross(b.matrix()); }
 
+template<typename T, int M, int N, int K> inline MatrixType<T, M, K> mul(const MatrixType<T, M, N> a, const MatrixType<T, N, K> b) { return a.matrix() * b.matrix(); }
+
 inline float asfloat(uint32_t v) { return *reinterpret_cast<float*>(&v); }
 inline uint32_t asuint(float v) { return *reinterpret_cast<uint32_t*>(&v); }
 template<int M, int N> inline MatrixType<float, M, N> asfloat(const MatrixType<uint32_t, M, N> v) { return MatrixType<float, M, N>::Map(reinterpret_cast<float*>(v.data())); }

@@ -76,9 +76,12 @@ bool Swapchain::create() {
 
 bool Swapchain::acquireImage() {
 	ProfilerScope ps("Window::acquire_image");
+
 	const uint32_t semaphore_index = (mImageAvailableSemaphoreIndex + 1) % mImageAvailableSemaphores.size();
+
 	vk::Result result;
 	std::tie(result, mBackBufferIndex) = mSwapchain.acquireNextImage(mAcquireImageTimeout.count(), **mImageAvailableSemaphores[semaphore_index], {});
+
 	if (result == vk::Result::eNotReady || result == vk::Result::eTimeout)
 		return false;
 	else if (result == vk::Result::eSuboptimalKHR || result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eErrorSurfaceLostKHR) {
@@ -86,7 +89,9 @@ bool Swapchain::acquireImage() {
 		return false;
 	} else if (result != vk::Result::eSuccess)
 		throw runtime_error("Failed to acquire next image");
+
 	mImageAvailableSemaphoreIndex = semaphore_index;
+
 	return true;
 }
 

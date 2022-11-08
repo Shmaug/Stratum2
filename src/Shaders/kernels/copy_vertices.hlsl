@@ -4,7 +4,7 @@
 #define gVertexBufferCount 8192
 #endif
 
-struct BufferProperties {
+struct VertexCopyInfo {
 	uint mCount;
 	uint mPositionStride;
 	uint mNormalStride;
@@ -15,7 +15,7 @@ ByteAddressBuffer gPositions[gVertexBufferCount];
 ByteAddressBuffer gNormals[gVertexBufferCount];
 ByteAddressBuffer gTexcoords[gVertexBufferCount];
 
-StructuredBuffer<BufferProperties> gBufferProperties;
+StructuredBuffer<VertexCopyInfo> gInfos;
 RWStructuredBuffer<PackedVertexData> gVertices;
 
 
@@ -29,7 +29,7 @@ SLANG_SHADER("compute")
 void main(uint3 index : SV_DispatchThreadId) {
 	if (index.x >= gBufferSizes[gPushConstants.gBufferIndex]) return;
 
-	const BufferProperties p = gBufferProperties[gPushConstants.gBufferIndex];
+	const BufferProperties p = gInfos[gPushConstants.gBufferIndex];
 
 	PackedVertexData v;
 	v.set(

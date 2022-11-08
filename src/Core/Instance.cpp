@@ -1,7 +1,5 @@
 #include "Instance.hpp"
 
-#include <iostream>
-
 #include <GLFW/glfw3.h>
 
 namespace tinyvkpt {

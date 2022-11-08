@@ -17,30 +17,39 @@
 namespace tinyvkpt {
 #endif
 
-inline float max3(float3 x) { return max(max(x[0], x[1]), x[2]); }
-inline float max4(float4 x) { return max(max(x[0], x[1]), max(x[2], x[3])); }
-inline float min3(float3 x) { return min(min(x[0], x[1]), x[2]); }
-inline float min4(float4 x) { return min(min(x[0], x[1]), min(x[2], x[3])); }
+inline float max3(const float3 x) { return max(max(x[0], x[1]), x[2]); }
+inline float max4(const float4 x) { return max(max(x[0], x[1]), max(x[2], x[3])); }
+inline float min3(const float3 x) { return min(min(x[0], x[1]), x[2]); }
+inline float min4(const float4 x) { return min(min(x[0], x[1]), min(x[2], x[3])); }
 
 #define DECLARE_INTEGER_POW_FNS(T) \
-	inline T pow2(T x) { return x*x; } \
-	inline T pow3(T x) { return pow2(x)*x; } \
-	inline T pow4(T x) { return pow2(x)*pow2(x); } \
-	inline T pow5(T x) { return pow4(x)*x; }
+	inline T pow2(const T x) { return x*x; } \
+	inline T pow3(const T x) { return pow2(x)*x; } \
+	inline T pow4(const T x) { return pow2(x)*pow2(x); } \
+	inline T pow5(const T x) { return pow4(x)*x; }
 DECLARE_INTEGER_POW_FNS(float)
 
 #ifdef __cplusplus
 #undef DECLARE_INTEGER_POW_FNS
 #define DECLARE_INTEGER_POW_FNS(T) \
-	inline T pow2(T x) { return x.cwiseProduct(x); } \
-	inline T pow3(T x) { return pow2(x).cwiseProduct(x); } \
-	inline T pow4(T x) { return pow2(x).cwiseProduct(pow2(x)); } \
-	inline T pow5(T x) { return pow4(x).cwiseProduct(x); }
+	inline T pow2(const T x) { return x.cwiseProduct(x); } \
+	inline T pow3(const T x) { return pow2(x).cwiseProduct(x); } \
+	inline T pow4(const T x) { return pow2(x).cwiseProduct(pow2(x)); } \
+	inline T pow5(const T x) { return pow4(x).cwiseProduct(x); }
 #endif
 DECLARE_INTEGER_POW_FNS(float2)
 DECLARE_INTEGER_POW_FNS(float3)
 DECLARE_INTEGER_POW_FNS(float4)
 #undef DECLARE_INTEGER_POW_FNS
+
+inline float  radians(const float  x) { return x * M_PI/180; }
+inline float2 radians(const float2 x) { return x * M_PI/180; }
+inline float3 radians(const float3 x) { return x * M_PI/180; }
+inline float4 radians(const float4 x) { return x * M_PI/180; }
+inline float  degrees(const float  x) { return x * 180/M_PI; }
+inline float2 degrees(const float2 x) { return x * 180/M_PI; }
+inline float3 degrees(const float3 x) { return x * 180/M_PI; }
+inline float4 degrees(const float4 x) { return x * 180/M_PI; }
 
 inline float len_sqr(const float3 v) { return dot(v,v); }
 

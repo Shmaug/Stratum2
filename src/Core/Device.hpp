@@ -9,6 +9,15 @@
 
 namespace tinyvkpt {
 
+inline uint32_t findQueueFamily(vk::raii::PhysicalDevice& physicalDevice, const vk::QueueFlags flags = vk::QueueFlagBits::eGraphics|vk::QueueFlagBits::eCompute|vk::QueueFlagBits::eTransfer) {
+	const auto queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
+	for (uint32_t i = 0; i < queueFamilyProperties.size(); i++) {
+		if (queueFamilyProperties[i].queueFlags | flags)
+			return i;
+	}
+	return -1;
+}
+
 class Device {
 public:
 	class Resource {
@@ -58,6 +67,10 @@ public:
 
 	inline uint32_t frameIndex() const { return mFrameIndex; }
 	inline uint32_t lastFrameDone() const { return mLastFrameDone; }
+
+	inline uint32_t findQueueFamily(const vk::QueueFlags flags = vk::QueueFlagBits::eGraphics|vk::QueueFlagBits::eCompute|vk::QueueFlagBits::eTransfer) {
+		return tinyvkpt::findQueueFamily(mPhysicalDevice, flags);
+	}
 
 	shared_ptr<CommandBuffer> getCommandBuffer(const uint32_t queueFamily);
 	void submit(

@@ -15,16 +15,16 @@ struct Material {
 	Image::View mBumpImage;
 	float mBumpStrength;
 
-	bool alpha_test() { return (!mMinAlpha || mMinAlpha.buffer()->inFlight()) ? false : mMinAlpha[0] < 0xFFFFFFFF/2; }
+	bool alphaTest() { return (!mMinAlpha || mMinAlpha.buffer()->inFlight()) ? false : mMinAlpha[0] < 0xFFFFFFFF/2; }
 
-	auto base_color()        { return mValues[0].value.head<3>(); }
+	auto baseColor()         { return mValues[0].value.head<3>(); }
 	float& emission()        { return mValues[0].value[3]; }
 	float& metallic()        { return mValues[1].value[0]; }
 	float& roughness()       { return mValues[1].value[1]; }
 	float& anisotropic()     { return mValues[1].value[2]; }
 	float& subsurface()      { return mValues[1].value[3]; }
 	float& clearcoat()       { return mValues[2].value[0]; }
-	float& clearcoat_gloss() { return mValues[2].value[1]; }
+	float& clearcoatGloss()  { return mValues[2].value[1]; }
 	float& transmission()    { return mValues[2].value[2]; }
 	float& eta()             { return mValues[2].value[3]; }
 
@@ -37,7 +37,7 @@ struct Material {
     }
 
     inline void drawGui() {
-		ImGui::ColorEdit3("Base Color"        , base_color().data());
+		ImGui::ColorEdit3("Base Color"        , baseColor().data());
 		ImGui::PushItemWidth(80);
 		ImGui::DragFloat("Emission"           , &emission());
 		ImGui::DragFloat("Metallic"           , &metallic(), 0.1, 0, 1);
@@ -45,7 +45,7 @@ struct Material {
 		ImGui::DragFloat("Anisotropic"        , &anisotropic(), 0.1, 0, 1);
 		ImGui::DragFloat("Subsurface"         , &subsurface(), 0.1, 0, 1);
 		ImGui::DragFloat("Clearcoat"          , &clearcoat(), 0.1, 0, 1);
-		ImGui::DragFloat("Clearcoat Gloss"    , &clearcoat_gloss(), 0.1, 0, 1);
+		ImGui::DragFloat("Clearcoat Gloss"    , &clearcoatGloss(), 0.1, 0, 1);
 		ImGui::DragFloat("Transmission"       , &transmission(), 0.1, 0, 1);
 		ImGui::DragFloat("Index of Refraction", &eta(), 0.1, 0, 2);
 		if (mBumpImage) ImGui::DragFloat("Bump Strength", &mBumpStrength, 0.1, 0, 10);
@@ -73,7 +73,7 @@ struct Medium {
 	float mAnisotropy;
 	float3 mAlbedoScale;
 	float mAttenuationUnit;
-	nanovdb::GridHandle<nanovdb::HostBuffer> mDensityGrid, mAlbedoGrid;
+	shared_ptr<nanovdb::GridHandle<nanovdb::HostBuffer>> mDensityGrid, mAlbedoGrid;
 	Buffer::View<byte> mDensityBuffer, mAlbedoBuffer;
 
 	inline void store(ByteAppendBuffer& bytes, MaterialResources& resources) const {

@@ -4,26 +4,24 @@
 #include <imgui/imgui.h> // materials have ImGui calls
 
 #include <Core/Mesh.hpp>
-#include <Core/ResourcePool.hpp>
-#include "Material.hpp"
+#include <Core/Pipeline.hpp>
 
 #include "SceneGraph.hpp"
+#include "Material.hpp"
 
 namespace tinyvkpt {
+
+TransformData nodeToWorld(const Node& node);
 
 struct MeshPrimitive {
 	shared_ptr<Material> mMaterial;
 	shared_ptr<Mesh> mMesh;
 };
+
 struct SpherePrimitive {
 	shared_ptr<Material> mMaterial;
 	float mRadius;
 };
-
-TransformData nodeToWorld(const Node& node);
-
-Mesh loadSerialized(CommandBuffer& commandBuffer, const filesystem::path& filename, int shape_idx = -1);
-Mesh loadObj(CommandBuffer& commandBuffer, const filesystem::path& filename);
 
 struct Camera {
 	ProjectionData mProjection;
@@ -45,10 +43,10 @@ class Scene {
 public:
 	struct RenderResources : public Device::Resource {
 		Buffer::View<byte> mAccelerationStructureBuffer;
-		vk::raii::AccelerationStructureKHR mAccelerationStructure;
+		shared_ptr<vk::raii::AccelerationStructureKHR> mAccelerationStructure;
 
 		unordered_map<const void* /* address of component */, pair<TransformData, uint32_t /* instance index */ >> mInstanceTransformMap;
-		vector<shared_ptr<Node>> mInstanceNodes;
+		vector<NodePtr> mInstanceNodes;
 
 		Buffer::View<PackedVertexData> mVertices;
 		Buffer::View<byte> mIndices;
@@ -64,36 +62,41 @@ public:
 		uint32_t mEnvironmentMaterialAddress;
 		uint32_t mMaterialCount;
 		uint32_t mEmissivePrimitiveCount;
+
+		RenderResources(Scene& scene, CommandBuffer& commandBuffer, const shared_ptr<RenderResources>& prevFrame = {});
+		RenderResources(const RenderResources&) = default;
+		RenderResources(RenderResources&&) = default;
+		RenderResources& operator=(const RenderResources&) = default;
+		RenderResources& operator=(RenderResources&&) = default;
 	};
 
 	Scene(Device& device);
 
-	void drawGui();
-
 	void createPipelines();
 
 	inline const shared_ptr<RenderResources>& resources() const { return mResources; }
+	inline const NodePtr& node() const { return mRootNode; }
+
+	void drawGui();
 
 	inline void markDirty() { mUpdateOnce = true; }
 	void update(CommandBuffer& commandBuffer, const float deltaTime);
 
-	void loadEnvironmentMap(Node& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
-	void loadGltf(Node& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
-	void loadMitsuba(Node& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
-	void loadVol(Node& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
-	void loadNvdb(Node& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
+	NodePtr loadEnvironmentMap(CommandBuffer& commandBuffer, const filesystem::path& filename);
+	NodePtr loadGltf(CommandBuffer& commandBuffer, const filesystem::path& filename);
+	NodePtr loadVol(CommandBuffer& commandBuffer, const filesystem::path& filename);
+	NodePtr loadNvdb(CommandBuffer& commandBuffer, const filesystem::path& filename);
 #ifdef STRATUM_ENABLE_ASSIMP
-	void loadAssimp(Node& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
+	NodePtr loadAssimp(CommandBuffer& commandBuffer, const filesystem::path& filename);
 #endif
 #ifdef STRATUM_ENABLE_OPENVDB
-	void loadVdb(Node& root, CommandBuffer& commandBuffer, const filesystem::path& filename);
+	NodePtr loadVdb(CommandBuffer& commandBuffer, const filesystem::path& filename);
 #endif
 
 	inline vector<string> loaderFilters() {
 		return {
 			"All Files", "*",
 			"Environment Maps (.exr .hdr)", "*.exr *.hdr",
-			"Mitsuba Scenes (.xml)", "*.xml",
 			"glTF Scenes (.gltf .glb)", "*.gltf *.glb",
 			"Mitsuba Volumes (.vol)" , "*.vol",
 			"NVDB Volume (.nvdb)" , "*.nvdb",
@@ -109,24 +112,23 @@ public:
 	#endif
 		};
 	}
-	inline void load(Node& root, CommandBuffer& commandBuffer, const filesystem::path& filename) {
+	inline NodePtr load(CommandBuffer& commandBuffer, const filesystem::path& filename) {
 		const string& ext = filename.extension().string();
-		if (ext == ".hdr") loadEnvironmentMap(root, commandBuffer, filename);
-		else if (ext == ".exr") loadEnvironmentMap(root, commandBuffer, filename);
-		else if (ext == ".xml") loadMitsuba(root, commandBuffer, filename);
-		else if (ext == ".gltf") loadGltf(root, commandBuffer, filename);
-		else if (ext == ".glb") loadGltf(root, commandBuffer, filename);
-		else if (ext == ".vol") loadVol(root, commandBuffer, filename);
-		else if (ext == ".nvdb") loadNvdb(root, commandBuffer, filename);
+		if      (ext == ".hdr") loadEnvironmentMap(commandBuffer, filename);
+		else if (ext == ".exr") loadEnvironmentMap(commandBuffer, filename);
+		else if (ext == ".gltf") loadGltf(commandBuffer, filename);
+		else if (ext == ".glb") loadGltf(commandBuffer, filename);
+		else if (ext == ".vol") loadVol(commandBuffer, filename);
+		else if (ext == ".nvdb") loadNvdb(commandBuffer, filename);
 	#ifdef STRATUM_ENABLE_ASSIMP
-		else if (ext == ".fbx") loadAssimp(root, commandBuffer, filename);
-		else if (ext == ".obj") loadAssimp(root, commandBuffer, filename);
-		else if (ext == ".blend") loadAssimp(root, commandBuffer, filename);
-		else if (ext == ".ply") loadAssimp(root, commandBuffer, filename);
-		else if (ext == ".stl") loadAssimp(root, commandBuffer, filename);
+		else if (ext == ".fbx") loadAssimp(commandBuffer, filename);
+		else if (ext == ".obj") loadAssimp(commandBuffer, filename);
+		else if (ext == ".blend") loadAssimp(commandBuffer, filename);
+		else if (ext == ".ply") loadAssimp(commandBuffer, filename);
+		else if (ext == ".stl") loadAssimp(commandBuffer, filename);
 	#endif
 	#ifdef STRATUM_ENABLE_OPENVDB
-		else if (ext == ".vdb") loadVdb(root, commandBuffer, filename)
+		else if (ext == ".vdb") loadVdb(commandBuffer, filename)
 	#endif
 		else
 			throw runtime_error("unknown extension:" + ext);
@@ -138,21 +140,21 @@ public:
 	Material makeDiffuseSpecularMaterial(CommandBuffer& commandBuffer, const ImageValue3& diffuse, const ImageValue3& specular, const ImageValue1& roughness, const ImageValue3& transmission, const float eta, const ImageValue3& emission);
 
 private:
-	using MeshBLAS = tuple<shared_ptr<vk::raii::AccelerationStructureKHR>, Buffer::View<byte> /* acceleration structure buffer */, Buffer::StrideView /* indices */ >;
+	using AccelerationStructureData = pair<shared_ptr<vk::raii::AccelerationStructureKHR>, Buffer::View<byte> /* acceleration structure buffer */>;
 
-	unordered_map<size_t, pair<shared_ptr<vk::raii::AccelerationStructureKHR>, Buffer::View<byte>>> mAABBs;
+	NodePtr mRootNode;
 
-	unordered_map<Mesh*, Buffer::View<PackedVertexData>> mMeshVertices;
-	unordered_map<size_t, MeshBLAS> mMeshAccelerationStructures;
+	unordered_map<size_t, AccelerationStructureData> mAABBs;
+	unordered_map<size_t, AccelerationStructureData> mMeshAccelerationStructures;
 
 	ResourcePool<RenderResources> mResourcePool;
 	shared_ptr<RenderResources> mResources;
 
-	shared_ptr<ComputePipelineContext> mCopyVerticesPipeline;
-	shared_ptr<ComputePipelineContext> mConvertAlphaToRoughnessPipeline;
-	shared_ptr<ComputePipelineContext> mConvertShininessToRoughnessPipeline;
-	shared_ptr<ComputePipelineContext> mConvertPbrPipeline;
-	shared_ptr<ComputePipelineContext> mConvertDiffuseSpecularPipeline;
+	ComputePipelineCache mCopyVerticesPipeline;
+	ComputePipelineCache mConvertAlphaToRoughnessPipeline;
+	ComputePipelineCache mConvertShininessToRoughnessPipeline;
+	ComputePipelineCache mConvertPbrPipeline;
+	ComputePipelineCache mConvertDiffuseSpecularPipeline;
 
 	vector<string> mToLoad;
 

@@ -7,27 +7,9 @@
 
 namespace tinyvkpt {
 
-struct ShaderSource {
-public:
-	inline ShaderSource(const filesystem::path& sourceFile, const string& entryPoint = "main", const string& profile = "sm_6_6", const vector<string>& compileArgs = {})
-		: mSourceFile(sourceFile), mEntryPoint(entryPoint), mShaderProfile(profile), mCompileArgs(compileArgs) {
-		if (!filesystem::exists(mSourceFile))
-			throw runtime_error(mSourceFile.string() + " does not exist");
-	}
+using Defines = unordered_map<string, string>;
 
-	inline const filesystem::path& sourceFile() const { return mSourceFile; }
-	inline const string& entryPoint() const { return mEntryPoint; }
-	inline const string& profile() const { return mShaderProfile; }
-	inline const vector<string>& compileArgs() const { return mCompileArgs; }
-
-private:
-	filesystem::path mSourceFile;
-	string mEntryPoint;
-	string mShaderProfile;
-	vector<string> mCompileArgs;
-};
-
-struct Shader : Device::Resource {
+class Shader : public Device::Resource {
 public:
 	struct DescriptorBinding {
 		uint32_t mSet;
@@ -47,16 +29,13 @@ public:
 		uint32_t mSemanticIndex;
 	};
 
-	Shader(Device& device, const ShaderSource& source, const unordered_map<string, string>& defines = {})
-		: Device::Resource(device, source.sourceFile().stem().string() + "_" + source.entryPoint() + "/Specialization"), mSource(source), mModule(nullptr) {
-		compile(defines);
-	}
+	Shader(Device& device, const filesystem::path& sourceFile, const string& entryPoint = "main", const string& profile = "sm_6_7", const vector<string>& compileArgs = {}, const Defines& defines = {});
 	Shader(Shader&&) = default;
 	Shader& operator=(Shader&&) = default;
 
-	inline const ShaderSource& source() const { return mSource; }
+	DECLARE_DEREFERENCE_OPERATORS(vk::raii::ShaderModule, mModule)
+
 	inline const vk::ShaderStageFlagBits& stage() const { return mStage; }
-	inline const vk::raii::ShaderModule& module() const { return mModule; }
 	inline const unordered_map<string, DescriptorBinding>& descriptorMap() const { return mDescriptorMap; }
 	inline const unordered_map<string, PushConstant>& pushConstants() const { return mPushConstants; }
 	inline const unordered_map<string, Variable>& inputVariables() const { return mInputVariables; }
@@ -64,16 +43,14 @@ public:
 	inline const vk::Extent3D& workgroupSize() const { return mWorkgroupSize; }
 
 private:
-	ShaderSource mSource;
-	vk::ShaderStageFlagBits mStage;
 	vk::raii::ShaderModule mModule;
+
+	vk::ShaderStageFlagBits mStage;
 	unordered_map<string, DescriptorBinding> mDescriptorMap;
 	unordered_map<string, PushConstant> mPushConstants;
 	unordered_map<string, Variable> mInputVariables;
 	unordered_map<string, Variable> mOutputVariables;
 	vk::Extent3D mWorkgroupSize;
-
-	void compile(const unordered_map<string, string>& defines);
 };
 
 }

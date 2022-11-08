@@ -4,7 +4,6 @@
 #include "CommandBuffer.hpp"
 #include "Profiler.hpp"
 
-#include <iostream>
 #include <algorithm>
 
 namespace tinyvkpt {

@@ -2,7 +2,6 @@
 #include "Instance.hpp"
 
 #include <stdexcept>
-#include <iostream>
 
 // vulkan.h needed by glfw.h
 #include <vulkan/vulkan.h>
@@ -12,22 +11,27 @@ namespace tinyvkpt {
 
 void Window::windowSizeCallback(GLFWwindow* window, int width, int height) {
 	Window* w = (Window*)glfwGetWindowUserPointer(window);
-
+	w->mClientExtent = vk::Extent2D{ (uint32_t)width, (uint32_t)height };
 }
 void Window::keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-    if (key == GLFW_KEY_E && action == GLFW_PRESS) {
-
-	}
+	Window* w = (Window*)glfwGetWindowUserPointer(window);
+	if (action == GLFW_PRESS || action == GLFW_REPEAT)
+		w->mInputState.mButtons.emplace(key);
+	else if (action == GLFW_RELEASE)
+		w->mInputState.mButtons.erase(key);
 }
 void Window::characterCallback(GLFWwindow* window, unsigned int codepoint) {
-
+	Window* w = (Window*)glfwGetWindowUserPointer(window);
+	w->mInputState.mInputCharacters.push_back(codepoint);
 }
-void Window::cursor_positionCallback(GLFWwindow* window, double x, double y) {
-	// x,y relative to window
-
+void Window::cursorPositionCallback(GLFWwindow* window, double x, double y) {
+	Window* w = (Window*)glfwGetWindowUserPointer(window);
+	w->mInputState.mCursorPos = float2((float)x, (float)y);
 }
 void Window::dropCallback(GLFWwindow* window, int count, const char** paths) {
-
+	Window* w = (Window*)glfwGetWindowUserPointer(window);
+	for (int i = 0; i < count; i++)
+		w->mInputState.mInputFiles.emplace_back(paths[i]);
 }
 
 void errorCallback(int code, const char* msg) {
@@ -56,7 +60,7 @@ Window::Window(Instance& instance, const string& title, const vk::Extent2D& exte
 	glfwSetFramebufferSizeCallback(mWindow, Window::windowSizeCallback);
 	glfwSetKeyCallback            (mWindow, Window::keyCallback);
 	glfwSetCharCallback           (mWindow, Window::characterCallback);
-	glfwSetCursorPosCallback      (mWindow, Window::cursor_positionCallback);
+	glfwSetCursorPosCallback      (mWindow, Window::cursorPositionCallback);
 	glfwSetDropCallback           (mWindow, Window::dropCallback);
 }
 Window::~Window() {

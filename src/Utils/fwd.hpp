@@ -6,15 +6,13 @@ namespace tinyvkpt {
 
 	class CommandBuffer;
 	class Device;
-	class Gui;
+	class Buffer;
 	class Image;
 	class Instance;
 	class Mesh;
 	class ComputePipeline;
-	class ComputePipelineContext;
 	class Profiler;
 	class Shader;
-	class ShaderSource;
 	class Swapchain;
 	class Window;
 };

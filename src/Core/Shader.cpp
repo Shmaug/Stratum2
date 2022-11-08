@@ -1,13 +1,18 @@
 #include "Shader.hpp"
 #include "Instance.hpp"
 
-#include <iostream>
+#include <Utils/hash.hpp>
 
 #include <slang/slang.h>
 
 namespace tinyvkpt {
 
-void Shader::compile(const unordered_map<string, string>& defines) {
+Shader::Shader(Device& device, const filesystem::path& sourceFile, const string& entryPoint, const string& profile, const vector<string>& compileArgs, const unordered_map<string, string>& defines)
+	: Device::Resource(device, sourceFile.stem().string() + "_" + entryPoint), mModule(nullptr) {
+
+	if (!filesystem::exists(sourceFile))
+		throw runtime_error(sourceFile.string() + " does not exist");
+
 	slang::IGlobalSession* session;
 	slang::createGlobalSession(&session);
 
@@ -17,7 +22,7 @@ void Shader::compile(const unordered_map<string, string>& defines) {
 	// process compile args
 
 	vector<const char*> args;
-	for (const string& arg : mSource.compileArgs()) args.emplace_back(arg.c_str());
+	for (const string& arg : compileArgs) args.emplace_back(arg.c_str());
 	if (SLANG_FAILED(request->processCommandLineArguments(args.data(), args.size())))
 		cerr << "Warning: Failed to process compile arguments while compiling " << resourceName() << endl;
 
@@ -35,17 +40,17 @@ void Shader::compile(const unordered_map<string, string>& defines) {
 		request->addSearchPath(inc.c_str());
 
 	const int translationUnitIndex = request->addTranslationUnit(SLANG_SOURCE_LANGUAGE_SLANG, nullptr);
-	request->addTranslationUnitSourceFile(translationUnitIndex, mSource.sourceFile().string().c_str());
+	request->addTranslationUnitSourceFile(translationUnitIndex, sourceFile.string().c_str());
 
-	const int entryPointIndex = request->addEntryPoint(translationUnitIndex, mSource.entryPoint().c_str(), SLANG_STAGE_NONE);
-	request->setTargetProfile(targetIndex, session->findProfile(mSource.profile().c_str()));
+	const int entryPointIndex = request->addEntryPoint(translationUnitIndex, entryPoint.c_str(), SLANG_STAGE_NONE);
+	request->setTargetProfile(targetIndex, session->findProfile(profile.c_str()));
 	request->setTargetFloatingPointMode(targetIndex, SLANG_FLOATING_POINT_MODE_FAST);
 
 	// compile
 
 	SlangResult r = request->compile();
 	const char* msg = request->getDiagnosticOutput();
-	cout << "Compiled " << mSource.sourceFile() << " " << mSource.entryPoint() << " " << msg << endl;
+	cout << "Compiled " << sourceFile << " " << entryPoint << " " << msg << endl;
 	if (SLANG_FAILED(r))
 		throw runtime_error(msg);
 

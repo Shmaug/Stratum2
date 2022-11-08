@@ -22,7 +22,22 @@ public:
 	inline vk::BufferUsageFlags usage() const { return mUsage; }
 	inline vk::MemoryPropertyFlags memoryUsage() const { return mMemoryFlags; }
 	inline vk::SharingMode sharingMode() const { return mSharingMode; }
+#if VK_KHR_buffer_device_address
 	inline vk::DeviceSize deviceAddress() const { return mDevice->getBufferAddress(mBuffer); }
+#endif
+
+	// note: does NOT call commandBuffer.trackResource
+	void barrier(CommandBuffer& commandBuffer,
+		const vk::PipelineStageFlags srcStage, const vk::PipelineStageFlags dstStage,
+		const vk::AccessFlags srcAccess, const vk::AccessFlags dstAccess,
+		const uint32_t srcQueue = VK_QUEUE_FAMILY_IGNORED, const uint32_t dstQueue = VK_QUEUE_FAMILY_IGNORED,
+		const vk::DeviceSize offset = 0, const vk::DeviceSize size = VK_WHOLE_SIZE) const;
+
+	// note: does NOT call commandBuffer.trackResource
+	void fill(CommandBuffer& commandBuffer, const uint32_t data, const vk::DeviceSize offset = 0, const vk::DeviceSize size = VK_WHOLE_SIZE) const;
+
+	void copyToImage(CommandBuffer& commandBuffer, const shared_ptr<Image>& dst, const vk::DeviceSize offset = 0) const;
+	void copyToImage(CommandBuffer& commandBuffer, const shared_ptr<Image>& dst, const vk::ArrayProxy<vk::BufferImageCopy>& copies) const;
 
 	template<typename T = byte>
 	class View {
@@ -71,6 +86,19 @@ public:
 		}
 #endif
 
+		inline void barrier(CommandBuffer& commandBuffer,
+			const vk::PipelineStageFlags srcStage, const vk::PipelineStageFlags dstStage,
+			const vk::AccessFlags srcAccess, const vk::AccessFlags dstAccess,
+			const uint32_t srcQueue = VK_QUEUE_FAMILY_IGNORED, const uint32_t dstQueue = VK_QUEUE_FAMILY_IGNORED) const {
+			mBuffer->barrier(commandBuffer, srcStage, dstStage, srcAccess, dstAccess, srcQueue, dstQueue, offset(), sizeBytes());
+		}
+		inline void fill(CommandBuffer& commandBuffer, const uint32_t value) const {
+			mBuffer->fill(commandBuffer, value, offset(), sizeBytes());
+		}
+		inline void copyToImage(CommandBuffer& commandBuffer, const shared_ptr<Image>& dst) const {
+			mBuffer->copyToImage(commandBuffer, dst, offset());
+		}
+
 		inline T& at(size_type index) const { return data()[index]; }
 		inline T& operator[](size_type index) const { return at(index); }
 
@@ -118,6 +146,13 @@ public:
 			return Buffer::View<T>(buffer(), offset(), sizeBytes() / sizeof(T));
 		}
 	};
+
+	static void barriers(CommandBuffer& commandBuffer, const vector<Buffer::View<byte>>& buffers,
+		const vk::PipelineStageFlags srcStage, const vk::PipelineStageFlags dstStage,
+		const vk::AccessFlags srcAccess, const vk::AccessFlags dstAccess,
+		const uint32_t srcQueue = VK_QUEUE_FAMILY_IGNORED, const uint32_t dstQueue = VK_QUEUE_FAMILY_IGNORED);
+
+	static void copy(CommandBuffer& commandBuffer, const Buffer::View<byte>& src, const Buffer::View<byte>& dst);
 
 private:
 	vk::Buffer mBuffer;

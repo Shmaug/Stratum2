@@ -6,7 +6,6 @@ project(tinyvkpt)
 
 find_package(Vulkan REQUIRED)
 find_package(assimp CONFIG)
-find_package(OpenXR CONFIG)
 find_package(OpenVDB CONFIG)
 
 
@@ -50,7 +49,6 @@ file(GLOB_RECURSE GLOBBED_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/src/**.cpp")
 list(APPEND STRATUM_SOURCE ${GLOBBED_SRCS})
 list(APPEND STRATUM_SOURCE
 	"${CMAKE_CURRENT_SOURCE_DIR}/extern/miniz.c"
-	"${CMAKE_CURRENT_SOURCE_DIR}/extern/pugixml.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/extern/imgui/imgui_draw.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/extern/imgui/imgui_widgets.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/extern/imgui/imgui_tables.cpp"
@@ -72,11 +70,11 @@ endif()
 
 configure_file("${CMAKE_CURRENT_LIST_DIR}/extern/imgui/misc/fonts/DroidSans.ttf" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/DroidSans.ttf" COPYONLY)
 
-# Link dependencies
-
-include_directories(extern/glfw/deps)
+# compile GLFW
 add_subdirectory(extern/glfw)
+include_directories(extern/glfw/deps)
 
+# Link dependencies
 target_include_directories(${TARGET_NAME} PUBLIC extern/glfw/include)
 target_link_libraries(${TARGET_NAME} PUBLIC Vulkan::Vulkan glfw)
 
@@ -107,12 +105,6 @@ if (assimp_FOUND)
 	endif()
     target_compile_definitions(${TARGET_NAME} PUBLIC ENABLE_ASSIMP)
     message(STATUS "Assimp enabled")
-endif()
-
-if (OpenXR_FOUND)
-    target_link_libraries(${TARGET_NAME} PUBLIC OpenXR::openxr_loader)
-    target_compile_definitions(${TARGET_NAME} PUBLIC ENABLE_OPENXR XR_USE_GRAPHICS_API_VULKAN)
-    message(STATUS "OpenXR enabled")
 endif()
 
 if (OpenVDB_FOUND)

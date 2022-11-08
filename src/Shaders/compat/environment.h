@@ -68,7 +68,7 @@ inline Environment loadEnvironment(CommandBuffer& commandBuffer, const filesyste
 	//ImageData image = loadImageData(commandBuffer.mDevice, filename, false);
 	shared_ptr<Image> image; //= make_shared<Image>(commandBuffer, filename.stem().string(), filename);
 	Environment e;
-	e.emission = ImageValue3(float3::Ones(), Image::View(image, vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, image->levels(), 0, image->layers())));
+	e.emission = ImageValue3(float3::Ones(), image);
 	return e;
 }
 

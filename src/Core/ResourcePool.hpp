@@ -12,7 +12,7 @@ private:
 public:
 	inline void clear() {
 		mInFlight.clear();
-		mAvailable.clear();
+		mAvailable = {};
 	}
 
 	inline size_t size() const {
@@ -20,13 +20,13 @@ public:
 	}
 
 	inline shared_ptr<T> get() {
-		shared_ptr<T> ret;
+		shared_ptr<T> r;
 
 		// return available resource, if any
 		if (!mAvailable.empty()) {
-			ret = mAvailable.top();
+			r = mAvailable.top();
 			mAvailable.pop();
-			return ret;
+			return r;
 		}
 
 		for (auto it = mInFlight.begin(); it != mInFlight.end(); ) {
@@ -37,14 +37,14 @@ public:
 			}
 
 			// return the first available resource, store other available resources in mAvailable
-			if (!ret)
-				ret = *it; // returned resource stays in-flight
+			if (!r)
+				r = *it; // returned resource stays in-flight
 			else
 				mAvailable.push(*it);
 			it = mInFlight.erase(it);
 		}
 
-		return ret;
+		return r;
 	}
 
 	inline shared_ptr<T>& emplace(const shared_ptr<T>& v) {
