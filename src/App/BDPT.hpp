@@ -11,17 +11,19 @@ struct HashGridData;
 
 class BDPT {
 public:
+	Node& mNode;
+
+	BDPT(Node& node);
+
 	void createPipelines(Device& device);
 
 	void drawGui();
 	void update(CommandBuffer& commandBuffer, const float deltaTime);
-	void render(CommandBuffer& commandBuffer, const Image::View& renderTarget, const vector<pair<ViewData,TransformData>>& views);
+	void render(CommandBuffer& commandBuffer, const Image::View& renderTarget);
 
 	inline Image::View prevResult() { return mPrevFrame ? mPrevFrame->mTonemapResult : Image::View(); }
 
 private:
-	Node& mNode;
-
 	enum RenderPipelineIndex {
 		eSamplePhotons,
 		eSampleVisibility,
@@ -60,6 +62,7 @@ private:
 	class FrameResources : public Device::Resource {
 	public:
 		inline FrameResources(Device& device) : Device::Resource(device, "BDPT frame resources") {}
+
 		Descriptors mSceneDescriptors;
 		shared_ptr<DescriptorSets> mDescriptors;
 
@@ -85,7 +88,7 @@ private:
 		uint32_t mFrameNumber;
 	};
 
-	ResourcePool<FrameResources> mFrameResourcePool;
+	DeviceResourcePool<FrameResources> mFrameResourcePool;
 	shared_ptr<FrameResources> mCurFrame, mPrevFrame;
 };
 

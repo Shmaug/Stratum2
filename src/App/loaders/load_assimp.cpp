@@ -72,7 +72,7 @@ NodePtr Scene::loadAssimp(CommandBuffer& commandBuffer, const filesystem::path& 
 
 		cout << "Loading materials...";
 
-		const NodePtr materials_node = root.makeChild("materials");
+		const NodePtr materials_node = root.addChild("materials");
 		for (int i = 0; i < scene->mNumMaterials; i++) {
 			cout << "\rLoading materials " << (i+1) << "/" << scene->mNumMaterials << "     ";
 

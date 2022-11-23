@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Device.hpp"
+#include "CommandBuffer.hpp"
 
 #include <Utils/hash.hpp>
 
@@ -94,9 +94,11 @@ public:
 		}
 		inline void fill(CommandBuffer& commandBuffer, const uint32_t value) const {
 			mBuffer->fill(commandBuffer, value, offset(), sizeBytes());
+			commandBuffer.trackResource(mBuffer);
 		}
 		inline void copyToImage(CommandBuffer& commandBuffer, const shared_ptr<Image>& dst) const {
 			mBuffer->copyToImage(commandBuffer, dst, offset());
+			commandBuffer.trackResource(mBuffer);
 		}
 
 		inline T& at(size_type index) const { return data()[index]; }

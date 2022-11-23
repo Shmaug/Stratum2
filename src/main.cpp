@@ -7,122 +7,175 @@
 
 #include <App/Gui.hpp>
 #include <App/Scene.hpp>
+#include <App/Inspector.hpp>
+#include <App/BDPT.hpp>
+#include <App/FlyCamera.hpp>
 
 #include <GLFW/glfw3.h>
 
 using namespace tinyvkpt;
 
 struct App {
-	unique_ptr<Instance> mInstance;
-	unique_ptr<Window> mWindow;
+	shared_ptr<Node> mRootNode;
+
+	shared_ptr<Instance> mInstance;
+	shared_ptr<Window> mWindow;
 	shared_ptr<Device> mDevice;
 	uint32_t mPresentQueueFamily;
 	vk::raii::Queue mPresentQueue;
 
+	shared_ptr<Node> mSwapchainNode;
 	shared_ptr<Swapchain> mSwapchain;
 	shared_ptr<Gui> mGui;
+	shared_ptr<Inspector> mInspector;
+	shared_ptr<Scene> mScene;
 
-	NodePtr mRootNode;
+	shared_ptr<BDPT> mRenderer;
 
-	int mProfilerHistoryCount = 5;
+	shared_ptr<FlyCamera> mFlyCamera;
+	shared_ptr<Camera> mCamera;
 
-	float3 mBias = float3::Zero();
-	float mExposure = 0;
+	chrono::high_resolution_clock::time_point mLastUpdate;
+	int mProfilerHistoryCount = 3;
 
 	inline App(const vector<string>& args) : mPresentQueue(nullptr) {
-		mInstance     = make_unique<Instance>(args);
-		mWindow       = make_unique<Window>(*mInstance, "tinyvkpt", vk::Extent2D{ 1600, 900 });
-
-		auto[physicalDevice, presentQueueFamily] = mWindow->findPhysicalDevice();
-
-		mDevice       = make_shared<Device>(*mInstance, physicalDevice);
-		mPresentQueue = vk::raii::Queue(**mDevice, presentQueueFamily, 0);
-		mSwapchain    = make_shared<Swapchain>(*mDevice, "tinyvkpt/Swapchain", *mWindow, 2, vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eColorAttachment);
-		mGui          = make_shared<Gui>(*mSwapchain, mPresentQueue, presentQueueFamily, vk::ImageLayout::ePresentSrcKHR, true);
-
 		mRootNode = Node::create("Root");
-		mRootNode->addComponent(mDevice);
-		mRootNode->addComponent(mSwapchain);
-		mRootNode->addComponent(mGui);
+		mInstance = mRootNode->makeComponent<Instance>(args);
+
+		const shared_ptr<Node> deviceNode = mRootNode->addChild("Device");
+		mWindow = deviceNode->makeComponent<Window>(*mInstance, "tinyvkpt", vk::Extent2D{ 1600, 900 });
+
+		vk::raii::PhysicalDevice physicalDevice = nullptr;
+		tie(physicalDevice, mPresentQueueFamily) = mWindow->findPhysicalDevice();
+
+		mDevice       = deviceNode->makeComponent<Device>(*mInstance, physicalDevice);
+		mPresentQueue = vk::raii::Queue(**mDevice, mPresentQueueFamily, 0);
+
+		mSwapchainNode = deviceNode->addChild("Swapchain");
+		mSwapchain     = mSwapchainNode->makeComponent<Swapchain>(*mDevice, "tinyvkpt/Swapchain", *mWindow, 2, vk::ImageUsageFlagBits::eTransferDst|vk::ImageUsageFlagBits::eColorAttachment);
+
+		mGui = make_shared<Gui>(*mSwapchain, mPresentQueue, mPresentQueueFamily, vk::ImageLayout::ePresentSrcKHR, false);
+		mInspector = mSwapchainNode->makeComponent<Inspector>(*mSwapchainNode);
+
+		auto sceneNode = deviceNode->addChild("Scene");
+		mScene = sceneNode->makeComponent<Scene>(*sceneNode);
+		mRenderer = sceneNode->makeComponent<BDPT>(*sceneNode);
+
+		auto cameraNode = sceneNode->addChild("Camera");
+		cameraNode->makeComponent<TransformData>( float3::Zero(), quatf_identity(), float3::Ones() );
+		mFlyCamera = cameraNode->makeComponent<FlyCamera>(*cameraNode);
+		mCamera = cameraNode->makeComponent<Camera>();
+
+		mLastUpdate = chrono::high_resolution_clock::now();
 	}
 	inline ~App() {
 		(*mDevice)->waitIdle();
-		glfwTerminate();
 	}
 
-	inline void update() {
-		ProfilerScope ps("App::update");
-		mGui->newFrame();
+	inline void drawGui() {
+		ProfilerScope ps("App::drawGui");
+
+		// profiler timings
 
 		if (ImGui::Begin("vkpt")) {
 			Profiler::frameTimesGui();
 
-			ImGui::SliderInt("Count", &mProfilerHistoryCount, 1, 256);
+			ImGui::SliderInt("Count", &mProfilerHistoryCount, 1, 32);
 			ImGui::PushID("Show timeline");
 			if (ImGui::Button(Profiler::hasHistory() ? "Hide timeline" : "Show timeline"))
 				Profiler::resetHistory(Profiler::hasHistory() ? 0 : mProfilerHistoryCount);
 			ImGui::PopID();
 
-			ImGui::DragFloat3("Bias", mBias.data());
-			ImGui::DragFloat("Exposure", &mExposure);
-
-			ImGui::Text("%u Back buffers", mSwapchain->backBufferCount());
+			ImGui::Text("%u Back buffers", mSwapchain->imageCount());
 		}
 		ImGui::End();
+
+		// frame timeline
 
 		if (Profiler::hasHistory()) {
 			if (ImGui::Begin("Timeline"))
 				Profiler::sampleTimelineGui();
 			ImGui::End();
 		}
-		ImGui::ShowDemoWindow();
 	}
 
-	// returns semaphore which signals when rendering completes
-	inline shared_ptr<vk::raii::Semaphore> render() {
-		ProfilerScope ps("App::render");
-		Device& device = mSwapchain->mDevice;
+	inline void update(CommandBuffer& commandBuffer) {
+		auto now = chrono::high_resolution_clock::now();
+		const float deltaTime = chrono::duration_cast<chrono::duration<float>>(now - mLastUpdate).count();
+		mLastUpdate = now;
 
-		// build commandBuffer
+		mGui->newFrame();
 
-		shared_ptr<CommandBuffer> commandBufferPtr = device.getCommandBuffer(mPresentQueueFamily);
+		drawGui();
+		mInspector->draw();
+
+		mScene->update(commandBuffer, deltaTime);
+		mRenderer->update(commandBuffer, deltaTime);
+		mFlyCamera->update(deltaTime);
+	}
+	inline void render(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
+		// force camera projection aspect ratio to match renderTarget apsect ratio
+		mCamera->mImageRect = vk::Rect2D{ { 0, 0 }, vk::Extent2D(renderTarget.extent().width, renderTarget.extent().height) };
+		const float aspect = mCamera->mImageRect.extent.height / (float)mCamera->mImageRect.extent.width;
+		if (abs(mCamera->mProjection.scale[0] / mCamera->mProjection.scale[1] - aspect) > 1e-5) {
+			const float fovy = 2 * atan(1 / mCamera->mProjection.scale[1]);
+			mCamera->mProjection = make_perspective(fovy, aspect, mCamera->mProjection.offset, mCamera->mProjection.near_plane);
+		}
+
+		mRenderer->render(commandBuffer, renderTarget);
+		mGui->render(commandBuffer, renderTarget);
+	}
+
+	// returns semaphore which signals when commands/rendering completes
+	inline void doFrame() {
+		ProfilerScope ps("App::doFrame");
+
+		shared_ptr<CommandBuffer> commandBufferPtr = mDevice->getCommandBuffer(mPresentQueueFamily);
 		CommandBuffer& commandBuffer = *commandBufferPtr;
 		commandBuffer->begin(vk::CommandBufferBeginInfo());
 
-		Image::View renderTarget(mSwapchain->backBuffer(), vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
-		mGui->render(commandBuffer, renderTarget, vk::ClearColorValue(array<float,4>{0.f,0.f,0.f,1.f}));
+		update(commandBuffer);
+		render(commandBuffer, Image::View(mSwapchain->image(), vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1)));
 
 		commandBuffer->end();
 
-		// submit commandBuffer
-
 		pair<shared_ptr<vk::raii::Semaphore>, vk::PipelineStageFlags> waitSemaphore { mSwapchain->imageAvailableSemaphore(), vk::PipelineStageFlagBits::eComputeShader };
-		shared_ptr<vk::raii::Semaphore> signalSemaphore = make_shared<vk::raii::Semaphore>(*device, vk::SemaphoreCreateInfo());
+		shared_ptr<vk::raii::Semaphore> signalSemaphore = make_shared<vk::raii::Semaphore>(**mDevice, vk::SemaphoreCreateInfo());
 		commandBuffer.trackVulkanResource(signalSemaphore);
-		device.submit(mPresentQueue, commandBufferPtr, waitSemaphore, signalSemaphore);
-		return signalSemaphore;
+		mDevice->submit(mPresentQueue, commandBufferPtr, waitSemaphore, signalSemaphore);
+
+		// present
+
+		mSwapchain->present(mPresentQueue, signalSemaphore);
+
+		commandBuffer.trackVulkanResource(mSwapchain->imageAvailableSemaphore());
 	}
 
 	inline void run() {
 		// main loop
 		while (mWindow->isOpen()) {
+			glfwPollEvents();
+
 			Profiler::beginFrame();
 
 			mDevice->updateFrame();
 
-			bool swapchainValid = true;
-			if (mSwapchain->dirty() || mWindow->extent() != mSwapchain->extent()) {
+			// recreate swapchain if needed
+
+			if (mSwapchain->isDirty()) {
+				if (!mSwapchain->create())
+					continue;
+
+				// recreate swapchain-dependent resources
 				(*mDevice)->waitIdle();
-				swapchainValid = mSwapchain->create();
+				mGui.reset();
+				mGui = make_shared<Gui>(*mSwapchain, mPresentQueue, mPresentQueueFamily, vk::ImageLayout::ePresentSrcKHR, true);
 			}
 
-			if (swapchainValid && mSwapchain->acquireImage()) {
-				update();
-				auto semaphore = render();
-				mSwapchain->present(mPresentQueue, semaphore);
-			}
+			// do frame
 
-			glfwPollEvents();
+			if (mSwapchain->acquireImage())
+				doFrame();
 		}
 	}
 };

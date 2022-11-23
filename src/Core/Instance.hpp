@@ -22,6 +22,7 @@ public:
 
 	inline uint32_t vulkanVersion() const { return mVulkanApiVersion; }
 
+
 	inline optional<string> findArgument(const string& name) const {
 		auto[first,last] = mOptions.equal_range(name);
 		if (first == last) return nullopt;
@@ -32,6 +33,8 @@ public:
 		return ranges::subrange(first,last) | views::values;
 	}
 	inline const unordered_set<string>& validationLayers() const { return mValidationLayers; }
+
+	void drawGui();
 
 private:
 	vk::raii::Context mContext;

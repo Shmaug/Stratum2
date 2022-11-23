@@ -1,5 +1,5 @@
 Spectrum disneysheen_eval(const DisneyMaterialData bsdf, const Vector3 dir_in, const Vector3 dir_out, const Vector3 h) {
-	const Spectrum Ctint = luminance(bsdf.base_color()) > 1e-4 ? bsdf.base_color()/luminance(bsdf.base_color()) : 1;
+	const Spectrum Ctint = luminance(bsdf.baseColor()) > 1e-4 ? bsdf.baseColor()/luminance(bsdf.baseColor()) : 1;
 	const Spectrum Csheen = (1 - bsdf.sheen_tint()) + bsdf.sheen_tint()*Ctint;
 	return Csheen * pow(1 - abs(dot(h, dir_out)), 5) * abs(dir_out.z);
 }

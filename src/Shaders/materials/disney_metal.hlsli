@@ -2,8 +2,8 @@ Real disneymetal_eval_pdf(const Real D, const Real G_in, const Real cos_theta_in
 	return D * G_in / (4 * abs(cos_theta_in));
 }
 
-Spectrum disneymetal_eval(const Spectrum base_color, const Real D, const Real G, const Vector3 dir_in, const Real h_dot_out) {
-	return base_color * schlick_fresnel3(base_color, abs(h_dot_out)) * D * G / (4 * abs(dir_in.z));
+Spectrum disneymetal_eval(const Spectrum baseColor, const Real D, const Real G, const Vector3 dir_in, const Real h_dot_out) {
+	return baseColor * schlick_fresnel3(baseColor, abs(h_dot_out)) * D * G / (4 * abs(dir_in.z));
 }
 
 void disneymetal_eval(const DisneyMaterialData bsdf, out MaterialEvalRecord r, const Vector3 dir_in, const Vector3 dir_out, const bool adjoint) {
@@ -19,7 +19,7 @@ void disneymetal_eval(const DisneyMaterialData bsdf, out MaterialEvalRecord r, c
 	const Real D = Dm(alpha.x, alpha.y, h);
 	const Real G_in = G1(alpha.x, alpha.y, dir_in);
 	const Real G_out = G1(alpha.x, alpha.y, dir_out);
-	r.f = disneymetal_eval(bsdf.base_color(), D, G_in * G_out, dir_in, dot(h, dir_out));
+	r.f = disneymetal_eval(bsdf.baseColor(), D, G_in * G_out, dir_in, dot(h, dir_out));
 	r.pdf_fwd = disneymetal_eval_pdf(D, G_in, dir_in.z);
 	r.pdf_rev = disneymetal_eval_pdf(D, G_out, dir_out.z);
 }
@@ -37,7 +37,7 @@ Spectrum disneymetal_sample(const DisneyMaterialData bsdf, out MaterialSampleRec
 	r.pdf_rev = disneymetal_eval_pdf(D, G_out, r.dir_out.z);
 	r.eta = 0;
 	r.roughness = bsdf.roughness();
-	const Spectrum f = disneymetal_eval(bsdf.base_color(), D, G_in * G_out, dir_in, dot(h, r.dir_out));
+	const Spectrum f = disneymetal_eval(bsdf.baseColor(), D, G_in * G_out, dir_in, dot(h, r.dir_out));
 	beta *= f / r.pdf_fwd;
 	return f;
 }

@@ -1,5 +1,6 @@
 #include "Instance.hpp"
 
+#include <imgui/imgui.h>
 #include <GLFW/glfw3.h>
 
 namespace tinyvkpt {
@@ -106,6 +107,13 @@ Instance::Instance(const vector<string>& args) : mInstance(nullptr), mDebugMesse
 			vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation | vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance,
 			DebugCallback));
 	}
+}
+
+void Instance::drawGui() {
+	ImGui::Text("Vulkan %u.%u.%u",
+		VK_API_VERSION_MAJOR(mVulkanApiVersion),
+		VK_API_VERSION_MINOR(mVulkanApiVersion),
+		VK_API_VERSION_PATCH(mVulkanApiVersion));
 }
 
 }

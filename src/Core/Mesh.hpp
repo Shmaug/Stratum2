@@ -75,6 +75,8 @@ public:
 
 	void bind(CommandBuffer& commandBuffer) const;
 
+	void drawGui();
+
 private:
 	Vertices mVertices;
 	Buffer::StrideView mIndices;

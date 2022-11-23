@@ -1,5 +1,6 @@
 #include "Denoiser.hpp"
 #include "Gui.hpp"
+#include "Inspector.hpp"
 
 #include <Core/Instance.hpp>
 #include <Core/CommandBuffer.hpp>
@@ -11,6 +12,13 @@
 
 namespace tinyvkpt {
 
+
+Denoiser::Denoiser(Node& node) : mNode(node) {
+	if (shared_ptr<Inspector> inspector = mNode.root()->findDescendant<Inspector>())
+		inspector->setTypeCallback<Denoiser>();
+}
+
+
 void Denoiser::createPipelines(Device& device) {
 	auto samplerClamp = make_shared<vk::raii::Sampler>(*device, vk::SamplerCreateInfo({},
 		vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eLinear,
@@ -20,11 +28,11 @@ void Denoiser::createPipelines(Device& device) {
 	ComputePipeline::Metadata md;
 	md.mImmutableSamplers["gStaticSampler"] = { samplerClamp };
 
-	const string shaderPath = *device.mInstance.findArgument("shaderPath");
-	mTemporalAccumulationPipeline = ComputePipelineCache(shaderPath + "/kernels/temporal_accumulation.hlsl", "main", "cs_6_7", {}, md);
-	mEstimateVariancePipeline     = ComputePipelineCache(shaderPath + "/kernels/estimate_variance.hlsl", "main", "cs_6_7", {}, md);
-	mAtrousPipeline               = ComputePipelineCache(shaderPath + "/kernels/atrous.hlsl", "main", "cs_6_7", {}, md);
-	mCopyRGBPipeline              = ComputePipelineCache(shaderPath + "/kernels/atrous.hlsl", "copy_rgb", "cs_6_7", {}, md);
+	const filesystem::path shaderPath = *device.mInstance.findArgument("shaderKernelPath");
+	mTemporalAccumulationPipeline = ComputePipelineCache(shaderPath / "temporal_accumulation.hlsl", "main", "cs_6_7", {}, md);
+	mEstimateVariancePipeline     = ComputePipelineCache(shaderPath / "estimate_variance.hlsl", "main", "cs_6_7", {}, md);
+	mAtrousPipeline               = ComputePipelineCache(shaderPath / "atrous.hlsl", "main", "cs_6_7", {}, md);
+	mCopyRGBPipeline              = ComputePipelineCache(shaderPath / "atrous.hlsl", "copy_rgb", "cs_6_7", {}, md);
 
 	mPushConstants["gHistoryLimit"] = 0.f;
 	mPushConstants["gSigmaLuminanceBoost"] = 3.f;

@@ -38,8 +38,10 @@ void DescriptorSets::write(const Descriptors& descriptors) {
 	for (const auto& [id, descriptorValue] : descriptors) {
 		const auto& [name, arrayIndex] = id;
 		auto it = mPipeline.shader()->descriptorMap().find(name);
-		if (it == mPipeline.shader()->descriptorMap().end())
+		if (it == mPipeline.shader()->descriptorMap().end()) {
 			cerr << "Warning: Descriptor " << name << " does not exist in shader " << mPipeline.shader()->resourceName() << endl;
+			continue;
+		}
 		const Shader::DescriptorBinding& binding = it->second;
 
 		// skip if descriptor already written
@@ -101,7 +103,7 @@ void DescriptorSets::write(const Descriptors& descriptors) {
 			if (!v) cerr << "Warning: Writing null acceleration structure at " << id.first << " array index " << id.second << endl;
 			if (binding.mDescriptorType != vk::DescriptorType::eAccelerationStructureKHR)
 				cerr << "Warning: Invalid descriptor type " << to_string(binding.mDescriptorType) << " while writing " << id.first << " array index " << id.second << endl;
-			info.accelerationStructure.setAccelerationStructures(**v);
+			info.accelerationStructure = vk::WriteDescriptorSetAccelerationStructureKHR(**v);
 			w.descriptorCount = info.accelerationStructure.accelerationStructureCount;
 			w.pNext = &info;
 		}
@@ -147,6 +149,22 @@ void DescriptorSets::bind(CommandBuffer& commandBuffer, const unordered_map<stri
 	vector<vk::DescriptorSet> descriptorSets(mDescriptorSets.size());
 	ranges::transform(mDescriptorSets, descriptorSets.begin(), [](const auto& ds) { return **ds; });
 	commandBuffer->bindDescriptorSets(vk::PipelineBindPoint::eCompute, **mPipeline.layout(), 0, descriptorSets, dynamicOffsetValues);
+
+	// warn if unbound descriptors
+	/*
+	for (const auto&[id, binding] : mPipeline.shader()->descriptorMap()) {
+		if (mPipeline.metadata().mImmutableSamplers.find(id) != mPipeline.metadata().mImmutableSamplers.end())
+			continue;
+		if (auto flag_it = mPipeline.metadata().mBindingFlags.find(id); flag_it != mPipeline.metadata().mBindingFlags.end())
+			if (flag_it->second & vk::DescriptorBindingFlagBits::ePartiallyBound)
+				continue;
+		uint32_t total = 1;
+		for (uint32_t s : binding.mArraySize)
+			total *= s;
+		for (uint32_t i = 0; i < total; i++)
+			if (mDescriptors.find({ id, i }) == mDescriptors.end())
+				cout << "Warning: Unbound descriptor " << id << " (" << binding.mSet << "." << binding.mBinding << "[" << i << "]) while binding DescriptorSets " << resourceName() << endl;
+	}*/
 }
 
 
@@ -154,36 +172,52 @@ void DescriptorSets::bind(CommandBuffer& commandBuffer, const unordered_map<stri
 ComputePipeline::ComputePipeline(const string& name, const shared_ptr<Shader>& shader, const Metadata& metadata)
 	: Device::Resource(shader->mDevice, name), mShader(shader), mPipeline(nullptr), mMetadata(metadata) {
 
-	// populate bindings
+	// gather descriptorset bindings
 
-	vector<map<uint32_t, pair<vk::DescriptorSetLayoutBinding, optional<vk::DescriptorBindingFlags>>>> bindings;
-	unordered_map<uint64_t, vector<vk::Sampler>> staticSamplers;
+	vector<map<uint32_t, tuple<vk::DescriptorSetLayoutBinding, optional<vk::DescriptorBindingFlags>, vector<vk::Sampler>>>> bindings;
 
     for (const auto&[id, binding] : shader->descriptorMap()) {
+		// compute total array size
 		uint32_t descriptorCount = 1;
 		for (const uint32_t v : binding.mArraySize)
 			descriptorCount *= v;
 
-		// increase set count if needed
-		if (bindings.size() <= binding.mSet)
-			bindings.resize(binding.mSet + 1);
-
-		auto& setBindings = bindings[binding.mSet];
+		// get binding flags
 
 		optional<vk::DescriptorBindingFlags> flags;
 		if (auto b_it = mMetadata.mBindingFlags.find(id); b_it != mMetadata.mBindingFlags.end())
 			flags = b_it->second;
 
+		// get immutable samplers
+
+		vector<vk::Sampler> samplers;
+		if (auto s_it = mMetadata.mImmutableSamplers.find(id); s_it != mMetadata.mImmutableSamplers.end()) {
+			samplers.resize(s_it->second.size());
+			ranges::transform(s_it->second, samplers.begin(), [](const shared_ptr<vk::raii::Sampler>& s){ return **s; });
+		}
+
+		// increase set count if needed
+		if (binding.mSet >= bindings.size())
+			bindings.resize(binding.mSet + 1);
+
+		// copy bindings
+
+		auto& setBindings = bindings[binding.mSet];
+
 		auto it = setBindings.find(binding.mBinding);
 		if (it == setBindings.end())
-			it = setBindings.emplace(binding.mBinding, pair{ vk::DescriptorSetLayoutBinding(
-				binding.mBinding,
-				binding.mDescriptorType,
-				descriptorCount,
-				shader->stage(), {}),
-				flags }).first;
+			it = setBindings.emplace(binding.mBinding,
+				tuple{
+					vk::DescriptorSetLayoutBinding(
+						binding.mBinding,
+						binding.mDescriptorType,
+						descriptorCount,
+						shader->stage(), {}),
+					flags,
+					samplers }).first;
 		else {
-			auto&[setLayoutBinding, flags] = it->second;
+			auto&[setLayoutBinding, flags, samplers] = it->second;
+
 			if (setLayoutBinding.descriptorCount != descriptorCount)
 				throw logic_error("Shader modules contain descriptors with different counts at the same binding");
 			if (setLayoutBinding.descriptorType != binding.mDescriptorType)
@@ -191,31 +225,27 @@ ComputePipeline::ComputePipeline(const string& name, const shared_ptr<Shader>& s
 
 			setLayoutBinding.stageFlags |= shader->stage();
 		}
-
-		// immutable samplers
-
-		if (auto samplers_it = mMetadata.mImmutableSamplers.find(id); samplers_it != mMetadata.mImmutableSamplers.end())
-			for (auto s : samplers_it->second)
-				staticSamplers[(uint64_t(binding.mSet) << 32) | binding.mBinding].emplace_back(**s);
     }
 
-	for (auto[b, samplers] : staticSamplers)
-		for (const auto& s : samplers)
-			bindings[b >> 32].at(b&UINT_MAX).first.setImmutableSamplers(s);
-
 	// create DescriptorSetLayouts
+
 	mDescriptorSetLayouts.resize(bindings.size());
 	for (uint32_t i = 0; i < bindings.size(); i++) {
-		vector<vk::DescriptorSetLayoutBinding> layoutBindings(bindings[i].size());
+		vector<vk::DescriptorSetLayoutBinding> layoutBindings;
 		vector<vk::DescriptorBindingFlags> bindingFlags;
-		for (const auto&[setIndex, binding] : bindings[i]) {
-			const auto&[b, flag] = binding;
-			layoutBindings[b.binding] = b;
-			if (flag)
-				bindingFlags.emplace_back(*flag);
+		bool hasFlags = false;
+		for (const auto&[bindingIndex, binding_] : bindings[i]) {
+			const auto&[binding, flag, samplers] = binding_;
+			if (flag) hasFlags = true;
+			bindingFlags.emplace_back(flag ? *flag : vk::DescriptorBindingFlags{});
+
+			auto& b = layoutBindings.emplace_back(binding);
+			if (samplers.size())
+				b.setImmutableSamplers(samplers);
 		}
+
 		vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo(bindingFlags);
-		mDescriptorSetLayouts[i] = make_shared<vk::raii::DescriptorSetLayout>(*mDevice, vk::DescriptorSetLayoutCreateInfo(mMetadata.mDescriptorSetLayoutFlags, layoutBindings, &bindingFlagsInfo));
+		mDescriptorSetLayouts[i] = make_shared<vk::raii::DescriptorSetLayout>(*mDevice, vk::DescriptorSetLayoutCreateInfo(mMetadata.mDescriptorSetLayoutFlags, layoutBindings, hasFlags ? &bindingFlagsInfo : nullptr));
 	}
 
     // populate pushConstantRanges
@@ -252,7 +282,7 @@ void ComputePipeline::pushConstants(CommandBuffer& commandBuffer, const PushCons
 		auto it = shader()->pushConstants().find(name);
 		if (it == shader()->pushConstants().end()) {
 			if (name == "") {
-				commandBuffer->pushConstants<byte>(**layout(), shader()->stage(), 0, pushConstant.data());
+				commandBuffer->pushConstants<byte>(**layout(), shader()->stage(), 0, pushConstant);
 				continue;
 			} else {
 				const string msg = "Push constant " + name + " does not exist in shader " + shader()->resourceName();
@@ -261,11 +291,11 @@ void ComputePipeline::pushConstants(CommandBuffer& commandBuffer, const PushCons
 			}
 		}
 
-		if (it->second.mTypeSize != pushConstant.data().size())
-			cerr << "Warning: " << "Push constant " << name << " (" << pushConstant.data().size() << "B)"
+		if (it->second.mTypeSize != pushConstant.size())
+			cerr << "Warning: " << "Push constant " << name << " (" << pushConstant.size() << "B)"
 				 << " does not match size declared by shader (" << it->second.mTypeSize << "B) for shader " + shader()->resourceName() << endl;
 
-		commandBuffer->pushConstants<byte>(**layout(), shader()->stage(), it->second.mOffset, pushConstant.data());
+		commandBuffer->pushConstants<byte>(**layout(), shader()->stage(), it->second.mOffset, pushConstant);
 	}
 }
 

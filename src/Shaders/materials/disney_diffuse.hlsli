@@ -7,11 +7,11 @@ Spectrum disneydiffuse_eval(const DisneyMaterialData bsdf, const Vector3 dir_in,
 	const Real ndotwo5 = pow(1 - abs(dir_out.z), 5);
 	const Real FDwi = 1 + (FD90 - 1) * ndotwi5;
 	const Real FDwo = 1 + (FD90 - 1) * ndotwo5;
-	const Spectrum f_base_diffuse = (bsdf.base_color() / M_PI) * FDwi * FDwo;
+	const Spectrum f_base_diffuse = (bsdf.baseColor() / M_PI) * FDwi * FDwo;
 
 	const Real FSSwi = 1 + (FSS90 - 1) * ndotwi5;
 	const Real FSSwo = 1 + (FSS90 - 1) * ndotwo5;
-	const Spectrum f_subsurface = (1.25 * bsdf.base_color() / M_PI) * (FSSwi * FSSwo * (1 / (abs(dir_in.z) + abs(dir_out.z)) - 0.5) + 0.5);
+	const Spectrum f_subsurface = (1.25 * bsdf.baseColor() / M_PI) * (FSSwi * FSSwo * (1 / (abs(dir_in.z) + abs(dir_out.z)) - 0.5) + 0.5);
 
 	return lerp(f_base_diffuse, f_subsurface, bsdf.subsurface()) * abs(dir_out.z);
 }

@@ -4,6 +4,7 @@
 #include "CommandBuffer.hpp"
 #include "Profiler.hpp"
 
+#include <imgui/imgui.h>
 #include <algorithm>
 
 namespace tinyvkpt {
@@ -43,18 +44,14 @@ Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) : mI
 	mFeatures.largePoints = true;
 	mFeatures.sampleRateShading = true;
 	mFeatures.shaderFloat64 = true; // needed by slang?
-	mFeatures.shaderUniformBufferArrayDynamicIndexing = true;
 	mFeatures.shaderStorageBufferArrayDynamicIndexing = true;
 	mFeatures.shaderSampledImageArrayDynamicIndexing = true;
 	mFeatures.shaderStorageImageArrayDynamicIndexing = true;
 
 	auto& difeatures = get<vk::PhysicalDeviceDescriptorIndexingFeatures>(mFeatureChain);
-	difeatures.shaderUniformBufferArrayNonUniformIndexing = true;
 	difeatures.shaderStorageBufferArrayNonUniformIndexing = true;
 	difeatures.shaderSampledImageArrayNonUniformIndexing = true;
 	difeatures.shaderStorageImageArrayNonUniformIndexing = true;
-	difeatures.shaderUniformTexelBufferArrayNonUniformIndexing = true;
-	difeatures.shaderStorageTexelBufferArrayNonUniformIndexing = true;
 	difeatures.descriptorBindingPartiallyBound = true;
 	get<vk::PhysicalDeviceBufferDeviceAddressFeatures>(mFeatureChain).bufferDeviceAddress = deviceExtensions.contains(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
 	get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>(mFeatureChain).accelerationStructure = deviceExtensions.contains(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
@@ -118,6 +115,8 @@ Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) : mI
 	vmaCreateAllocator(&allocatorInfo, &mAllocator);
 }
 Device::~Device() {
+	mCommandBufferPool.clear();
+	mCommandBuffersInFlight.clear();
 	vmaDestroyAllocator(mAllocator);
 }
 
@@ -130,22 +129,23 @@ vk::raii::CommandPool& Device::commandPool(const uint32_t queueFamily) {
 vk::raii::DescriptorPool& Device::descriptorPool() {
 	if (!*mDescriptorPool) {
 		vector<vk::DescriptorPoolSize> poolSizes {
-			vk::DescriptorPoolSize(vk::DescriptorType::eSampler,              min(4096u, mLimits.maxDescriptorSetSamplers)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, min(4096u, mLimits.maxDescriptorSetSampledImages)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eInputAttachment,      min(4096u, mLimits.maxDescriptorSetInputAttachments)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eSampledImage,         min(4096u, mLimits.maxDescriptorSetSampledImages)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eStorageImage,         min(4096u, mLimits.maxDescriptorSetStorageImages)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer,        min(4096u, mLimits.maxDescriptorSetUniformBuffers)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eUniformBufferDynamic, min(4096u, mLimits.maxDescriptorSetUniformBuffersDynamic)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer,        min(4096u, mLimits.maxDescriptorSetStorageBuffers)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eStorageBufferDynamic, min(4096u, mLimits.maxDescriptorSetStorageBuffersDynamic))
+			vk::DescriptorPoolSize(vk::DescriptorType::eSampler,              min(8192u, mLimits.maxDescriptorSetSamplers)),
+			vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, min(8192u, mLimits.maxDescriptorSetSampledImages)),
+			vk::DescriptorPoolSize(vk::DescriptorType::eInputAttachment,      min(8192u, mLimits.maxDescriptorSetInputAttachments)),
+			vk::DescriptorPoolSize(vk::DescriptorType::eSampledImage,         min(8192u, mLimits.maxDescriptorSetSampledImages)),
+			vk::DescriptorPoolSize(vk::DescriptorType::eStorageImage,         min(8192u, mLimits.maxDescriptorSetStorageImages)),
+			vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer,        min(8192u, mLimits.maxDescriptorSetUniformBuffers)),
+			vk::DescriptorPoolSize(vk::DescriptorType::eUniformBufferDynamic, min(8192u, mLimits.maxDescriptorSetUniformBuffersDynamic)),
+			vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer,        min(8192u, mLimits.maxDescriptorSetStorageBuffers)),
+			vk::DescriptorPoolSize(vk::DescriptorType::eStorageBufferDynamic, min(8192u, mLimits.maxDescriptorSetStorageBuffersDynamic))
 		};
-		mDescriptorPool = vk::raii::DescriptorPool(mDevice, vk::DescriptorPoolCreateInfo(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet, 4096, poolSizes));
+		mDescriptorPool = vk::raii::DescriptorPool(mDevice, vk::DescriptorPoolCreateInfo(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet, 1024, poolSizes));
 	}
 	return mDescriptorPool;
 }
 
 shared_ptr<CommandBuffer> Device::getCommandBuffer(const uint32_t queueFamily) {
+	ProfilerScope ps("Device::getCommandBuffer");
 	auto& pool = mCommandBufferPool[queueFamily];
 	shared_ptr<CommandBuffer> cb;
 	if (pool.empty())
@@ -158,7 +158,7 @@ shared_ptr<CommandBuffer> Device::getCommandBuffer(const uint32_t queueFamily) {
 	return cb;
 }
 
-void Device::submit(const vk::raii::Queue queue, const vk::ArrayProxy<shared_ptr<CommandBuffer>>& commandBuffers, const vk::ArrayProxy<pair<shared_ptr<vk::raii::Semaphore>, vk::PipelineStageFlags>>& waitSemaphores, const vk::ArrayProxy<shared_ptr<vk::raii::Semaphore>>& signalSemaphores) {
+void Device::submit(const vk::raii::Queue queue, const vk::ArrayProxy<const shared_ptr<CommandBuffer>>& commandBuffers, const vk::ArrayProxy<pair<shared_ptr<vk::raii::Semaphore>, vk::PipelineStageFlags>>& waitSemaphores, const vk::ArrayProxy<shared_ptr<vk::raii::Semaphore>>& signalSemaphores) {
 	// create or reuse fence
 	shared_ptr<vk::raii::Fence> fence;
 	for (auto cb : commandBuffers)
@@ -172,7 +172,7 @@ void Device::submit(const vk::raii::Queue queue, const vk::ArrayProxy<shared_ptr
 
 	// assign fence, track in-flight commandbuffers
 	vector<vk::CommandBuffer> vkbufs;
-	for (auto cb : commandBuffers) {
+	for (const shared_ptr<CommandBuffer>& cb : commandBuffers) {
 		cb->mFence = fence;
 		vkbufs.emplace_back(***cb);
 		mCommandBuffersInFlight[cb->queueFamily()].emplace_back(cb);
@@ -189,7 +189,7 @@ void Device::submit(const vk::raii::Queue queue, const vk::ArrayProxy<shared_ptr
 }
 
 void Device::updateFrame() {
-	ProfilerScope ps("Device::render");
+	ProfilerScope ps("Device::updateFrame");
 	mFrameIndex++;
 	// move completed commandbuffers to pool, update mLastFrameDone
 	for (auto&[queueFamily, pool] : mCommandBuffersInFlight) {
@@ -202,6 +202,24 @@ void Device::updateFrame() {
 			} else
 				it++;
 		}
+	}
+}
+
+void Device::drawGui() {
+	VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
+	vmaGetHeapBudgets(mAllocator, budgets);
+	const vk::PhysicalDeviceMemoryProperties properties = mPhysicalDevice.getMemoryProperties();
+	for (uint32_t heapIndex = 0; heapIndex < properties.memoryHeapCount; heapIndex++) {
+		const auto[usage, usageUnit] = formatBytes(budgets[heapIndex].usage);
+		const auto[budget, budgetUnit] = formatBytes(budgets[heapIndex].budget);
+		const auto[allocationBytes, allocationBytesUnit] = formatBytes(budgets[heapIndex].statistics.allocationBytes);
+		const auto[blockBytes, blockBytesUnit] = formatBytes(budgets[heapIndex].statistics.blockBytes);
+		ImGui::Text("Heap %u %s", heapIndex, (properties.memoryHeaps[heapIndex].flags & vk::MemoryHeapFlagBits::eDeviceLocal) ? "(device local)" : "");
+		ImGui::Text("%llu %s used, %llu %s budgeted", usage, usageUnit, budget, budgetUnit);
+		ImGui::Indent();
+		ImGui::Text("%u allocations (%llu %s)", budgets[heapIndex].statistics.allocationCount, allocationBytes, allocationBytesUnit);
+		ImGui::Text("%u device memory blocks (%llu %s)", budgets[heapIndex].statistics.blockCount, blockBytes, blockBytesUnit);
+		ImGui::Unindent();
 	}
 }
 

@@ -34,6 +34,8 @@ struct ByteAppendBuffer : public vector<uint32_t> {
 };
 
 struct MaterialResources {
+	ByteAppendBuffer mMaterialData;
+
 	unordered_map<Image::View, uint32_t> mImage4s;
 	unordered_map<Image::View, uint32_t> mImage1s;
 	unordered_map<Buffer::View<byte>, uint32_t> mVolumeDataMap;

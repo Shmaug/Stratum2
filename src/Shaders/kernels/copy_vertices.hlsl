@@ -4,18 +4,11 @@
 #define gVertexBufferCount 8192
 #endif
 
-struct VertexCopyInfo {
-	uint mCount;
-	uint mPositionStride;
-	uint mNormalStride;
-	uint mTexcoordStride;
-};
-
 ByteAddressBuffer gPositions[gVertexBufferCount];
 ByteAddressBuffer gNormals[gVertexBufferCount];
 ByteAddressBuffer gTexcoords[gVertexBufferCount];
 
-StructuredBuffer<VertexCopyInfo> gInfos;
+StructuredBuffer<uint4> gInfos;
 RWStructuredBuffer<PackedVertexData> gVertices;
 
 
@@ -27,14 +20,16 @@ struct PushConstants {
 SLANG_SHADER("compute")
 [numthreads(64,1,1)]
 void main(uint3 index : SV_DispatchThreadId) {
-	if (index.x >= gBufferSizes[gPushConstants.gBufferIndex]) return;
+	const uint4 p = gInfos[gPushConstants.gBufferIndex];
+	uint count = p.x;
+	uint positionStride = p.y;
+	uint normalStride = p.z;
+	uint texcoordStride = p.w;
 
-	const BufferProperties p = gInfos[gPushConstants.gBufferIndex];
+	if (index.x >= count) return;
 
-	PackedVertexData v;
-	v.set(
-		gPositions.Load<float3>(int(index.x*p.gPositionStride)),
-		gNormals.Load<float3>(int(index.x*p.gNormalStride)),
-		p.gTexcoordStride > 0 ? gTexcoords.Load<float2>(int(index.x*p.gTexcoordStride)) : 0 );
-	gVertices[index.x] = v;
+	gVertices[index.x] = PackedVertexData(
+		gPositions[gPushConstants.gBufferIndex].Load<float3>(int(index.x*positionStride)),
+		gNormals[gPushConstants.gBufferIndex].Load<float3>(int(index.x*normalStride)),
+		texcoordStride > 0 ? gTexcoords[gPushConstants.gBufferIndex].Load<float2>(int(index.x*texcoordStride)) : 0 );
 }

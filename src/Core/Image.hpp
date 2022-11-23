@@ -2,7 +2,7 @@
 
 #include <bit>
 
-#include "Device.hpp"
+#include "CommandBuffer.hpp"
 
 #include <Utils/hash.hpp>
 
@@ -81,7 +81,7 @@ public:
 		View() = default;
 		View(const View&) = default;
 		View(View&&) = default;
-		inline View(const shared_ptr<Image>& image, const vk::ImageSubresourceRange& subresource = { vk::ImageAspectFlagBits::eColor, 0, 0, 0, 0 }, vk::ImageViewType viewType = vk::ImageViewType::e2D, const vk::ComponentMapping& componentMapping = {})
+		inline View(const shared_ptr<Image>& image, const vk::ImageSubresourceRange& subresource = { vk::ImageAspectFlagBits::eColor, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS }, vk::ImageViewType viewType = vk::ImageViewType::e2D, const vk::ComponentMapping& componentMapping = {})
 			: mImage(image), mSubresource(subresource), mType(viewType), mComponentMapping(componentMapping) {
 			if (image) {
 				if (mSubresource.layerCount == 0) mSubresource.layerCount = image->layers();
@@ -128,6 +128,7 @@ public:
 
 		inline void clearColor(CommandBuffer& commandBuffer, const vk::ClearColorValue& clearValue) const {
 			mImage->clearColor(commandBuffer, clearValue, mSubresource);
+			commandBuffer.trackResource(mImage);
 		}
 
 	private:
@@ -143,24 +144,21 @@ public:
 	static void blit(CommandBuffer& commandBuffer, const shared_ptr<Image>& src, const shared_ptr<Image>& dst, const vk::ArrayProxy<const vk::ImageBlit>& regions, const vk::Filter filter = vk::Filter::eLinear);
 
 	inline static void copy(CommandBuffer& commandBuffer, const View& src, const View& dst) {
-		copy(
-			commandBuffer,
-			src.image(),
-			dst.image(),
-			vk::ImageCopy(
-				src.subresourceLayer(), vk::Offset3D{0,0,0},
-				dst.subresourceLayer(), vk::Offset3D{0,0,0},
-				dst.extent()));
+		vk::ImageCopy c(
+				src.subresourceLayer(), vk::Offset3D(0,0,0),
+				dst.subresourceLayer(), vk::Offset3D(0,0,0),
+				dst.extent());
+		if (c.srcSubresource.layerCount == VK_REMAINING_ARRAY_LAYERS) c.srcSubresource.layerCount = c.dstSubresource.layerCount;
+		if (c.dstSubresource.layerCount == VK_REMAINING_ARRAY_LAYERS) c.dstSubresource.layerCount = c.srcSubresource.layerCount;
+		copy(commandBuffer, src.image(), dst.image(), c);
 	}
 	inline static void blit(CommandBuffer& commandBuffer, const View& src, const View& dst, const vk::Filter filter = vk::Filter::eLinear) {
-		blit(
-			commandBuffer,
-			src.image(),
-			dst.image(),
-			vk::ImageBlit(
+		vk::ImageBlit c(
 				src.subresourceLayer(), { vk::Offset3D(0,0,0), vk::Offset3D(src.extent().width, src.extent().height, src.extent().depth) },
-				dst.subresourceLayer(), { vk::Offset3D(0,0,0), vk::Offset3D(dst.extent().width, dst.extent().height, dst.extent().depth) }),
-			filter);
+				dst.subresourceLayer(), { vk::Offset3D(0,0,0), vk::Offset3D(dst.extent().width, dst.extent().height, dst.extent().depth) });
+		if (c.srcSubresource.layerCount == VK_REMAINING_ARRAY_LAYERS) c.srcSubresource.layerCount = c.dstSubresource.layerCount;
+		if (c.dstSubresource.layerCount == VK_REMAINING_ARRAY_LAYERS) c.dstSubresource.layerCount = c.srcSubresource.layerCount;
+		blit(commandBuffer, src.image(), dst.image(), c, filter);
 	}
 
 private:

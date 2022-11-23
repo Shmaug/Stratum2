@@ -3,10 +3,8 @@
 
 #include "common.h"
 
-#include <Core/Buffer.hpp>
-#include <Core/Image.hpp>
-
 #ifdef __cplusplus
+#include <Core/Image.hpp>
 namespace tinyvkpt {
 
 inline uint4 channelMappingSwizzle(vk::ComponentMapping m) {
@@ -40,14 +38,14 @@ struct ImageValue1 {
 #endif
 #ifdef __cplusplus
 	Image::View image;
-	inline void store(ByteAppendBuffer& bytes, MaterialResources& resources) const {
-		bytes.Appendf(value);
+	inline void store(MaterialResources& resources) const {
+		resources.mMaterialData.Appendf(value);
 		const uint image_index = resources.getIndex(image);
 		const uint32_t channel = channelMappingSwizzle(image.componentMapping())[0];
 		uint image_index_and_channel = 0;
 		BF_SET(image_index_and_channel, image_index, 0, 30);
 		BF_SET(image_index_and_channel, channel, 30, 2);
-		bytes.Append(image_index_and_channel);
+		resources.mMaterialData.Append(image_index_and_channel);
 	}
 #endif
 };
@@ -71,9 +69,9 @@ struct ImageValue2 {
 #endif
 #ifdef __cplusplus
 	Image::View image;
-	inline void store(ByteAppendBuffer& bytes, MaterialResources& resources) const {
-		bytes.AppendN(value);
-		bytes.Append(resources.getIndex(image));
+	inline void store(MaterialResources& resources) const {
+		resources.mMaterialData.AppendN(value);
+		resources.mMaterialData.Append(resources.getIndex(image));
 	}
 #endif
 };
@@ -97,9 +95,9 @@ struct ImageValue3 {
 #endif
 #ifdef __cplusplus
 	Image::View image;
-	inline void store(ByteAppendBuffer& bytes, MaterialResources& resources) const {
-		bytes.AppendN(value);
-		bytes.Append(resources.getIndex(image));
+	inline void store(MaterialResources& resources) const {
+		resources.mMaterialData.AppendN(value);
+		resources.mMaterialData.Append(resources.getIndex(image));
 	}
 #endif
 };
@@ -123,58 +121,21 @@ struct ImageValue4 {
 #endif
 #ifdef __cplusplus
 	Image::View image;
-	inline void store(ByteAppendBuffer& bytes, MaterialResources& resources) const {
-		bytes.AppendN(value);
-		bytes.Append(resources.getIndex(image));
+	inline void store(MaterialResources& resources) const {
+		resources.mMaterialData.AppendN(value);
+		resources.mMaterialData.Append(resources.getIndex(image));
 	}
 #endif
 };
 
 #ifdef __cplusplus
 
-inline void image_value_field(const char* label, ImageValue1& v) {
-	ImGui::DragFloat(label, &v.value, .01f);
-	if (v.image) {
-		if (ImGui::Button("X")) v.image = {};
-		else {
-			const uint32_t w = ImGui::GetWindowSize().x;
-			ImGui::Image(&v.image, ImVec2(w, w * (float)v.image.extent().height / (float)v.image.extent().width));
-		}
-	}
-}
-inline void image_value_field(const char* label, ImageValue2& v) {
-	ImGui::DragFloat2(label, v.value.data(), .01f);
-	if (v.image) {
-		if (ImGui::Button("X")) v.image = {};
-		else {
-			const uint32_t w = ImGui::GetWindowSize().x;
-			ImGui::Image(&v.image, ImVec2(w, w * (float)v.image.extent().height / (float)v.image.extent().width));
-		}
-	}
-}
-inline void image_value_field(const char* label, ImageValue3& v) {
-	ImGui::ColorEdit3(label, v.value.data(), ImGuiColorEditFlags_Float);
-	if (v.image) {
-		if (ImGui::Button("X")) v.image = {};
-		else {
-			const uint32_t w = ImGui::GetWindowSize().x;
-			ImGui::Image(&v.image, ImVec2(w, w * (float)v.image.extent().height / (float)v.image.extent().width));
-		}
-	}
-}
-inline void image_value_field(const char* label, ImageValue4& v) {
-	ImGui::ColorEdit4(label, v.value.data(), ImGuiColorEditFlags_Float);
-	if (v.image) {
-		ImGui::PushID(&v);
-		const bool d = ImGui::Button("x");
-		ImGui::PopID();
-		if (d) v.image = {};
-		else {
-			const uint32_t w = ImGui::GetWindowSize().x;
-			ImGui::Image(&v.image, ImVec2(w, w * (float)v.image.extent().height / (float)v.image.extent().width));
-		}
-	}
-}
+// Defined in Scene.cpp
+
+void imageValueField(const char* label, ImageValue1& v);
+void imageValueField(const char* label, ImageValue2& v);
+void imageValueField(const char* label, ImageValue3& v);
+void imageValueField(const char* label, ImageValue4& v);
 
 } // namespace tinyvkpt
 

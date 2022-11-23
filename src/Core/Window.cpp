@@ -6,27 +6,13 @@
 // vulkan.h needed by glfw.h
 #include <vulkan/vulkan.h>
 #include <GLFW/glfw3.h>
+#include <imgui/imgui.h>
 
 namespace tinyvkpt {
 
 void Window::windowSizeCallback(GLFWwindow* window, int width, int height) {
 	Window* w = (Window*)glfwGetWindowUserPointer(window);
 	w->mClientExtent = vk::Extent2D{ (uint32_t)width, (uint32_t)height };
-}
-void Window::keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
-	Window* w = (Window*)glfwGetWindowUserPointer(window);
-	if (action == GLFW_PRESS || action == GLFW_REPEAT)
-		w->mInputState.mButtons.emplace(key);
-	else if (action == GLFW_RELEASE)
-		w->mInputState.mButtons.erase(key);
-}
-void Window::characterCallback(GLFWwindow* window, unsigned int codepoint) {
-	Window* w = (Window*)glfwGetWindowUserPointer(window);
-	w->mInputState.mInputCharacters.push_back(codepoint);
-}
-void Window::cursorPositionCallback(GLFWwindow* window, double x, double y) {
-	Window* w = (Window*)glfwGetWindowUserPointer(window);
-	w->mInputState.mCursorPos = float2((float)x, (float)y);
 }
 void Window::dropCallback(GLFWwindow* window, int count, const char** paths) {
 	Window* w = (Window*)glfwGetWindowUserPointer(window);
@@ -39,7 +25,7 @@ void errorCallback(int code, const char* msg) {
 	throw runtime_error(msg);
 }
 
-Window::Window(Instance& instance, const string& title, const vk::Extent2D& extent) : mInstance(instance), mTitle(title), mSurface(nullptr) {
+Window::Window(Instance& instance, const string& title, const vk::Extent2D& extent) : mInstance(instance), mTitle(title), mSurface(nullptr), mClientExtent(extent) {
 	if (glfwInit() != GLFW_TRUE) {
 		cerr << "Error: Failed to initialize GLFW" << endl;
 		throw runtime_error("Failed to initialized GLFW");
@@ -58,13 +44,11 @@ Window::Window(Instance& instance, const string& title, const vk::Extent2D& exte
 	mSurface = vk::raii::SurfaceKHR(*instance, surface);
 
 	glfwSetFramebufferSizeCallback(mWindow, Window::windowSizeCallback);
-	glfwSetKeyCallback            (mWindow, Window::keyCallback);
-	glfwSetCharCallback           (mWindow, Window::characterCallback);
-	glfwSetCursorPosCallback      (mWindow, Window::cursorPositionCallback);
 	glfwSetDropCallback           (mWindow, Window::dropCallback);
 }
 Window::~Window() {
 	glfwDestroyWindow(mWindow);
+	glfwTerminate();
 }
 
 tuple<vk::raii::PhysicalDevice, uint32_t> Window::findPhysicalDevice() const {
@@ -110,6 +94,16 @@ void Window::fullscreen(const bool fs) {
 	} else {
 		glfwSetWindowMonitor(mWindow, nullptr, mRestoreRect.offset.x, mRestoreRect.offset.y, mRestoreRect.extent.width, mRestoreRect.extent.height, 0);
 	}
+}
+
+void Window::drawGui() {
+	vk::Extent2D e = extent();
+	bool changed = false;
+	ImGui::InputScalar("Width", ImGuiDataType_U32, &e.width);
+	changed |= ImGui::IsItemDeactivatedAfterEdit();
+	ImGui::InputScalar("Height", ImGuiDataType_U32, &e.height);
+	changed |= ImGui::IsItemDeactivatedAfterEdit();
+	if (changed) resize(e);
 }
 
 }

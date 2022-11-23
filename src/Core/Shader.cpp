@@ -50,7 +50,7 @@ Shader::Shader(Device& device, const filesystem::path& sourceFile, const string&
 
 	SlangResult r = request->compile();
 	const char* msg = request->getDiagnosticOutput();
-	cout << "Compiled " << sourceFile << " " << entryPoint << " " << msg << endl;
+	cout << "Compiled " << sourceFile << " " << entryPoint << endl << msg;
 	if (SLANG_FAILED(r))
 		throw runtime_error(msg);
 
@@ -196,23 +196,22 @@ Shader::Shader(Device& device, const filesystem::path& sourceFile, const string&
 	}
 
 	function<void(const uint32_t, const string, slang::VariableLayoutReflection*, const uint32_t)> reflectParameter;
-	reflectParameter = [&](const uint32_t set_index, const string baseName, slang::VariableLayoutReflection* parameter, const uint32_t offset) {
+	reflectParameter = [&](const uint32_t setIndex, const string baseName, slang::VariableLayoutReflection* parameter, const uint32_t offset) {
 		slang::TypeReflection* type = parameter->getType();
 		slang::TypeLayoutReflection* typeLayout = parameter->getTypeLayout();
 
-		vector<uint32_t> arraySize;
-		if (typeLayout->getKind() == slang::TypeReflection::Kind::Array)
-			arraySize.emplace_back((uint32_t)typeLayout->getTotalArrayElementCount());
-
 		const string name = baseName + "." + parameter->getName();
-		const uint32_t binding_index = offset + parameter->getBindingIndex();
+		const uint32_t bindingIndex = offset + parameter->getBindingIndex();
 
 		if (type->getFieldCount() == 0) {
 			const vk::DescriptorType descriptorType = descriptor_type_map.at((SlangBindingType)typeLayout->getBindingRangeType(0));
-			mDescriptorMap.emplace(name, DescriptorBinding(set_index, binding_index, descriptorType, arraySize, 0));
+			vector<uint32_t> arraySize;
+			if (typeLayout->getKind() == slang::TypeReflection::Kind::Array)
+				arraySize.emplace_back((uint32_t)typeLayout->getTotalArrayElementCount());
+			mDescriptorMap.emplace(name, DescriptorBinding(setIndex, bindingIndex, descriptorType, arraySize, 0));
 		} else {
 			for (uint32_t i = 0; i < type->getFieldCount(); i++)
-				reflectParameter(set_index, name, typeLayout->getFieldByIndex(i), binding_index);
+				reflectParameter(setIndex, name, typeLayout->getFieldByIndex(i), bindingIndex);
 		}
 	};
 
@@ -242,11 +241,13 @@ Shader::Shader(Device& device, const filesystem::path& sourceFile, const string&
 			if (typeLayout->getKind() == slang::TypeReflection::Kind::Array)
 				arraySize.emplace_back((uint32_t)typeLayout->getTotalArrayElementCount());
 			mDescriptorMap.emplace(parameter->getName(), DescriptorBinding(parameter->getBindingSpace(), parameter->getBindingIndex(), descriptorType, arraySize, 0));
+			break;
 		}
 
 		case slang::ParameterCategory::RegisterSpace:
 			for (uint32_t i = 0; i < type->getElementType()->getFieldCount(); i++)
 				reflectParameter(parameter->getBindingIndex(), parameter->getName(), typeLayout->getElementTypeLayout()->getFieldByIndex(i), 0);
+			break;
 		}
 	}
 

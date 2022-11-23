@@ -49,7 +49,6 @@ public:
 	inline const string& title() const { return mTitle; }
 	inline const vk::raii::SurfaceKHR& surface() const { return mSurface; }
 	inline vk::raii::SurfaceKHR& surface() { return mSurface; }
-	inline vk::SurfaceFormatKHR surfaceFormat() const { return mSurfaceFormat; }
 	inline const vk::Extent2D& extent() const {return mClientExtent; }
 	tuple<vk::raii::PhysicalDevice, uint32_t> findPhysicalDevice() const;
 	vector<uint32_t> queueFamilies(const vk::raii::PhysicalDevice& physicalDevice) const;
@@ -69,14 +68,15 @@ public:
 	inline bool pressed (const KeyCode& key) const { return  mInputState.held(key) && !mInputStatePrev.held(key); }
 	inline bool released(const KeyCode& key) const { return !mInputState.held(key) &&  mInputStatePrev.held(key); }
 
+	void drawGui();
+
 private:
 	GLFWwindow* mWindow;
 	vk::raii::SurfaceKHR mSurface;
-	vk::SurfaceFormatKHR mSurfaceFormat;
 
 	string mTitle;
-	vk::Rect2D mRestoreRect;
 	vk::Extent2D mClientExtent;
+	vk::Rect2D mRestoreRect;
 
 	bool mFullscreen = false;
 	bool mRecreateSwapchain = false;
@@ -87,9 +87,6 @@ private:
 	void createSwapchain();
 
 	static void windowSizeCallback(GLFWwindow* window, int width, int height);
-	static void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods);
-	static void characterCallback(GLFWwindow* window, unsigned int codepoint);
-	static void cursorPositionCallback(GLFWwindow* window, double x, double y);
 	static void dropCallback(GLFWwindow* window, int count, const char** paths);
 };
 

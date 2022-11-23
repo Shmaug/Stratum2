@@ -75,11 +75,13 @@ public:
 	shared_ptr<CommandBuffer> getCommandBuffer(const uint32_t queueFamily);
 	void submit(
 		const vk::raii::Queue queue,
-		const vk::ArrayProxy<shared_ptr<CommandBuffer>>& commandBuffers,
+		const vk::ArrayProxy<const shared_ptr<CommandBuffer>>& commandBuffers,
 		const vk::ArrayProxy<pair<shared_ptr<vk::raii::Semaphore>, vk::PipelineStageFlags>>& waitSemaphores = {},
 		const vk::ArrayProxy<shared_ptr<vk::raii::Semaphore>>& signalSemaphores = {});
 
 	void updateFrame();
+
+	void drawGui();
 
 private:
 	vk::raii::Device mDevice;

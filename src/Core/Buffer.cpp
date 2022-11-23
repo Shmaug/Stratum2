@@ -1,5 +1,4 @@
 #include "Buffer.hpp"
-#include "CommandBuffer.hpp"
 #include "Image.hpp"
 
 namespace tinyvkpt {
@@ -14,7 +13,9 @@ Buffer::Buffer(Device& device, const string& name, const vk::BufferCreateInfo& c
     allocationCreateInfo.pool = VK_NULL_HANDLE;
     allocationCreateInfo.pUserData = VK_NULL_HANDLE;
     allocationCreateInfo.priority = 0;
-	vmaCreateBuffer(mDevice.allocator(), &(const VkBufferCreateInfo&)createInfo, &allocationCreateInfo, &(VkBuffer&)mBuffer, &mAllocation, &mAllocationInfo);
+	vk::Result result = (vk::Result)vmaCreateBuffer(mDevice.allocator(), &(const VkBufferCreateInfo&)createInfo, &allocationCreateInfo, &(VkBuffer&)mBuffer, &mAllocation, &mAllocationInfo);
+	if (result != vk::Result::eSuccess)
+		vk::throwResultException(result, "vmaCreateBuffer");
 	device.setDebugName(mBuffer, resourceName());
 }
 Buffer::~Buffer() {

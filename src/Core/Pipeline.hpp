@@ -3,16 +3,16 @@
 #include "Shader.hpp"
 #include "Buffer.hpp"
 #include "Image.hpp"
-#include "ResourcePool.hpp"
+#include "DeviceResourcePool.hpp"
 
 namespace tinyvkpt {
 
-class PushConstantValue {
+class PushConstantValue : public vector<byte> {
 public:
 	template<typename T>
 	inline PushConstantValue(const T& value) {
-		mData.resize(sizeof(value));
-		*reinterpret_cast<T*>(mData.data()) = value;
+		resize(sizeof(value));
+		*reinterpret_cast<T*>(data()) = value;
 	}
 
 	PushConstantValue() = default;
@@ -21,27 +21,22 @@ public:
 	PushConstantValue& operator=(PushConstantValue&&) = default;
 	PushConstantValue& operator=(const PushConstantValue&) = default;
 
-	inline void clear() { mData.clear(); }
-	inline const vector<byte>& data() const { return mData; }
-
 	template<typename T>
 	inline T& get() {
-		if (mData.empty())
-			mData.resize(sizeof(T));
-		return *reinterpret_cast<T*>(mData.data());
+		if (empty())
+			resize(sizeof(T));
+		return *reinterpret_cast<T*>(data());
 	}
 
 	template<typename T>
 	inline T& operator=(const T& value) {
-		mData.resize(sizeof(value));
-		return *reinterpret_cast<T*>(mData.data()) = value;
+		resize(sizeof(value));
+		return *reinterpret_cast<T*>(data()) = value;
 	}
-
-private:
-	vector<byte> mData;
 };
 
 using PushConstants = unordered_map<string, PushConstantValue>;
+
 
 using BufferDescriptor = Buffer::View<byte>;
 using ImageDescriptor = tuple<Image::View, vk::ImageLayout, vk::AccessFlags, shared_ptr<vk::raii::Sampler>>;
@@ -68,6 +63,7 @@ private:
 	Descriptors mDescriptors;
 };
 
+
 class ComputePipeline : public Device::Resource {
 public:
 	struct Metadata {
@@ -86,11 +82,12 @@ public:
 	inline const shared_ptr<Shader>& shader() const { return mShader; }
 	inline const shared_ptr<vk::raii::PipelineLayout>& layout() const { return mLayout; }
 	inline const vector<shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts() const { return mDescriptorSetLayouts; }
+	inline const Metadata& metadata() const { return mMetadata; }
 
 	void pushConstants(CommandBuffer& commandBuffer, const PushConstants& constants) const;
 
 
-	inline vk::Extent3D dispatchDimensions(const vk::Extent3D& extent) {
+	inline vk::Extent3D calculateDispatchDim(const vk::Extent3D& extent) {
 		const vk::Extent3D& s = shader()->workgroupSize();
 		return {
 			(extent.width  + s.width - 1)  / s.width,
@@ -99,17 +96,17 @@ public:
 	}
 	inline size_t resourceCount() const { return mResources.size(); }
 
-	// lazily creates and caches DescriptorSets
+	// creates + caches DescriptorSets
 	[[nodiscard]] shared_ptr<DescriptorSets> getDescriptorSets(const Descriptors& descriptors = {});
 
 	void dispatch(CommandBuffer& commandBuffer, const vk::Extent3D& dim, const shared_ptr<DescriptorSets>& descriptors, const unordered_map<string, uint32_t>& dynamicOffsets = {}, const PushConstants& constants = {});
 	void dispatch(CommandBuffer& commandBuffer, const vk::Extent3D& dim, const Descriptors& descriptors = {}, const unordered_map<string, uint32_t>& dynamicOffsets = {}, const PushConstants& constants = {});
 
 	inline void dispatchTiled(CommandBuffer& commandBuffer, const vk::Extent3D& dim, const shared_ptr<DescriptorSets>& descriptors, const unordered_map<string, uint32_t>& dynamicOffsets = {}, const PushConstants& constants = {}) {
-		dispatch(commandBuffer, dispatchDimensions(dim), descriptors, dynamicOffsets, constants);
+		dispatch(commandBuffer, calculateDispatchDim(dim), descriptors, dynamicOffsets, constants);
 	}
 	inline void dispatchTiled(CommandBuffer& commandBuffer, const vk::Extent3D& dim, const Descriptors& descriptors = {}, const unordered_map<string, uint32_t>& dynamicOffsets = {}, const PushConstants& constants = {}) {
-		dispatch(commandBuffer, dispatchDimensions(dim), descriptors, dynamicOffsets, constants);
+		dispatch(commandBuffer, calculateDispatchDim(dim), descriptors, dynamicOffsets, constants);
 	}
 
 private:
@@ -119,9 +116,10 @@ private:
 	vector<shared_ptr<vk::raii::DescriptorSetLayout>> mDescriptorSetLayouts;
 	Metadata mMetadata;
 
-	ResourcePool<DescriptorSets> mResources;
+	DeviceResourcePool<DescriptorSets> mResources;
 };
 
+// compiles + caches pipelines
 class ComputePipelineCache {
 public:
 	ComputePipelineCache(const filesystem::path& sourceFile,

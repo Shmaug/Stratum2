@@ -1,6 +1,5 @@
 #include "Image.hpp"
 #include "Buffer.hpp"
-#include "CommandBuffer.hpp"
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -14,7 +13,6 @@
 
 #define TINYDDSLOADER_IMPLEMENTATION
 #include <tinyddsloader.h>
-
 
 namespace tinyvkpt {
 
@@ -157,7 +155,9 @@ Image::Image(Device& device, const string& name, const Metadata& metadata, const
 		queueFamilies(),
 		vk::ImageLayout::eUndefined );
 
-	vmaCreateImage(mDevice.allocator(), &(const VkImageCreateInfo&)createInfo, &allocationCreateInfo, &(VkImage&)mImage, &mAllocation, nullptr);
+	vk::Result result = (vk::Result)vmaCreateImage(mDevice.allocator(), &(const VkImageCreateInfo&)createInfo, &allocationCreateInfo, &(VkImage&)mImage, &mAllocation, nullptr);
+	if (result != vk::Result::eSuccess)
+		vk::throwResultException(result, "vmaCreateImage");
 	device.setDebugName(mImage, resourceName());
 	mSubresourceStates = vector<vector<Image::SubresourceLayoutState>>(
 		metadata.mLayers,
@@ -230,8 +230,11 @@ void Image::barrier(CommandBuffer& commandBuffer, const vk::ImageSubresourceRang
 		vk::AccessFlagBits::eMemoryWrite |
 		vk::AccessFlagBits::eAccelerationStructureWriteKHR;
 
-	for (uint32_t arrayLayer = subresource.baseArrayLayer; arrayLayer < subresource.layerCount; arrayLayer++) {
-		for (uint32_t level = subresource.baseMipLevel; level < subresource.levelCount; level++) {
+	const uint32_t maxLayer = min(mMetadata.mLayers, subresource.baseArrayLayer+subresource.layerCount);
+	const uint32_t maxLevel = min(mMetadata.mLevels, subresource.baseMipLevel+subresource.levelCount);
+
+	for (uint32_t arrayLayer = subresource.baseArrayLayer; arrayLayer < maxLayer; arrayLayer++) {
+		for (uint32_t level = subresource.baseMipLevel; level < maxLevel; level++) {
 			auto& oldState = mSubresourceStates[arrayLayer][level];
 
 			// try to combine barrier with one for previous mip level
@@ -277,9 +280,8 @@ void Image::updateState(const vk::ImageSubresourceRange& subresource, const Imag
 
 void Image::generateMipMaps(CommandBuffer& commandBuffer, const vk::Filter filter, const vk::ImageAspectFlags aspect) {
 	barrier(commandBuffer,
-		vk::ImageSubresourceRange(aspect, 0, levels()-1, 0, layers()), vk::ImageLayout::eTransferDstOptimal,
-		vk::PipelineStageFlagBits::eTransfer,
-		vk::AccessFlagBits::eTransferWrite );
+		vk::ImageSubresourceRange(aspect, 1, levels()-1, 0, layers()),
+		vk::ImageLayout::eTransferDstOptimal, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferWrite);
 	vk::ImageBlit blit = {};
 	blit.srcOffsets[0] = blit.dstOffsets[0] = vk::Offset3D(0, 0, 0);
 	blit.srcOffsets[1] = vk::Offset3D((int32_t)extent().width, (int32_t)extent().height, (int32_t)extent().depth);
@@ -289,10 +291,8 @@ void Image::generateMipMaps(CommandBuffer& commandBuffer, const vk::Filter filte
 	blit.dstSubresource = blit.srcSubresource;
 	for (uint32_t i = 1; i < levels(); i++) {
 		barrier(commandBuffer,
-			vk::ImageSubresourceRange(aspect, i, 1, 0, layers()),
-			vk::ImageLayout::eTransferSrcOptimal,
-			vk::PipelineStageFlagBits::eTransfer,
-			vk::AccessFlagBits::eTransferRead );
+			vk::ImageSubresourceRange(aspect, i-1, 1, 0, layers()),
+			vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferRead );
 		blit.srcSubresource.mipLevel = i - 1;
 		blit.dstSubresource.mipLevel = i;
 		blit.dstOffsets[1].x = max(1, blit.srcOffsets[1].x / 2);
@@ -331,6 +331,5 @@ void Image::blit(CommandBuffer& commandBuffer, const shared_ptr<Image>& src, con
 	}
 	commandBuffer->blitImage(**src, vk::ImageLayout::eTransferSrcOptimal, **dst, vk::ImageLayout::eTransferDstOptimal, regions, filter);
 }
-
 
 }

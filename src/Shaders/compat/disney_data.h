@@ -45,7 +45,7 @@ struct DisneyMaterialData {
 	SLANG_MUTATING
 	void clearcoat(const float v)       { data[2][0] = v; }
 	SLANG_MUTATING
-	void clearcoat_gloss(const float v) { data[2][1] = v; }
+	void clearcoatGloss(const float v) { data[2][1] = v; }
 	SLANG_MUTATING
 	void transmission(const float v)    { data[2][2] = v; }
 	SLANG_MUTATING

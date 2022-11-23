@@ -60,6 +60,8 @@ struct TransformData {
 		m = Eigen::Affine3f(Eigen::Translation3f(t)).matrix().topRows<3>();
 		m.block<3, 3>(0, 0) = (Eigen::Quaternionf(r.w, r.xyz[0], r.xyz[1], r.xyz[2]) * Eigen::Scaling(s.matrix())).matrix();
 	}
+
+	void drawGui(Node& node); // defined in Scene.cpp
 #else
 	__init(const float3x4 t) {
 		m = t;

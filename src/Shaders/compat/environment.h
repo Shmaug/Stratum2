@@ -12,11 +12,11 @@ struct Environment {
 	ImageValue3 emission;
 
 #ifdef __cplusplus
-	inline void store(ByteAppendBuffer& bytes, MaterialResources& resources) const {
-		emission.store(bytes, resources);
+	inline void store(MaterialResources& resources) const {
+		emission.store(resources);
 	}
-	inline void inspectorGui() {
-		image_value_field("Emission", emission);
+	inline void drawGui() {
+		imageValueField("Emission", emission);
 	}
 #endif
 #ifdef __HLSL__
@@ -62,16 +62,6 @@ struct Environment {
 };
 
 #ifdef __cplusplus
-
-inline Environment loadEnvironment(CommandBuffer& commandBuffer, const filesystem::path& filename) {
-	// TODO
-	//ImageData image = loadImageData(commandBuffer.mDevice, filename, false);
-	shared_ptr<Image> image; //= make_shared<Image>(commandBuffer, filename.stem().string(), filename);
-	Environment e;
-	e.emission = ImageValue3(float3::Ones(), image);
-	return e;
-}
-
 } // namespace vkpt
 #endif
 

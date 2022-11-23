@@ -14,13 +14,13 @@
 
 namespace tinyvkpt {
 
-void createTransform(const NodePtr& dst, Medium& h) {
+void createTransform(Node& dst, Medium& h) {
 	const nanovdb::Vec3R bboxMax = h.mDensityGrid->grid<float>()->worldBBox().max();
 	const nanovdb::Vec3R bboxMin = h.mDensityGrid->grid<float>()->worldBBox().min();
 	const nanovdb::Vec3R center = (bboxMax + bboxMin) / 2;
 	const nanovdb::Vec3R extent = bboxMax - bboxMin;
 	const float scale = 1 / (float)(bboxMax - bboxMin).max();
-	dst->makeComponent<TransformData>(
+	dst.makeComponent<TransformData>(
 		-VectorType<nanovdb::Vec3R::ValueType, 3>::Map(&center[0]).cast<float>() * scale,
 		quatf_identity(),
 		float3::Constant(scale));
@@ -95,33 +95,33 @@ nanovdb::GridHandle<nanovdb::HostBuffer> loadVol(const filesystem::path& filenam
 		throw runtime_error("Unsupported volume format (wrong number of channels). Filename:" + filename.string());
 }
 
-NodePtr Scene::loadVol(CommandBuffer& commandBuffer, const filesystem::path& filename) {
+shared_ptr<Node> Scene::loadVol(CommandBuffer& commandBuffer, const filesystem::path& filename) {
 	nanovdb::GridHandle<nanovdb::HostBuffer> densityHandle = tinyvkpt::loadVol(filename);
 	if (densityHandle) {
 		// create nvdb so the file can be loaded faster next time
 		if (!filesystem::exists(filename.string() + ".nvdb"))
 			nanovdb::io::writeGrid(filename.string() + ".nvdb", densityHandle);
-		const NodePtr node = Node::create(filename.stem().string());
+		const shared_ptr<Node> node = Node::create(filename.stem().string());
 		Medium& h = *node->makeComponent<Medium>(createVolume(commandBuffer, filename.stem().string(), node->makeComponent<nanovdb::GridHandle<nanovdb::HostBuffer>>(move(densityHandle))));
-		createTransform(node, h);
+		createTransform(*node, h);
 		return node;
 	}
 	return nullptr;
 }
 
-NodePtr Scene::loadNvdb(CommandBuffer& commandBuffer, const filesystem::path& filename) {
+shared_ptr<Node> Scene::loadNvdb(CommandBuffer& commandBuffer, const filesystem::path& filename) {
 	nanovdb::GridHandle<nanovdb::HostBuffer> densityHandle = nanovdb::io::readGrid(filename.string().c_str());
 	if (densityHandle) {
-		const NodePtr node = Node::create(filename.stem().string());
+		const shared_ptr<Node> node = Node::create(filename.stem().string());
 		Medium& h = *node->makeComponent<Medium>(createVolume(commandBuffer, filename.stem().string(), node->makeComponent<nanovdb::GridHandle<nanovdb::HostBuffer>>(move(densityHandle))));
-		createTransform(node, h);
+		createTransform(*node, h);
 		return node;
 	}
 	return nullptr;
 }
 
 #ifdef STRATUM_ENABLE_OPENVDB
-NodePtr Scene::loadVdb(CommandBuffer& commandBuffer, const filesystem::path& filename) {
+shared_ptr<Node> Scene::loadVdb(CommandBuffer& commandBuffer, const filesystem::path& filename) {
 	static bool initialized = false;
 	if (!initialized) {
 		openvdb::initialize();
@@ -132,7 +132,7 @@ NodePtr Scene::loadVdb(CommandBuffer& commandBuffer, const filesystem::path& fil
 
 	unordered_map<string, shared_ptr<nanovdb::GridHandle<nanovdb::HostBuffer>>> grids;
 	for (auto it = file.beginName(); name_it != file.endName(); ++it) {
-		auto grid = root.makeChild(*name_it).makeComponent<nanovdb::GridHandle<nanovdb::HostBuffer>>(nanovdb::openToNanoVDB(file.readGrid(*it)));
+		auto grid = root.addChild(*name_it).makeComponent<nanovdb::GridHandle<nanovdb::HostBuffer>>(nanovdb::openToNanoVDB(file.readGrid(*it)));
 		grids.emplace(*it, grid);
 		// cache NVDB
 		if (!filesystem::exists(filename.string() + *it + ".nvdb"))

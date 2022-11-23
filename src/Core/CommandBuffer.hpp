@@ -19,20 +19,21 @@ public:
 	}
 
 	template<typename T>
-	inline void trackVulkanResource(const shared_ptr<T>& vr) {
-		class ResourceWrapperType : public Device::Resource {
+	inline void trackVulkanResource(const shared_ptr<T>& r) {
+		class ResourceWrapper : public Device::Resource {
 		public:
 			shared_ptr<T> mResource;
-			inline ResourceWrapperType(Device& device, const string& name, shared_ptr<T>&& r)
+			inline ResourceWrapper(Device& device, const string& name, shared_ptr<T>&& r)
 				: Device::Resource(device, name), mResource(r) {}
-			inline ResourceWrapperType(Device& device, const string& name, const shared_ptr<T>& r)
+			inline ResourceWrapper(Device& device, const string& name, const shared_ptr<T>& r)
 				: Device::Resource(device, name), mResource(r) {}
-			ResourceWrapperType(ResourceWrapperType&&) = default;
-			ResourceWrapperType(const ResourceWrapperType&) = default;
-			ResourceWrapperType& operator=(ResourceWrapperType&&) = default;
-			ResourceWrapperType& operator=(const ResourceWrapperType&) = default;
+			ResourceWrapper(ResourceWrapper&&) = default;
+			ResourceWrapper(const ResourceWrapper&) = default;
+			ResourceWrapper& operator=(ResourceWrapper&&) = default;
+			ResourceWrapper& operator=(const ResourceWrapper&) = default;
 		};
-		trackResource(make_shared<ResourceWrapperType>(mDevice, resourceName() + "/ResourceWrapper", vr));
+
+		trackResource(make_shared<ResourceWrapper>(mDevice, resourceName() + "/ResourceWrapper", r));
 	}
 
 	void reset();

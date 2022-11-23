@@ -9,6 +9,9 @@
 
 namespace tinyvkpt {
 
+unordered_map<Image::View, pair<vk::raii::DescriptorSet, vk::raii::Sampler>> Gui::gTextureIDs;
+unordered_set<Image::View> Gui::gFrameTextures;
+
 Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily, const vk::ImageLayout dstLayout, const bool clear)
 	: mRenderPass(nullptr), mQueueFamily(queueFamily), mDstLayout(dstLayout) {
 
@@ -25,13 +28,14 @@ Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily
 		vk::ImageLayout::eColorAttachmentOptimal,
 		dstLayout );
 	mRenderPass = vk::raii::RenderPass(*swapchain.mDevice, vk::RenderPassCreateInfo({}, attachment, subpass, {}));
+	swapchain.mDevice.setDebugName(*mRenderPass, "Gui::mRenderPass");
 
 	ImGui::CreateContext();
 
 	// Setup Dear ImGui style
 	ImGui::StyleColorsDark();
+	ImGui::GetStyle().IndentSpacing *= 0.75f;
 
-	// Setup Platform/Renderer backends
 	ImGui_ImplGlfw_InitForVulkan(swapchain.mWindow.window(), true);
 
 	ImGui_ImplVulkan_InitInfo init_info = {};
@@ -43,14 +47,24 @@ Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily
 	init_info.PipelineCache  = *swapchain.mDevice.pipelineCache();
 	init_info.DescriptorPool = *swapchain.mDevice.descriptorPool();
 	init_info.Subpass = 0;
-	init_info.MinImageCount = swapchain.backBufferCount();
-	init_info.ImageCount    = swapchain.backBufferCount();
+	init_info.MinImageCount = swapchain.minImageCount() + 1; // HACK: +1 to fix ImGui destroying in-flight resources
+	init_info.ImageCount    = swapchain.imageCount() + 1;
 	init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 	init_info.Allocator = nullptr;
 	//init_info.CheckVkResultFn = check_vk_result;
 	ImGui_ImplVulkan_Init(&init_info, *mRenderPass);
 
 	// Upload Fonts
+
+	for (auto fontstr : swapchain.mDevice.mInstance.findArguments("font")) {
+		const size_t delim = fontstr.find(',');
+		if (delim == string::npos)
+			ImGui::GetIO().Fonts->AddFontFromFileTTF(fontstr.c_str(), 16.f);
+		else {
+			string font = fontstr.substr(0, delim);
+			ImGui::GetIO().Fonts->AddFontFromFileTTF(font.c_str(), (float)atof(fontstr.c_str() + delim + 1));
+		}
+	}
 
 	shared_ptr<CommandBuffer> commandBufferPtr = swapchain.mDevice.getCommandBuffer(0);
 	CommandBuffer& commandBuffer = *commandBufferPtr;
@@ -66,11 +80,11 @@ Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily
 	ImGui_ImplVulkan_DestroyFontUploadObjects();
 }
 Gui::~Gui() {
-	if (*mRenderPass) {
-		ImGui_ImplVulkan_Shutdown();
-		ImGui_ImplGlfw_Shutdown();
-		ImGui::DestroyContext();
-	}
+	gFrameTextures.clear();
+	gTextureIDs.clear();
+	ImGui_ImplVulkan_Shutdown();
+	ImGui_ImplGlfw_Shutdown();
+	ImGui::DestroyContext();
 }
 
 void Gui::newFrame() {
@@ -79,7 +93,7 @@ void Gui::newFrame() {
 	ImGui::NewFrame();
 }
 
-void Gui::render(CommandBuffer& commandBuffer, const Image::View& backBuffer, const vk::ClearValue& clearValue) {
+void Gui::render(CommandBuffer& commandBuffer, const Image::View& renderTarget, const vk::ClearValue& clearValue) {
 	ImGui::Render();
 	ImDrawData* drawData = ImGui::GetDrawData();
 	if (drawData->DisplaySize.x <= 0.0f || drawData->DisplaySize.y <= 0.0f) return;
@@ -88,13 +102,17 @@ void Gui::render(CommandBuffer& commandBuffer, const Image::View& backBuffer, co
 
 	// create framebuffer
 
-	auto it = mFramebuffers.find(**backBuffer.image());
+	auto it = mFramebuffers.find(**renderTarget.image());
 	if (it == mFramebuffers.end()) {
-		vk::raii::Framebuffer fb(*commandBuffer.mDevice, vk::FramebufferCreateInfo({}, *mRenderPass, *backBuffer, extent.width, extent.height, 1));
-		it = mFramebuffers.emplace(**backBuffer.image(), move(fb)).first;
+		vk::raii::Framebuffer fb(*commandBuffer.mDevice, vk::FramebufferCreateInfo({}, *mRenderPass, *renderTarget, extent.width, extent.height, 1));
+		it = mFramebuffers.emplace(**renderTarget.image(), move(fb)).first;
 	}
 
-	backBuffer.barrier(commandBuffer, vk::ImageLayout::eColorAttachmentOptimal, vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::AccessFlagBits::eColorAttachmentWrite);
+	renderTarget.barrier(commandBuffer, vk::ImageLayout::eColorAttachmentOptimal, vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::AccessFlagBits::eColorAttachmentWrite);
+
+	for (const Image::View& v : gFrameTextures)
+		v.barrier(commandBuffer, vk::ImageLayout::eShaderReadOnlyOptimal, vk::PipelineStageFlagBits::eFragmentShader, vk::AccessFlagBits::eShaderRead);
+	gFrameTextures.clear();
 
 	// render gui
 
@@ -107,7 +125,7 @@ void Gui::render(CommandBuffer& commandBuffer, const Image::View& backBuffer, co
 
 	// Submit command buffer
 	commandBuffer->endRenderPass();
-	backBuffer.updateState(mDstLayout, vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::AccessFlagBits::eColorAttachmentRead);
+	renderTarget.updateState(mDstLayout, vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::AccessFlagBits::eColorAttachmentRead);
 }
 
 }

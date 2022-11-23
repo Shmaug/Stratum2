@@ -1,18 +1,25 @@
 #include "FlyCamera.hpp"
 
 #include "Scene.hpp"
+#include "Inspector.hpp"
 
 #include <Core/Profiler.hpp>
 #include <Core/Swapchain.hpp>
 
+#include <imgui/imgui.h>
+
 namespace tinyvkpt {
+
+FlyCamera::FlyCamera(Node& node) : mNode(node) {
+	if (shared_ptr<Inspector> inspector = mNode.root()->findDescendant<Inspector>())
+		inspector->setTypeCallback<FlyCamera>();
+}
 
 void FlyCamera::drawGui() {
 	ImGui::DragFloat("Move Speed", &mMoveSpeed, 0.1f, 0);
 	if (mMoveSpeed < 0) mMoveSpeed = 0;
 	ImGui::DragFloat("Rotate Speed", &mRotateSpeed, 0.001f, 0);
 	if (mRotateSpeed < 0) mRotateSpeed = 0;
-	ImGui::Checkbox("Match Window Rect", &mMatchWindowRect);
 
 	if (ImGui::DragFloat2("Rotation", mRotation.data(), 0.01f, 0))
 		mRotation.x() = clamp(mRotation.x(), -((float)M_PI) / 2, ((float)M_PI) / 2);
@@ -21,15 +28,7 @@ void FlyCamera::drawGui() {
 void FlyCamera::update(const float deltaTime) {
 	ProfilerScope ps("FlyCamera::update");
 
-	if (mMatchWindowRect) mCamera->mImageRect = vk::Rect2D{ { 0, 0 }, mNode.findAncestor<Swapchain>()->extent() };
-
-	// force projection aspect ratio to match image rect extent
-	const float aspect = mCamera->mImageRect.extent.height / (float)mCamera->mImageRect.extent.width;
-	if (abs(mCamera->mProjection.scale[0] / mCamera->mProjection.scale[1] - aspect) > 1e-5) {
-		const float fovy = 2 * atan(1 / mCamera->mProjection.scale[1]);
-		mCamera->mProjection = make_perspective(fovy, aspect, mCamera->mProjection.offset, mCamera->mProjection.near_plane);
-	}
-	const float fwd = (mCamera->mProjection.near_plane < 0) ? -1 : 1;
+	const float fwd = 1;
 
 	TransformData& transform = *mNode.findAncestor<TransformData>();
 

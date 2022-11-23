@@ -9,7 +9,7 @@
 
 namespace tinyvkpt {
 
-NodePtr Scene::loadGltf(CommandBuffer& commandBuffer, const filesystem::path& filename) {
+shared_ptr<Node> Scene::loadGltf(CommandBuffer& commandBuffer, const filesystem::path& filename) {
 	ProfilerScope ps("loadGltf", &commandBuffer);
 
 	cout << "Loading " << filename << endl;
@@ -30,7 +30,7 @@ NodePtr Scene::loadGltf(CommandBuffer& commandBuffer, const filesystem::path& fi
 	vector<shared_ptr<Material>> materials(model.materials.size());
 	vector<vector<shared_ptr<Mesh>>> meshes(model.meshes.size());
 
-	const NodePtr rootNode = Node::create(filename.stem().string());
+	const shared_ptr<Node> rootNode = Node::create(filename.stem().string());
 
 	auto getImage = [&](const uint32_t texture_index, const bool srgb) -> Image::View {
 		if (texture_index >= model.textures.size()) return {};
@@ -82,14 +82,13 @@ NodePtr Scene::loadGltf(CommandBuffer& commandBuffer, const filesystem::path& fi
 	ranges::transform(model.buffers, buffers.begin(), [&](const tinygltf::Buffer& buffer) {
 		Buffer::View<unsigned char> tmp = make_shared<Buffer>(device, buffer.name+"/Staging", buffer.data.size(), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
 		ranges::copy(buffer.data, tmp.begin());
-		Buffer::View<unsigned char> dst = make_shared<Buffer>(device, buffer.name, buffer.data.size(), bufferUsage, vk::MemoryPropertyFlagBits::eDeviceLocal, 16);
+		Buffer::View<unsigned char> dst = make_shared<Buffer>(device, buffer.name, buffer.data.size(), bufferUsage, vk::MemoryPropertyFlagBits::eDeviceLocal);
 		Buffer::copy(commandBuffer, tmp, dst);
 		dst.barrier(commandBuffer, vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eVertexInput|vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eVertexAttributeRead|vk::AccessFlagBits::eIndexRead|vk::AccessFlagBits::eShaderRead);
 		return dst.buffer();
 	});
 
 	cout << "Loading materials..." << endl;
-	const NodePtr materialsNode = rootNode->makeChild("materials");
 	ranges::transform(model.materials, materials.begin(), [&](const tinygltf::Material& material) {
 		ImageValue3 emission(double3::Map(material.emissiveFactor.data()).cast<float>(), getImage(material.emissiveTexture.index, true));
 		if (material.extras.Has("emissionIntensity"))
@@ -111,11 +110,10 @@ NodePtr Scene::loadGltf(CommandBuffer& commandBuffer, const filesystem::path& fi
 		m.mBumpImage = getImage(material.normalTexture.index, false);
 		m.mBumpStrength = 1;
 
-		return materialsNode->makeChild(material.name)->makeComponent<Material>(m);
+		return make_shared<Material>(m);
 	});
 
 	cout << "Loading meshes...";
-	const NodePtr meshesNode = rootNode->makeChild("meshes");
 	for (uint32_t i = 0; i < model.meshes.size(); i++) {
 		cout << "\rLoading meshes " << (i+1) << "/" << model.meshes.size() << "     ";
 		meshes[i].resize(model.meshes[i].primitives.size());
@@ -231,19 +229,21 @@ NodePtr Scene::loadGltf(CommandBuffer& commandBuffer, const filesystem::path& fi
 					Mesh::VertexAttributeDescription(stride, attributeFormat, 0, vk::VertexInputRate::eVertex) };
 			}
 
-			meshes[i][j] = meshesNode->makeChild(model.meshes[i].name + "_" + to_string(j))->makeComponent<Mesh>(vertexData, indexBuffer, topology);
+			meshes[i][j] = make_shared<Mesh>(vertexData, indexBuffer, topology);
 		}
 	}
 	cout << endl;
 
-	cout << "Loading transforms...";
-	vector<NodePtr> nodes(model.nodes.size());
+	cout << "Loading primitives...";
+	vector<shared_ptr<Node>> nodes(model.nodes.size());
 	for (size_t n = 0; n < model.nodes.size(); n++) {
-		cout << "\rLoading transforms " << (n+1) << "/" << model.nodes.size() << "     ";
+		cout << "\rLoading primitives " << (n+1) << "/" << model.nodes.size() << "     ";
 
 		const auto& node = model.nodes[n];
-		const NodePtr dst = rootNode->makeChild(node.name);
+		const shared_ptr<Node> dst = rootNode->addChild(node.name);
 		nodes[n] = dst;
+
+		// compute transform
 
 		if (!node.translation.empty() || !node.rotation.empty() || !node.scale.empty()) {
 			float3 translate;
@@ -257,23 +257,25 @@ NodePtr Scene::loadGltf(CommandBuffer& commandBuffer, const filesystem::path& fi
 		} else if (!node.matrix.empty())
 			dst->makeComponent<TransformData>(Eigen::Array<double,4,4>::Map(node.matrix.data()).block<3,4>(0,0).cast<float>());
 
+		// make node for MeshPrimitive
+
 		if (node.mesh < model.meshes.size())
 			for (uint32_t i = 0; i < model.meshes[node.mesh].primitives.size(); i++) {
 				const auto& prim = model.meshes[node.mesh].primitives[i];
-				dst->makeChild(model.meshes[node.mesh].name)->makeComponent<MeshPrimitive>(materials[prim.material], meshes[node.mesh][i]);
+				dst->addChild(model.meshes[node.mesh].name)->makeComponent<MeshPrimitive>(materials[prim.material], meshes[node.mesh][i]);
 			}
 
 		auto light_it = node.extensions.find("KHR_lights_punctual");
 		if (light_it != node.extensions.end() && light_it->second.Has("light")) {
 			const tinygltf::Light& l = model.lights[light_it->second.Get("light").GetNumberAsInt()];
 			if (l.type == "point" && l.extras.Has("radius")) {
-				auto sphere = dst->makeChild(l.name)->makeComponent<SpherePrimitive>();
+				auto sphere = dst->addChild(l.name)->makeComponent<SpherePrimitive>();
 				sphere->mRadius = (float)l.extras.Get("radius").GetNumberAsDouble();
 				Material m;
 				const float3 emission = double3::Map(l.color.data()).cast<float>();
 				m.baseColor() = emission/luminance(emission);
 				m.emission() = luminance(emission) * (float)(l.intensity / (4*M_PI*sphere->mRadius*sphere->mRadius));
-				sphere->mMaterial = materialsNode->makeChild(l.name)->makeComponent<Material>(m);
+				sphere->mMaterial = make_shared<Material>(m);
 			}
 		}
 	}

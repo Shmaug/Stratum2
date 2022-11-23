@@ -1,12 +1,13 @@
 #pragma once
 
+#include <chrono>
+
 #include <nanovdb/util/GridHandle.h>
-#include <imgui/imgui.h> // materials have ImGui calls
 
 #include <Core/Mesh.hpp>
 #include <Core/Pipeline.hpp>
 
-#include "SceneGraph.hpp"
+#include "Node.hpp"
 #include "Material.hpp"
 
 namespace tinyvkpt {
@@ -16,11 +17,15 @@ TransformData nodeToWorld(const Node& node);
 struct MeshPrimitive {
 	shared_ptr<Material> mMaterial;
 	shared_ptr<Mesh> mMesh;
+
+	void drawGui(Node& node);
 };
 
 struct SpherePrimitive {
 	shared_ptr<Material> mMaterial;
 	float mRadius;
+
+	void drawGui(Node& node);
 };
 
 struct Camera {
@@ -37,6 +42,8 @@ struct Camera {
 		v.projection.sensor_area = abs(extent[0] * extent[1]);
 		return v;
 	}
+
+	void drawGui();
 };
 
 class Scene {
@@ -46,7 +53,7 @@ public:
 		shared_ptr<vk::raii::AccelerationStructureKHR> mAccelerationStructure;
 
 		unordered_map<const void* /* address of component */, pair<TransformData, uint32_t /* instance index */ >> mInstanceTransformMap;
-		vector<NodePtr> mInstanceNodes;
+		vector<weak_ptr<Node>> mInstanceNodes;
 
 		Buffer::View<PackedVertexData> mVertices;
 		Buffer::View<byte> mIndices;
@@ -63,34 +70,39 @@ public:
 		uint32_t mMaterialCount;
 		uint32_t mEmissivePrimitiveCount;
 
-		RenderResources(Scene& scene, CommandBuffer& commandBuffer, const shared_ptr<RenderResources>& prevFrame = {});
+		RenderResources() = default;
 		RenderResources(const RenderResources&) = default;
 		RenderResources(RenderResources&&) = default;
 		RenderResources& operator=(const RenderResources&) = default;
 		RenderResources& operator=(RenderResources&&) = default;
+
+		inline RenderResources(Device& device) : Device::Resource(device, "RenderResources"), mAccelerationStructure(nullptr) {}
+
+		void update(Scene& scene, CommandBuffer& commandBuffer, const shared_ptr<RenderResources>& prevFrame = {});
 	};
 
-	Scene(Device& device);
+	Node& mNode;
+
+	Scene(Node&);
 
 	void createPipelines();
 
 	inline const shared_ptr<RenderResources>& resources() const { return mResources; }
-	inline const NodePtr& node() const { return mRootNode; }
 
 	void drawGui();
 
 	inline void markDirty() { mUpdateOnce = true; }
 	void update(CommandBuffer& commandBuffer, const float deltaTime);
 
-	NodePtr loadEnvironmentMap(CommandBuffer& commandBuffer, const filesystem::path& filename);
-	NodePtr loadGltf(CommandBuffer& commandBuffer, const filesystem::path& filename);
-	NodePtr loadVol(CommandBuffer& commandBuffer, const filesystem::path& filename);
-	NodePtr loadNvdb(CommandBuffer& commandBuffer, const filesystem::path& filename);
+	shared_ptr<Node> loadEnvironmentMap(CommandBuffer& commandBuffer, const filesystem::path& filename);
+	shared_ptr<Node> loadGltf(CommandBuffer& commandBuffer, const filesystem::path& filename);
+	shared_ptr<Node> loadVol(CommandBuffer& commandBuffer, const filesystem::path& filename);
+	shared_ptr<Node> loadNvdb(CommandBuffer& commandBuffer, const filesystem::path& filename);
 #ifdef STRATUM_ENABLE_ASSIMP
-	NodePtr loadAssimp(CommandBuffer& commandBuffer, const filesystem::path& filename);
+	shared_ptr<Node> loadAssimp(CommandBuffer& commandBuffer, const filesystem::path& filename);
 #endif
 #ifdef STRATUM_ENABLE_OPENVDB
-	NodePtr loadVdb(CommandBuffer& commandBuffer, const filesystem::path& filename);
+	shared_ptr<Node> loadVdb(CommandBuffer& commandBuffer, const filesystem::path& filename);
 #endif
 
 	inline vector<string> loaderFilters() {
@@ -112,23 +124,23 @@ public:
 	#endif
 		};
 	}
-	inline NodePtr load(CommandBuffer& commandBuffer, const filesystem::path& filename) {
+	inline shared_ptr<Node> load(CommandBuffer& commandBuffer, const filesystem::path& filename) {
 		const string& ext = filename.extension().string();
-		if      (ext == ".hdr") loadEnvironmentMap(commandBuffer, filename);
-		else if (ext == ".exr") loadEnvironmentMap(commandBuffer, filename);
-		else if (ext == ".gltf") loadGltf(commandBuffer, filename);
-		else if (ext == ".glb") loadGltf(commandBuffer, filename);
-		else if (ext == ".vol") loadVol(commandBuffer, filename);
-		else if (ext == ".nvdb") loadNvdb(commandBuffer, filename);
+		if      (ext == ".hdr") return loadEnvironmentMap(commandBuffer, filename);
+		else if (ext == ".exr") return loadEnvironmentMap(commandBuffer, filename);
+		else if (ext == ".gltf") return loadGltf(commandBuffer, filename);
+		else if (ext == ".glb") return loadGltf(commandBuffer, filename);
+		else if (ext == ".vol") return loadVol(commandBuffer, filename);
+		else if (ext == ".nvdb") return loadNvdb(commandBuffer, filename);
 	#ifdef STRATUM_ENABLE_ASSIMP
-		else if (ext == ".fbx") loadAssimp(commandBuffer, filename);
-		else if (ext == ".obj") loadAssimp(commandBuffer, filename);
-		else if (ext == ".blend") loadAssimp(commandBuffer, filename);
-		else if (ext == ".ply") loadAssimp(commandBuffer, filename);
-		else if (ext == ".stl") loadAssimp(commandBuffer, filename);
+		else if (ext == ".fbx") return loadAssimp(commandBuffer, filename);
+		else if (ext == ".obj") return loadAssimp(commandBuffer, filename);
+		else if (ext == ".blend") return loadAssimp(commandBuffer, filename);
+		else if (ext == ".ply") return loadAssimp(commandBuffer, filename);
+		else if (ext == ".stl") return loadAssimp(commandBuffer, filename);
 	#endif
 	#ifdef STRATUM_ENABLE_OPENVDB
-		else if (ext == ".vdb") loadVdb(commandBuffer, filename)
+		else if (ext == ".vdb") return loadVdb(commandBuffer, filename)
 	#endif
 		else
 			throw runtime_error("unknown extension:" + ext);
@@ -142,12 +154,11 @@ public:
 private:
 	using AccelerationStructureData = pair<shared_ptr<vk::raii::AccelerationStructureKHR>, Buffer::View<byte> /* acceleration structure buffer */>;
 
-	NodePtr mRootNode;
 
 	unordered_map<size_t, AccelerationStructureData> mAABBs;
 	unordered_map<size_t, AccelerationStructureData> mMeshAccelerationStructures;
 
-	ResourcePool<RenderResources> mResourcePool;
+	DeviceResourcePool<RenderResources> mResourcePool;
 	shared_ptr<RenderResources> mResources;
 
 	ComputePipelineCache mCopyVerticesPipeline;
@@ -160,6 +171,16 @@ private:
 
 	bool mAlwaysUpdate = false;
 	bool mUpdateOnce = false;
+
+	// dirty animation hack
+	friend struct TransformData;
+	float3 mAnimateTranslate = float3::Zero();
+	float3 mAnimateRotate = float3::Zero();
+	float3 mAnimateWiggleBase = float3::Zero();
+	float3 mAnimateWiggleOffset = float3::Zero();
+	float mAnimateWiggleSpeed = 1;
+	float mAnimateWiggleTime = 0;
+	shared_ptr<Node> mAnimatedTransform;
 };
 
 }

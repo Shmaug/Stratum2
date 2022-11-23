@@ -10,6 +10,10 @@ namespace tinyvkpt {
 
 class Denoiser {
 public:
+	Node& mNode;
+
+	Denoiser(Node&);
+
 	void createPipelines(Device& device);
 
 	void drawGui();
@@ -26,8 +30,6 @@ public:
 	inline void demodulateAlbedo(const bool v) { mDemodulateAlbedo = v; }
 
 private:
-	Node& mNode;
-
 	bool mReprojection = true;
 	bool mDemodulateAlbedo = true;
 
@@ -61,7 +63,7 @@ private:
 		shared_ptr<DescriptorSets> mDescriptors;
 	};
 
-	ResourcePool<FrameResources> mFrameResources;
+	DeviceResourcePool<FrameResources> mFrameResources;
 	shared_ptr<FrameResources> mCurFrame, mPrevFrame;
 
 };

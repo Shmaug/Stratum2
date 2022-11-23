@@ -14,7 +14,7 @@ public:
 		const vk::SurfaceFormatKHR preferredSurfaceFormat = vk::SurfaceFormatKHR(vk::Format::eR8G8B8A8Unorm, vk::ColorSpaceKHR::eSrgbNonlinear),
 		const vk::PresentModeKHR presentMode = vk::PresentModeKHR::eImmediate);
 
-	DECLARE_DEREFERENCE_OPERATORS(vk::raii::SwapchainKHR, mSwapchain)
+	DECLARE_DEREFERENCE_OPERATORS(shared_ptr<vk::raii::SwapchainKHR>, mSwapchain)
 
 	inline vk::Extent2D extent() const { return mExtent; }
 	inline vk::SurfaceFormatKHR format() const { return mSurfaceFormat; }
@@ -24,13 +24,13 @@ public:
 	inline void acquireImageTimeout(const chrono::nanoseconds& v) { mAcquireImageTimeout = v; }
 	inline const chrono::nanoseconds& acquireImageTimeout() const { return mAcquireImageTimeout; }
 
-	inline const uint32_t& minImageCount() const { return mMinImageCount; }
+	inline uint32_t minImageCount() const { return mMinImageCount; }
 
-	inline uint32_t backBufferCount() const { return (uint32_t)mImages.size(); }
-	inline uint32_t backBufferIndex() const { return mBackBufferIndex; }
-	inline const shared_ptr<Image>& backBuffer() const { return mImages[backBufferIndex()]; }
-	inline const shared_ptr<Image>& backBuffer(uint32_t i) const { return mImages[i]; }
-	inline bool dirty() const { return mDirty; }
+	inline uint32_t imageCount() const { return (uint32_t)mImages.size(); }
+	inline uint32_t imageIndex() const { return mImageIndex; }
+	inline const shared_ptr<Image>& image() const { return mImages[imageIndex()]; }
+	inline const shared_ptr<Image>& image(uint32_t i) const { return mImages[i]; }
+	bool isDirty() const;
 
 	bool create();
 
@@ -41,13 +41,15 @@ public:
 	// Number of times present has been called
 	inline size_t presentCount() const { return mPresentCount; }
 
+	void drawGui();
+
 private:
-	vk::raii::SwapchainKHR mSwapchain;
+	shared_ptr<vk::raii::SwapchainKHR> mSwapchain;
 	vk::Extent2D mExtent;
 	vector<shared_ptr<Image>> mImages;
 	vector<shared_ptr<vk::raii::Semaphore>> mImageAvailableSemaphores;
 	uint32_t mMinImageCount;
-	uint32_t mBackBufferIndex;
+	uint32_t mImageIndex;
 	uint32_t mImageAvailableSemaphoreIndex;
 	vk::ImageUsageFlags mUsage;
 
