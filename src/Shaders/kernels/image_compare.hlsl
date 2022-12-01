@@ -1,5 +1,5 @@
-#include "../compat/common.h"
-#include "../compat/image_compare.h"
+#include "compat/common.h"
+#include "compat/image_compare.h"
 
 #ifndef gMode
 #define gMode 0

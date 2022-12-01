@@ -14,7 +14,7 @@
 #define TINYDDSLOADER_IMPLEMENTATION
 #include <tinyddsloader.h>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 
 inline vk::Format dxgiToVulkan(tinyddsloader::DDSFile::DXGIFormat format, const bool alphaFlag) {
@@ -188,7 +188,8 @@ Image::~Image() {
 }
 
 const vk::ImageView Image::view(const vk::ImageSubresourceRange& subresource, const vk::ImageViewType viewType, const vk::ComponentMapping& componentMapping) {
-	auto it = mViews.find(tie(subresource, viewType, componentMapping));
+	auto key = tie(subresource, viewType, componentMapping);
+	auto it = mViews.find(key);
 	if (it == mViews.end()) {
 		vk::raii::ImageView v(*mDevice, vk::ImageViewCreateInfo({},
 			mImage,
@@ -196,7 +197,7 @@ const vk::ImageView Image::view(const vk::ImageSubresourceRange& subresource, co
 			format(),
 			componentMapping,
 			subresource));
-		it = mViews.emplace(tie(subresource, viewType, componentMapping), move(v)).first;
+		it = mViews.emplace(key, move(v)).first;
 	}
 	return *it->second;
 }

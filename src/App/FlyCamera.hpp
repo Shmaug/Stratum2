@@ -1,10 +1,10 @@
 #pragma once
 
-#include <Utils/math.hpp>
+#include <Utils/hlslmath.hpp>
 
 #include "Node.hpp"
 
-namespace tinyvkpt {
+namespace stm2 {
 
 struct FlyCamera {
 	Node& mNode;

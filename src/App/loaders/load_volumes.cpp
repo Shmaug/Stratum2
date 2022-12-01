@@ -12,7 +12,7 @@
 #include <nanovdb/util/OpenToNanoVDB.h>
 #endif
 
-namespace tinyvkpt {
+namespace stm2 {
 
 void createTransform(Node& dst, Medium& h) {
 	const nanovdb::Vec3R bboxMax = h.mDensityGrid->grid<float>()->worldBBox().max();
@@ -22,7 +22,7 @@ void createTransform(Node& dst, Medium& h) {
 	const float scale = 1 / (float)(bboxMax - bboxMin).max();
 	dst.makeComponent<TransformData>(
 		-VectorType<nanovdb::Vec3R::ValueType, 3>::Map(&center[0]).cast<float>() * scale,
-		quatf_identity(),
+		quatf::identity(),
 		float3::Constant(scale));
 }
 
@@ -96,7 +96,7 @@ nanovdb::GridHandle<nanovdb::HostBuffer> loadVol(const filesystem::path& filenam
 }
 
 shared_ptr<Node> Scene::loadVol(CommandBuffer& commandBuffer, const filesystem::path& filename) {
-	nanovdb::GridHandle<nanovdb::HostBuffer> densityHandle = tinyvkpt::loadVol(filename);
+	nanovdb::GridHandle<nanovdb::HostBuffer> densityHandle = stm2::loadVol(filename);
 	if (densityHandle) {
 		// create nvdb so the file can be loaded faster next time
 		if (!filesystem::exists(filename.string() + ".nvdb"))

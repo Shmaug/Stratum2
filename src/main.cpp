@@ -8,12 +8,14 @@
 #include <App/Gui.hpp>
 #include <App/Scene.hpp>
 #include <App/Inspector.hpp>
-#include <App/BDPT.hpp>
 #include <App/FlyCamera.hpp>
 
 #include <GLFW/glfw3.h>
 
-using namespace tinyvkpt;
+#include <App/TinyPT.hpp>
+#define RendererType TinyPT
+
+namespace stm2 {
 
 struct App {
 	shared_ptr<Node> mRootNode;
@@ -30,7 +32,7 @@ struct App {
 	shared_ptr<Inspector> mInspector;
 	shared_ptr<Scene> mScene;
 
-	shared_ptr<BDPT> mRenderer;
+	shared_ptr<RendererType> mRenderer;
 
 	shared_ptr<FlyCamera> mFlyCamera;
 	shared_ptr<Camera> mCamera;
@@ -43,7 +45,7 @@ struct App {
 		mInstance = mRootNode->makeComponent<Instance>(args);
 
 		const shared_ptr<Node> deviceNode = mRootNode->addChild("Device");
-		mWindow = deviceNode->makeComponent<Window>(*mInstance, "tinyvkpt", vk::Extent2D{ 1600, 900 });
+		mWindow = deviceNode->makeComponent<Window>(*mInstance, "stratum2", vk::Extent2D{ 1600, 900 });
 
 		vk::raii::PhysicalDevice physicalDevice = nullptr;
 		tie(physicalDevice, mPresentQueueFamily) = mWindow->findPhysicalDevice();
@@ -52,19 +54,19 @@ struct App {
 		mPresentQueue = vk::raii::Queue(**mDevice, mPresentQueueFamily, 0);
 
 		mSwapchainNode = deviceNode->addChild("Swapchain");
-		mSwapchain     = mSwapchainNode->makeComponent<Swapchain>(*mDevice, "tinyvkpt/Swapchain", *mWindow, 2, vk::ImageUsageFlagBits::eTransferDst|vk::ImageUsageFlagBits::eColorAttachment);
+		mSwapchain     = mSwapchainNode->makeComponent<Swapchain>(*mDevice, "stratum2/Swapchain", *mWindow, 2, vk::ImageUsageFlagBits::eTransferDst|vk::ImageUsageFlagBits::eColorAttachment);
 
 		mGui = make_shared<Gui>(*mSwapchain, mPresentQueue, mPresentQueueFamily, vk::ImageLayout::ePresentSrcKHR, false);
 		mInspector = mSwapchainNode->makeComponent<Inspector>(*mSwapchainNode);
 
 		auto sceneNode = deviceNode->addChild("Scene");
 		mScene = sceneNode->makeComponent<Scene>(*sceneNode);
-		mRenderer = sceneNode->makeComponent<BDPT>(*sceneNode);
+		mRenderer = sceneNode->makeComponent<RendererType>(*sceneNode);
 
 		auto cameraNode = sceneNode->addChild("Camera");
-		cameraNode->makeComponent<TransformData>( float3::Zero(), quatf_identity(), float3::Ones() );
+		cameraNode->makeComponent<TransformData>( float3(0,1.5f,0), quatf::identity(), float3::Ones() );
 		mFlyCamera = cameraNode->makeComponent<FlyCamera>(*cameraNode);
-		mCamera = cameraNode->makeComponent<Camera>();
+		mCamera = cameraNode->makeComponent<Camera>(ProjectionData::makePerspective(radians(70.f), mSwapchain->extent().width / mSwapchain->extent().height, float2::Zero(), .001f));
 
 		mLastUpdate = chrono::high_resolution_clock::now();
 	}
@@ -110,16 +112,15 @@ struct App {
 		mInspector->draw();
 
 		mScene->update(commandBuffer, deltaTime);
-		mRenderer->update(commandBuffer, deltaTime);
 		mFlyCamera->update(deltaTime);
 	}
 	inline void render(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
 		// force camera projection aspect ratio to match renderTarget apsect ratio
 		mCamera->mImageRect = vk::Rect2D{ { 0, 0 }, vk::Extent2D(renderTarget.extent().width, renderTarget.extent().height) };
 		const float aspect = mCamera->mImageRect.extent.height / (float)mCamera->mImageRect.extent.width;
-		if (abs(mCamera->mProjection.scale[0] / mCamera->mProjection.scale[1] - aspect) > 1e-5) {
-			const float fovy = 2 * atan(1 / mCamera->mProjection.scale[1]);
-			mCamera->mProjection = make_perspective(fovy, aspect, mCamera->mProjection.offset, mCamera->mProjection.near_plane);
+		if (abs(mCamera->mProjection.mScale[0] / mCamera->mProjection.mScale[1] - aspect) > 1e-5) {
+			const float fovy = 2 * atan(1 / mCamera->mProjection.mScale[1]);
+			mCamera->mProjection = ProjectionData::makePerspective(fovy, aspect, mCamera->mProjection.mOffset, mCamera->mProjection.mNearPlane);
 		}
 
 		mRenderer->render(commandBuffer, renderTarget);
@@ -130,6 +131,8 @@ struct App {
 	inline void doFrame() {
 		ProfilerScope ps("App::doFrame");
 
+		// Record commands
+
 		shared_ptr<CommandBuffer> commandBufferPtr = mDevice->getCommandBuffer(mPresentQueueFamily);
 		CommandBuffer& commandBuffer = *commandBufferPtr;
 		commandBuffer->begin(vk::CommandBufferBeginInfo());
@@ -138,6 +141,8 @@ struct App {
 		render(commandBuffer, Image::View(mSwapchain->image(), vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1)));
 
 		commandBuffer->end();
+
+		// submit commands
 
 		pair<shared_ptr<vk::raii::Semaphore>, vk::PipelineStageFlags> waitSemaphore { mSwapchain->imageAvailableSemaphore(), vk::PipelineStageFlagBits::eComputeShader };
 		shared_ptr<vk::raii::Semaphore> signalSemaphore = make_shared<vk::raii::Semaphore>(**mDevice, vk::SemaphoreCreateInfo());
@@ -180,13 +185,16 @@ struct App {
 	}
 };
 
+}
+
 int main(int argc, char** argv) {
+	using namespace std;
+
 	vector<string> args(argc);
-	for (uint32_t i = 0; i < argc; i++)
-		args[i] = argv[i];
+	ranges::copy_n(argv, argc, args.begin());
 
 	{
-		App app(args);
+		stm2::App app(args);
 		app.run();
 	}
 

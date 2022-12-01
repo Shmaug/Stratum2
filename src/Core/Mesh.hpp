@@ -5,7 +5,7 @@
 #include "Buffer.hpp"
 #include "Shader.hpp"
 
-namespace tinyvkpt {
+namespace stm2 {
 
 class Mesh {
 public:
@@ -87,36 +87,36 @@ private:
 
 namespace std {
 template<>
-struct hash<tinyvkpt::Mesh::VertexAttributeDescription> {
-	inline size_t operator()(const tinyvkpt::Mesh::VertexAttributeDescription& v) const {
-		return tinyvkpt::hashArgs(v.mFormat, v.mOffset, v.mInputRate);
+struct hash<stm2::Mesh::VertexAttributeDescription> {
+	inline size_t operator()(const stm2::Mesh::VertexAttributeDescription& v) const {
+		return stm2::hashArgs(v.mFormat, v.mOffset, v.mInputRate);
 	}
 };
 
 template<>
-struct hash<tinyvkpt::Mesh::VertexLayoutDescription> {
-	inline size_t operator()(const tinyvkpt::Mesh::VertexLayoutDescription& v) const {
+struct hash<stm2::Mesh::VertexLayoutDescription> {
+	inline size_t operator()(const stm2::Mesh::VertexLayoutDescription& v) const {
 		size_t h = 0;
 		for (const auto[type, attribs] : v.mAttributes) {
-			h = tinyvkpt::hashArgs(h, type);
+			h = stm2::hashArgs(h, type);
 			for (const auto&[a,i] : attribs)
-				h = tinyvkpt::hashArgs(h, a, i);
+				h = stm2::hashArgs(h, a, i);
 		}
-		return tinyvkpt::hashArgs(h, v.mTopology, v.mIndexType);
+		return stm2::hashArgs(h, v.mTopology, v.mIndexType);
 	}
 };
 
-inline string to_string(const tinyvkpt::Mesh::VertexAttributeType& value) {
+inline string to_string(const stm2::Mesh::VertexAttributeType& value) {
 	switch (value) {
-		case tinyvkpt::Mesh::VertexAttributeType::ePosition: return "Position";
-		case tinyvkpt::Mesh::VertexAttributeType::eNormal: return "Normal";
-		case tinyvkpt::Mesh::VertexAttributeType::eTangent: return "Tangent";
-		case tinyvkpt::Mesh::VertexAttributeType::eBinormal: return "Binormal";
-		case tinyvkpt::Mesh::VertexAttributeType::eBlendIndex: return "BlendIndex";
-		case tinyvkpt::Mesh::VertexAttributeType::eBlendWeight: return "BlendWeight";
-		case tinyvkpt::Mesh::VertexAttributeType::eColor: return "Color";
-		case tinyvkpt::Mesh::VertexAttributeType::ePointSize: return "PointSize";
-		case tinyvkpt::Mesh::VertexAttributeType::eTexcoord: return "Texcoord";
+		case stm2::Mesh::VertexAttributeType::ePosition: return "Position";
+		case stm2::Mesh::VertexAttributeType::eNormal: return "Normal";
+		case stm2::Mesh::VertexAttributeType::eTangent: return "Tangent";
+		case stm2::Mesh::VertexAttributeType::eBinormal: return "Binormal";
+		case stm2::Mesh::VertexAttributeType::eBlendIndex: return "BlendIndex";
+		case stm2::Mesh::VertexAttributeType::eBlendWeight: return "BlendWeight";
+		case stm2::Mesh::VertexAttributeType::eColor: return "Color";
+		case stm2::Mesh::VertexAttributeType::ePointSize: return "PointSize";
+		case stm2::Mesh::VertexAttributeType::eTexcoord: return "Texcoord";
 		default: return "invalid ( " + vk::toHexString( static_cast<uint32_t>( value ) ) + " )";
 	}
 }

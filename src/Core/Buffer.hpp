@@ -4,7 +4,7 @@
 
 #include <Utils/hash.hpp>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 class Buffer : public Device::Resource {
 public:

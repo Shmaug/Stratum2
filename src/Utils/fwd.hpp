@@ -1,6 +1,6 @@
 #pragma once
 
-namespace tinyvkpt {
+namespace stm2 {
 	using namespace std;
 	using byte = std::byte;
 

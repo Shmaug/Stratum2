@@ -7,7 +7,7 @@
 #include <Utils/fwd.hpp>
 #include <Utils/utils.hpp>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 inline uint32_t findQueueFamily(vk::raii::PhysicalDevice& physicalDevice, const vk::QueueFlags flags = vk::QueueFlagBits::eGraphics|vk::QueueFlagBits::eCompute|vk::QueueFlagBits::eTransfer) {
 	const auto queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
@@ -69,7 +69,7 @@ public:
 	inline uint32_t lastFrameDone() const { return mLastFrameDone; }
 
 	inline uint32_t findQueueFamily(const vk::QueueFlags flags = vk::QueueFlagBits::eGraphics|vk::QueueFlagBits::eCompute|vk::QueueFlagBits::eTransfer) {
-		return tinyvkpt::findQueueFamily(mPhysicalDevice, flags);
+		return stm2::findQueueFamily(mPhysicalDevice, flags);
 	}
 
 	shared_ptr<CommandBuffer> getCommandBuffer(const uint32_t queueFamily);

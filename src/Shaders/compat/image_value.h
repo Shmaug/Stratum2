@@ -5,8 +5,11 @@
 
 #ifdef __cplusplus
 #include <Core/Image.hpp>
-namespace tinyvkpt {
+#endif
 
+STM_NAMESPACE_BEGIN
+
+#ifdef __cplusplus
 inline uint4 channelMappingSwizzle(vk::ComponentMapping m) {
 	uint4 c;
 	c[0] = (m.r < vk::ComponentSwizzle::eR) ? 0 : ((uint32_t)m.r - (uint32_t)vk::ComponentSwizzle::eR);
@@ -16,129 +19,97 @@ inline uint4 channelMappingSwizzle(vk::ComponentMapping m) {
 	return c;
 }
 
-#endif // __cplusplus
+template<unsigned int N>
+struct ImageValue {
+	VectorType<float,N> mValue;
+	Image::View mImage;
+
+	inline void store(MaterialResources& resources) const {
+		resources.mMaterialData.AppendN(mValue);
+		resources.mMaterialData.Append(resources.getIndex(mImage));
+	}
+
+	// Implemented in Scene.cpp
+	void drawGui(const string& label);
+};
+
+using ImageValue1 = ImageValue<1>;
+using ImageValue2 = ImageValue<2>;
+using ImageValue3 = ImageValue<3>;
+using ImageValue4 = ImageValue<4>;
+#endif
+
+#ifdef __HLSL__
 
 struct ImageValue1 {
-	float value;
-#ifdef __HLSL__
-	uint image_index_channel;
-	bool has_image() { return BF_GET(image_index_channel,0,30) < gImageCount; }
-	uint channel() { return BF_GET(image_index_channel,30,2); }
-	Texture2D<float4> image() { return gSceneParams.gImages[NonUniformResourceIndex(BF_GET(image_index_channel,0,30))]; }
-	float eval(const float2 uv, const float uv_screen_size) {
-		if (value <= 0) return 0;
-		if (!has_image()) return value;
-		return value * sample_image(image(), uv, uv_screen_size)[channel()];
+	float mValue;
+	uint mImage;
+
+	__init(inout uint address) {
+		mValue = gScene.mMaterialData.Load<float>(address); address += 4;
+		mImage = gScene.mMaterialData.Load<uint>(address); address += 4;
 	}
-	SLANG_MUTATING
-	void load(inout uint address) {
-		value               = gSceneParams.gMaterialData.Load<float>((int)address); address += 4;
-		image_index_channel = gSceneParams.gMaterialData.Load<uint>((int)address); address += 4;
+
+	bool hasImage() { return mImage < gImageCount; }
+	Texture2D<float> image() { return gScene.mImage1s[NonUniformResourceIndex(mImage)]; }
+	float eval(const float2 uv, const float uvScreenSize) {
+		if (!hasImage()) return mValue;
+		return mValue * sampleImage(image(), uv, uvScreenSize);
 	}
-#endif
-#ifdef __cplusplus
-	Image::View image;
-	inline void store(MaterialResources& resources) const {
-		resources.mMaterialData.Appendf(value);
-		const uint image_index = resources.getIndex(image);
-		const uint32_t channel = channelMappingSwizzle(image.componentMapping())[0];
-		uint image_index_and_channel = 0;
-		BF_SET(image_index_and_channel, image_index, 0, 30);
-		BF_SET(image_index_and_channel, channel, 30, 2);
-		resources.mMaterialData.Append(image_index_and_channel);
-	}
-#endif
 };
 
 struct ImageValue2 {
-	float2 value;
-#ifdef __HLSL__
-	uint image_index;
-	bool has_image() { return image_index < gImageCount; }
-	Texture2D<float4> image() { return gSceneParams.gImages[NonUniformResourceIndex(image_index)]; }
-	SLANG_MUTATING
-	void load(inout uint address) {
-		value       = gSceneParams.gMaterialData.Load<float2>(address); address += 8;
-		image_index = gSceneParams.gMaterialData.Load<uint>(address); address += 4;
+	float2 mValue;
+	uint mImage;
+
+	__init(inout uint address) {
+		mValue = gScene.mMaterialData.Load<float2>(address); address += 8;
+		mImage = gScene.mMaterialData.Load<uint>(address); address += 4;
 	}
-	float2 eval(const float2 uv, const float uv_screen_size) {
-		if (!has_image()) return value;
-		if (!any(value > 0)) return 0;
-		return value * sample_image(image(), uv, uv_screen_size).rg;
+
+	bool hasImage() { return mImage < gImageCount; }
+	Texture2D<float4> image() { return gScene.mImages[NonUniformResourceIndex(mImage)]; }
+	float2 eval(const float2 uv, const float uvScreenSize) {
+		if (!hasImage()) return mValue;
+		return mValue * sampleImage(image(), uv, uvScreenSize).rg;
 	}
-#endif
-#ifdef __cplusplus
-	Image::View image;
-	inline void store(MaterialResources& resources) const {
-		resources.mMaterialData.AppendN(value);
-		resources.mMaterialData.Append(resources.getIndex(image));
-	}
-#endif
 };
 
 struct ImageValue3 {
-	float3 value;
-#ifdef __HLSL__
-	uint image_index;
-	bool has_image() { return image_index < gImageCount; }
-	Texture2D<float4> image() { return gSceneParams.gImages[NonUniformResourceIndex(image_index)]; }
-	SLANG_MUTATING
-	void load(inout uint address) {
-		value       = gSceneParams.gMaterialData.Load<float3>(address); address += 12;
-		image_index = gSceneParams.gMaterialData.Load<uint>(address); address += 4;
+	float3 mValue;
+	uint mImage;
+
+	__init(inout uint address) {
+		mValue = gScene.mMaterialData.Load<float3>(address); address += 12;
+		mImage = gScene.mMaterialData.Load<uint>(address); address += 4;
 	}
-	float3 eval(const float2 uv, const float uv_screen_size) {
-		if (!has_image()) return value;
-		if (!any(value > 0)) return 0;
-		return value * sample_image(image(), uv, uv_screen_size).rgb;
+
+	bool hasImage() { return mImage < gImageCount; }
+	Texture2D<float4> image() { return gScene.mImages[NonUniformResourceIndex(mImage)]; }
+	float3 eval(const float2 uv, const float uvScreenSize) {
+		if (!hasImage()) return mValue;
+		return mValue * sampleImage(image(), uv, uvScreenSize).rgb;
 	}
-#endif
-#ifdef __cplusplus
-	Image::View image;
-	inline void store(MaterialResources& resources) const {
-		resources.mMaterialData.AppendN(value);
-		resources.mMaterialData.Append(resources.getIndex(image));
-	}
-#endif
 };
 
 struct ImageValue4 {
-	float4 value;
-#ifdef __HLSL__
-	uint image_index;
-	bool has_image() { return image_index < gImageCount; }
-	Texture2D<float4> image() { return gSceneParams.gImages[NonUniformResourceIndex(image_index)]; }
-	SLANG_MUTATING
-	void load(inout uint address) {
-		value       = gSceneParams.gMaterialData.Load<float4>(address); address += 16;
-		image_index = gSceneParams.gMaterialData.Load<uint>(address); address += 4;
+	float4 mValue;
+	uint mImage;
+
+	__init(inout uint address) {
+		mValue = gScene.mMaterialData.Load<float4>(address); address += 16;
+		mImage = gScene.mMaterialData.Load<uint>(address); address += 4;
 	}
-	float4 eval(const float2 uv, const float uv_screen_size) {
-		if (!has_image()) return value;
-		if (!any(value > 0)) return 0;
-		return value * sample_image(image(), uv, uv_screen_size);
+
+	bool hasImage() { return mImage < gImageCount; }
+	Texture2D<float4> image() { return gScene.mImages[NonUniformResourceIndex(mImage)]; }
+	float4 eval(const float2 uv, const float uvScreenSize) {
+		if (!hasImage()) return mValue;
+		return mValue * sampleImage(image(), uv, uvScreenSize);
 	}
-#endif
-#ifdef __cplusplus
-	Image::View image;
-	inline void store(MaterialResources& resources) const {
-		resources.mMaterialData.AppendN(value);
-		resources.mMaterialData.Append(resources.getIndex(image));
-	}
-#endif
 };
+#endif
 
-#ifdef __cplusplus
-
-// Defined in Scene.cpp
-
-void imageValueField(const char* label, ImageValue1& v);
-void imageValueField(const char* label, ImageValue2& v);
-void imageValueField(const char* label, ImageValue3& v);
-void imageValueField(const char* label, ImageValue4& v);
-
-} // namespace tinyvkpt
-
-#endif // __cplusplus
+STM_NAMESPACE_END
 
 #endif

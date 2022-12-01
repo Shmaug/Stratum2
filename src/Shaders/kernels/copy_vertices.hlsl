@@ -1,4 +1,4 @@
-#include "../compat/scene.h"
+#include "compat/scene.h"
 
 #ifndef gVertexBufferCount
 #define gVertexBufferCount 8192

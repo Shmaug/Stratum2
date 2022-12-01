@@ -3,14 +3,12 @@
 
 #include "quatf.h"
 
-#ifdef __cplusplus
-namespace tinyvkpt {
-#endif
+STM_NAMESPACE_BEGIN
 
 struct TransformData {
 	float3x4 m;
 
-	inline float3 transform_vector(float3 v) CONST_CPP {
+	inline float3 transformVector(float3 v) CONST_CPP {
 #ifdef __cplusplus
 		return m.block<3, 3>(0, 0).matrix() * v.matrix();
 #else
@@ -18,7 +16,7 @@ struct TransformData {
 #endif
 	}
 
-	inline float3 transform_point(float3 v) CONST_CPP {
+	inline float3 transformPoint(float3 v) CONST_CPP {
 #ifdef __cplusplus
 		return (m.matrix() * v.matrix().homogeneous()).col(3).head<3>();
 #else
@@ -62,7 +60,7 @@ struct TransformData {
 	}
 
 	void drawGui(Node& node); // defined in Scene.cpp
-#else
+#else // __SLANG__
 	__init(const float3x4 t) {
 		m = t;
 	}
@@ -122,68 +120,66 @@ inline TransformData tmul(const TransformData lhs, const TransformData rhs) {
 }
 
 struct ProjectionData {
-	float2 scale;
-	float2 offset;
-	float near_plane;
-	float far_plane;
-	float sensor_area;
-	float vertical_fov;
+	float2 mScale;
+	float2 mOffset;
+	float mNearPlane;
+	float mFarPlane;
+	float mSensorArea;
+	float mVerticalFoV;
 
-	inline bool orthographic() CONST_CPP { return vertical_fov < 0; }
+	inline bool isOrthographic() CONST_CPP { return mVerticalFoV < 0; }
 
 	// uses reversed z (1 at near plane -> 0 at far plane)
-	inline float4 project_point(const float3 v) CONST_CPP {
+	inline float4 projectPoint(const float3 v) CONST_CPP {
 		float4 r;
-		if (orthographic()) {
-			r[0] = v[0] * scale[0] + offset[0];
-			r[1] = v[1] * scale[1] + offset[1];
-			r[2] = (v[2] - far_plane) / (near_plane - far_plane);
+		if (isOrthographic()) {
+			r[0] = v[0] * mScale[0] + mOffset[0];
+			r[1] = v[1] * mScale[1] + mOffset[1];
+			r[2] = (v[2] - mFarPlane) / (mNearPlane - mFarPlane);
 			r[3] = 1;
 		} else { // perspective
 			// infinite far plane
-			r[0] = v[0] * scale[0] + v[2] * offset[0];
-			r[1] = v[1] * scale[1] + v[2] * offset[1];
-			r[2] = abs(near_plane);
-			r[3] = v[2] * sign(near_plane);
+			r[0] = v[0] * mScale[0] + v[2] * mOffset[0];
+			r[1] = v[1] * mScale[1] + v[2] * mOffset[1];
+			r[2] = abs(mNearPlane);
+			r[3] = v[2] * sign(mNearPlane);
 		}
 		return r;
 	}
-	inline float3 back_project(const float2 v) CONST_CPP {
+	inline float3 backProject(const float2 v) CONST_CPP {
 		float3 r;
-		if (orthographic()) {
-			r[0] = (v[0] - offset[0]) / scale[0];
-			r[1] = (v[1] - offset[1]) / scale[1];
+		if (isOrthographic()) {
+			r[0] = (v[0] - mOffset[0]) / mScale[0];
+			r[1] = (v[1] - mOffset[1]) / mScale[1];
 		} else { // perspective
-			r[0] = near_plane * (v[0] * sign(near_plane) - offset[0]) / scale[0];
-			r[1] = near_plane * (v[1] * sign(near_plane) - offset[1]) / scale[1];
+			r[0] = mNearPlane * (v[0] * sign(mNearPlane) - mOffset[0]) / mScale[0];
+			r[1] = mNearPlane * (v[1] * sign(mNearPlane) - mOffset[1]) / mScale[1];
 		}
-		r[2] = near_plane;
+		r[2] = mNearPlane;
+		return r;
+	}
+
+	inline static ProjectionData makeOrthographic(const float2 size, const float2 offset, const float znear, const float zfar) {
+		ProjectionData r;
+		r.mScale = 2 / size;
+		r.mOffset = offset;
+		r.mNearPlane = znear;
+		r.mFarPlane = zfar;
+		r.mVerticalFoV = -1;
+		return r;
+	}
+	inline static ProjectionData makePerspective(const float fovy, const float aspect, const float2 offset, const float znear) {
+		ProjectionData r;
+		r.mScale[1] = 1 / tan(fovy / 2);
+		r.mScale[0] = aspect * r.mScale[1];
+		r.mOffset = offset;
+		r.mNearPlane = znear;
+		r.mFarPlane = 0;
+		r.mVerticalFoV = fovy;
 		return r;
 	}
 };
 
-inline ProjectionData make_orthographic(const float2 size, const float2 offset, const float znear, const float zfar) {
-	ProjectionData r;
-	r.scale = 2 / size;
-	r.offset = offset;
-	r.near_plane = znear;
-	r.far_plane = zfar;
-	r.vertical_fov = -1;
-	return r;
-}
-inline ProjectionData make_perspective(const float fovy, const float aspect, const float2 offset, const float znear) {
-	ProjectionData r;
-	r.scale[1] = 1 / tan(fovy / 2);
-	r.scale[0] = aspect * r.scale[1];
-	r.offset = offset;
-	r.near_plane = znear;
-	r.far_plane = 0;
-	r.vertical_fov = fovy;
-	return r;
-}
-
-#ifdef __cplusplus
-} // namespace tinyvkpt
-#endif
+STM_NAMESPACE_END
 
 #endif

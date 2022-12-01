@@ -1,9 +1,9 @@
 #ifndef MSE_H
 #define MSE_H
 
-#ifdef __cplusplus
-namespace tinyvkpt {
-#endif
+#include "hlslcompat.h"
+
+STM_NAMESPACE_BEGIN
 
 enum class CompareMetric {
 	eSMAPE,
@@ -12,15 +12,16 @@ enum class CompareMetric {
 	eCompareMetricCount
 };
 
+STM_NAMESPACE_END
+
 #ifdef __cplusplus
-} // namespace tinyvkpt
 namespace std {
-inline string to_string(const tinyvkpt::CompareMetric& m) {
+inline string to_string(const stm2::CompareMetric& m) {
 	switch (m) {
 		default: return "Unknown";
-		case tinyvkpt::CompareMetric::eSMAPE:   return "SMAPE";
-		case tinyvkpt::CompareMetric::eMSE:     return "MSE";
-		case tinyvkpt::CompareMetric::eAverage: return "Average";
+		case stm2::CompareMetric::eSMAPE:   return "SMAPE";
+		case stm2::CompareMetric::eMSE:     return "MSE";
+		case stm2::CompareMetric::eAverage: return "Average";
 	}
 };
 }

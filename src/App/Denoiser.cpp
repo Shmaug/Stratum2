@@ -10,7 +10,7 @@
 
 #include <Shaders/compat/filter_type.h>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 
 Denoiser::Denoiser(Node& node) : mNode(node) {
@@ -26,9 +26,9 @@ void Denoiser::createPipelines(Device& device) {
 		0, true, 8, false, vk::CompareOp::eAlways, 0, VK_LOD_CLAMP_NONE));
 
 	ComputePipeline::Metadata md;
-	md.mImmutableSamplers["gStaticSampler"] = { samplerClamp };
+	md.mImmutableSamplers["mStaticSampler"] = { samplerClamp };
 
-	const filesystem::path shaderPath = *device.mInstance.findArgument("shaderKernelPath");
+	const filesystem::path shaderPath = filesystem::path(*device.mInstance.findArgument("shaderKernelPath")) / "svgf";
 	mTemporalAccumulationPipeline = ComputePipelineCache(shaderPath / "temporal_accumulation.hlsl", "main", "cs_6_7", {}, md);
 	mEstimateVariancePipeline     = ComputePipelineCache(shaderPath / "estimate_variance.hlsl", "main", "cs_6_7", {}, md);
 	mAtrousPipeline               = ComputePipelineCache(shaderPath / "atrous.hlsl", "main", "cs_6_7", {}, md);
@@ -74,14 +74,14 @@ void Denoiser::drawGui() {
 	ImGui::PopItemWidth();
 }
 
-Image::View Denoiser::denoise(
+void Denoiser::denoise(
 	CommandBuffer& commandBuffer,
 	const Image::View& radiance,
 	const Image::View& albedo,
+	const Image::View& prevUVs,
 	const Buffer::View<ViewData>& views,
-	const Buffer::View<VisibilityInfo>& visibility,
-	const Buffer::View<DepthInfo>& depth,
-	const Image::View& prev_uvs) {
+	const Buffer::View<VisibilityData>& visibility,
+	const Buffer::View<DepthData>& depth) {
 	ProfilerScope ps("Denoiser::denoise", &commandBuffer);
 
 	if (ImGui::IsKeyPressed(ImGuiKey_F5))
@@ -95,10 +95,8 @@ Image::View Denoiser::denoise(
 			mPrevFrame = mCurFrame;
 
 		mCurFrame = mFrameResources.get();
-		if (!mCurFrame) {
-			mCurFrame = make_shared<FrameResources>(commandBuffer.mDevice);
-			mFrameResources.emplace(mCurFrame);
-		}
+		if (!mCurFrame)
+			mCurFrame = mFrameResources.emplace(make_shared<FrameResources>(commandBuffer.mDevice));
 	}
 
 	commandBuffer.trackResource(mCurFrame);
@@ -142,7 +140,7 @@ Image::View Denoiser::denoise(
 		descriptors[{"gPrevVisibility",0}]   = mPrevFrame->mVisibility;
 		descriptors[{"gDepth",0}]            = mCurFrame->mDepth;
 		descriptors[{"gPrevDepth",0}]        = mPrevFrame->mDepth;
-		descriptors[{"gPrevUVs",0}]          = ImageDescriptor{ prev_uvs                 , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite, {} };
+		descriptors[{"gPrevUVs",0}]          = ImageDescriptor{ prevUVs                  , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite, {} };
 		descriptors[{"gRadiance",0}]         = ImageDescriptor{ mCurFrame->mRadiance     , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
 		descriptors[{"gAlbedo",0}]           = ImageDescriptor{ mCurFrame->mAlbedo       , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
 		descriptors[{"gAccumColor",0}]       = ImageDescriptor{ mCurFrame->mAccumColor   , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite, {} };
@@ -200,8 +198,6 @@ Image::View Denoiser::denoise(
 		mResetAccumulation = false;
 		mAccumulatedFrames = 0;
 	}
-
-	return mDebugMode == DenoiserDebugMode::eNone ? output : mCurFrame->mDebugImage;
 }
 
 }

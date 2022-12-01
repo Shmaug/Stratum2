@@ -3,7 +3,7 @@
 
 #include <imgui/imgui.h>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 Mesh::VertexLayoutDescription Mesh::vertexLayout(const Shader& vertexShader) const {
 	VertexLayoutDescription layout(mTopology, indexType());

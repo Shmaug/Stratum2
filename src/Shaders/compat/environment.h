@@ -4,65 +4,62 @@
 #include "scene.h"
 #include "image_value.h"
 
-#ifdef __cplusplus
-namespace tinyvkpt {
-#endif
+STM_NAMESPACE_BEGIN
 
 struct Environment {
-	ImageValue3 emission;
+	ImageValue3 mEmission;
 
 #ifdef __cplusplus
 	inline void store(MaterialResources& resources) const {
-		emission.store(resources);
+		mEmission.store(resources);
 	}
 	inline void drawGui() {
-		imageValueField("Emission", emission);
+		mEmission.drawGui("Emission");
 	}
 #endif
+
 #ifdef __HLSL__
-	SLANG_MUTATING
-	inline void load(uint address) {
-		emission.load(address);
+	__init(uint address) {
+		mEmission = ImageValue3(address);
 	}
 
-	inline float3 eval(const float3 dir_out) {
-		if (!emission.has_image()) return emission.value;
+	float3 evaluate(const float3 dirOut) {
+		if (!mEmission.hasImage())
+			return mEmission.mValue;
 		uint w, h;
-		emission.image().GetDimensions(w, h);
-		const float2 uv = cartesian_to_spherical_uv(dir_out);
-		return sample_image(emission.image(), uv, 0).rgb * emission.value;
+		mEmission.image().GetDimensions(w, h);
+		const float2 uv = cartesianToSphericalUv(dirOut);
+		return mEmission.eval(uv, 0).rgb;
 	}
 
-	inline float3 sample(const float2 rnd, out float3 dir_out, out float pdf) {
-		if (!emission.has_image()) {
-			const float2 uv = sample_uniform_sphere(rnd.x, rnd.y);
-			dir_out = spherical_uv_to_cartesian(uv);
-			pdf = uniform_sphere_pdfW();
-			return emission.value;
+	float3 sample(const float2 rnd, out float3 dirOut, out float pdf) {
+		if (!mEmission.hasImage()) {
+			const float2 uv = sampleUniformSphere(rnd.x, rnd.y);
+			dirOut = sphericalUvToCartesian(uv);
+			pdf = 1/(4*M_PI);
+			return mEmission.mValue;
 		} else {
 			uint w, h;
-			emission.image().GetDimensions(w, h);
-			const float2 uv = sample_texel(emission.image(), rnd, pdf);
-			dir_out = spherical_uv_to_cartesian(uv);
-			pdf /= (2 * M_PI * M_PI * sqrt(1 - dir_out.y*dir_out.y));
-			return emission.value*emission.image().SampleLevel(gSceneParams.gStaticSampler, uv, 0).rgb;
+			mEmission.image().GetDimensions(w, h);
+			const float2 uv = sampleTexel(mEmission.image(), rnd, pdf);
+			dirOut = sphericalUvToCartesian(uv);
+			pdf /= (2 * M_PI * M_PI * sqrt(1 - dirOut.y*dirOut.y));
+			return mEmission.eval(uv, 0).rgb;
 		}
 	}
 
-	inline float eval_pdf(const float3 dir_out) {
-		if (!emission.has_image())
-			return uniform_sphere_pdfW();
+	float evaluatePdfW(const float3 dirOut) {
+		if (!mEmission.hasImage())
+			return 1/(4*M_PI);
 		else {
-			const float2 uv = cartesian_to_spherical_uv(dir_out);
-			const float pdf = sample_texel_pdf(emission.image(), uv);
-			return pdf / (2 * M_PI * M_PI * sqrt(1 - dir_out.y*dir_out.y));
+			const float2 uv = cartesianToSphericalUv(dirOut);
+			const float pdf = sampleTexelPdf(mEmission.image(), uv);
+			return pdf / (2 * M_PI * M_PI * sqrt(1 - dirOut.y*dirOut.y));
 		}
 	}
 #endif
 };
 
-#ifdef __cplusplus
-} // namespace vkpt
-#endif
+STM_NAMESPACE_END
 
 #endif

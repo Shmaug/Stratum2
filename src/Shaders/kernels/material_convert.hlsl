@@ -1,14 +1,3 @@
-#include "../compat/common.h"
-#include "../compat/disney_data.h"
-
-Texture2D<float4> gDiffuse; // also base color
-Texture2D<float4> gSpecular;
-Texture2D<float3> gTransmittance;
-Texture2D<float> gRoughness;
-RWTexture2D<float4> gOutput[DISNEY_DATA_N];
-RWTexture2D<float> gOutputAlphaMask;
-RWStructuredBuffer<uint> gOutputMinAlpha;
-
 #ifndef gUseDiffuse
 #define gUseDiffuse false
 #endif
@@ -21,6 +10,19 @@ RWStructuredBuffer<uint> gOutputMinAlpha;
 #ifndef gUseRoughness
 #define gUseRoughness false
 #endif
+
+
+#include "compat/common.h"
+#include "compat/disney_data.h"
+
+Texture2D<float4> gDiffuse; // also base color
+Texture2D<float4> gSpecular;
+Texture2D<float3> gTransmittance;
+Texture2D<float> gRoughness;
+RWTexture2D<float4> gOutput[DisneyMaterialData::gDataSize];
+RWTexture2D<float> gOutputAlphaMask;
+RWStructuredBuffer<uint> gOutputMinAlpha;
+
 
 SLANG_SHADER("compute")
 [numthreads(8,8,1)]
@@ -41,7 +43,7 @@ void from_gltf_pbr(uint3 index : SV_DispatchThreadId) {
 	const float4 metallic_roughness = gUseSpecular ? gSpecular[index.xy] : 1;
 
 	DisneyMaterialData m;
-	for (uint i = 0; i < DISNEY_DATA_N; i++) m.data[i] = 1;
+	for (uint i = 0; i < DisneyMaterialData::gDataSize; i++) m.data[i] = 1;
 
 	m.baseColor(diffuse.rgb);
 	m.metallic(metallic_roughness.b);
@@ -50,7 +52,7 @@ void from_gltf_pbr(uint3 index : SV_DispatchThreadId) {
 	const float l = luminance(m.baseColor());
 	m.transmission(gUseTransmittance ? saturate(luminance(gTransmittance[index.xy].rgb)/(l > 0 ? l : 1)) : 0);
 
-	for (uint j = 0; j < DISNEY_DATA_N; j++)
+	for (uint j = 0; j < DisneyMaterialData::gDataSize; j++)
 		gOutput[j][index.xy] = m.data[j];
 }
 
@@ -71,7 +73,8 @@ void from_diffuse_specular(uint3 index : SV_DispatchThreadId) {
 	}
 
 	DisneyMaterialData m;
-	for (uint i = 0; i < DISNEY_DATA_N; i++) m.data[i] = 1;
+	for (uint i = 0; i < DisneyMaterialData::gDataSize; i++)
+		m.data[i] = 1;
 
 	const float3 specular = gUseSpecular ? gSpecular[index.xy].rgb : 0;
 	const float3 transmittance = gUseTransmittance ? gTransmittance[index.xy].rgb : 0;
@@ -83,5 +86,6 @@ void from_diffuse_specular(uint3 index : SV_DispatchThreadId) {
 	if (gUseRoughness) m.roughness(gRoughness[index.xy]);
 	if (gUseTransmittance) m.transmission(saturate(lt / (ld + ls + lt)));
 
-	for (uint j = 0; j < DISNEY_DATA_N; j++) gOutput[j][index.xy] = m.data[j];
+	for (uint j = 0; j < DisneyMaterialData::gDataSize; j++)
+		gOutput[j][index.xy] = m.data[j];
 }

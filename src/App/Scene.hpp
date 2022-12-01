@@ -10,7 +10,7 @@
 #include "Node.hpp"
 #include "Material.hpp"
 
-namespace tinyvkpt {
+namespace stm2 {
 
 TransformData nodeToWorld(const Node& node);
 
@@ -34,12 +34,12 @@ struct Camera {
 
 	inline ViewData view() {
 		ViewData v;
-		v.projection = mProjection;
-		v.image_min = { mImageRect.offset.x, mImageRect.offset.y };
-		v.image_max = { mImageRect.offset.x + mImageRect.extent.width, mImageRect.offset.y + mImageRect.extent.height };
-		float2 extent = mProjection.back_project(float2::Constant(1)).head<2>() - mProjection.back_project(float2::Constant(-1)).head<2>();
-		if (!mProjection.orthographic()) extent /= mProjection.near_plane;
-		v.projection.sensor_area = abs(extent[0] * extent[1]);
+		v.mProjection = mProjection;
+		v.mImageMin = { mImageRect.offset.x, mImageRect.offset.y };
+		v.mImageMax = { mImageRect.offset.x + mImageRect.extent.width, mImageRect.offset.y + mImageRect.extent.height };
+		float2 extent = mProjection.backProject(float2::Constant(1)).head<2>() - mProjection.backProject(float2::Constant(-1)).head<2>();
+		if (!mProjection.isOrthographic()) extent /= mProjection.mNearPlane;
+		v.mProjection.mSensorArea = abs(extent[0] * extent[1]);
 		return v;
 	}
 
@@ -48,7 +48,7 @@ struct Camera {
 
 class Scene {
 public:
-	struct RenderResources : public Device::Resource {
+	struct FrameResources : public Device::Resource {
 		Buffer::View<byte> mAccelerationStructureBuffer;
 		shared_ptr<vk::raii::AccelerationStructureKHR> mAccelerationStructure;
 
@@ -70,15 +70,17 @@ public:
 		uint32_t mMaterialCount;
 		uint32_t mEmissivePrimitiveCount;
 
-		RenderResources() = default;
-		RenderResources(const RenderResources&) = default;
-		RenderResources(RenderResources&&) = default;
-		RenderResources& operator=(const RenderResources&) = default;
-		RenderResources& operator=(RenderResources&&) = default;
+		FrameResources() = default;
+		FrameResources(const FrameResources&) = default;
+		FrameResources(FrameResources&&) = default;
+		FrameResources& operator=(const FrameResources&) = default;
+		FrameResources& operator=(FrameResources&&) = default;
 
-		inline RenderResources(Device& device) : Device::Resource(device, "RenderResources"), mAccelerationStructure(nullptr) {}
+		inline FrameResources(Device& device) : Device::Resource(device, "FrameResources"), mAccelerationStructure(nullptr) {}
 
-		void update(Scene& scene, CommandBuffer& commandBuffer, const shared_ptr<RenderResources>& prevFrame = {});
+		void update(Scene& scene, CommandBuffer& commandBuffer, const shared_ptr<FrameResources>& prevFrame = {});
+
+		Descriptors getDescriptors() const;
 	};
 
 	Node& mNode;
@@ -87,7 +89,7 @@ public:
 
 	void createPipelines();
 
-	inline const shared_ptr<RenderResources>& resources() const { return mResources; }
+	inline const shared_ptr<FrameResources>& resources() const { return mResources; }
 
 	void drawGui();
 
@@ -146,20 +148,19 @@ public:
 			throw runtime_error("unknown extension:" + ext);
 	}
 
-	ImageValue1 alphaToRoughness(CommandBuffer& commandBuffer, const ImageValue1& alpha);
-	ImageValue1 shininessToRoughness(CommandBuffer& commandBuffer, const ImageValue1& alpha);
-	Material makeMetallicRoughnessMaterial(CommandBuffer& commandBuffer, const ImageValue3& baseColor, const ImageValue4& metallicRoughness, const ImageValue3& transmission, const float eta, const ImageValue3& emission);
-	Material makeDiffuseSpecularMaterial(CommandBuffer& commandBuffer, const ImageValue3& diffuse, const ImageValue3& specular, const ImageValue1& roughness, const ImageValue3& transmission, const float eta, const ImageValue3& emission);
+	ImageValue<1> alphaToRoughness        (CommandBuffer& commandBuffer, const ImageValue<1>& alpha);
+	ImageValue<1> shininessToRoughness    (CommandBuffer& commandBuffer, const ImageValue<1>& alpha);
+	Material makeMetallicRoughnessMaterial(CommandBuffer& commandBuffer, const ImageValue<3>& baseColor, const ImageValue<4>& metallicRoughness, const ImageValue<3>& transmission, const float eta, const ImageValue<3>& emission);
+	Material makeDiffuseSpecularMaterial  (CommandBuffer& commandBuffer, const ImageValue<3>& diffuse, const ImageValue<3>& specular, const ImageValue<1>& roughness, const ImageValue<3>& transmission, const float eta, const ImageValue<3>& emission);
 
 private:
 	using AccelerationStructureData = pair<shared_ptr<vk::raii::AccelerationStructureKHR>, Buffer::View<byte> /* acceleration structure buffer */>;
 
-
 	unordered_map<size_t, AccelerationStructureData> mAABBs;
 	unordered_map<size_t, AccelerationStructureData> mMeshAccelerationStructures;
 
-	DeviceResourcePool<RenderResources> mResourcePool;
-	shared_ptr<RenderResources> mResources;
+	DeviceResourcePool<FrameResources> mResourcePool;
+	shared_ptr<FrameResources> mResources;
 
 	ComputePipelineCache mCopyVerticesPipeline;
 	ComputePipelineCache mConvertAlphaToRoughnessPipeline;
@@ -172,8 +173,11 @@ private:
 	bool mAlwaysUpdate = false;
 	bool mUpdateOnce = false;
 
-	// dirty animation hack
+
+	// HACK: animation
+
 	friend struct TransformData;
+
 	float3 mAnimateTranslate = float3::Zero();
 	float3 mAnimateRotate = float3::Zero();
 	float3 mAnimateWiggleBase = float3::Zero();

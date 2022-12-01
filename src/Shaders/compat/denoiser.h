@@ -3,9 +3,7 @@
 
 #include "common.h"
 
-#ifdef __cplusplus
-namespace tinyvkpt {
-#endif
+STM_NAMESPACE_BEGIN
 
 enum class DenoiserDebugMode {
 	eNone,
@@ -15,19 +13,20 @@ enum class DenoiserDebugMode {
 	eDebugModeCount
 };
 
-#ifdef __cplusplus
-} // namespace tinyvkpt
+STM_NAMESPACE_END
 
+
+#ifdef __cplusplus
 namespace std {
-inline string to_string(const tinyvkpt::DenoiserDebugMode& m) {
-switch (m) {
-	default: return "Unknown";
-	case tinyvkpt::DenoiserDebugMode::eNone: return "None";
-	case tinyvkpt::DenoiserDebugMode::eSampleCount: return "Sample Count";
-	case tinyvkpt::DenoiserDebugMode::eVariance: return "Variance";
-	case tinyvkpt::DenoiserDebugMode::eWeightSum: return "Weight Sum";
+inline string to_string(const stm2::DenoiserDebugMode& m) {
+	switch (m) {
+		default: return "Unknown";
+		case stm2::DenoiserDebugMode::eNone: return "None";
+		case stm2::DenoiserDebugMode::eSampleCount: return "Sample Count";
+		case stm2::DenoiserDebugMode::eVariance: return "Variance";
+		case stm2::DenoiserDebugMode::eWeightSum: return "Weight Sum";
+	}
 }
-};
 }
 #endif
 
@@ -38,10 +37,10 @@ switch (m) {
 struct DenoiserParameters {
 	StructuredBuffer<ViewData> gViews;
 	StructuredBuffer<uint> gInstanceIndexMap;
-	StructuredBuffer<VisibilityInfo> gVisibility;
-	StructuredBuffer<VisibilityInfo> gPrevVisibility;
-	StructuredBuffer<DepthInfo> gDepth;
-	StructuredBuffer<DepthInfo> gPrevDepth;
+	StructuredBuffer<VisibilityData> gVisibility;
+	StructuredBuffer<VisibilityData> gPrevVisibility;
+	StructuredBuffer<DepthData> gDepth;
+	StructuredBuffer<DepthData> gPrevDepth;
 	Texture2D<float2> gPrevUVs;
 	Texture2D<float4> gRadiance;
 	Texture2D<float4> gAlbedo;
@@ -51,8 +50,15 @@ struct DenoiserParameters {
 	Texture2D<float4> gPrevRadiance;
 	Texture2D<float4> gPrevAccumColor;
 	Texture2D<float2> gPrevAccumMoments;
-	SamplerState gStaticSampler;
+	SamplerState mStaticSampler;
 	RWTexture2D<float4> gDebugImage;
+
+	uint getViewIndex(const uint2 index) {
+		for (uint i = 0; i < gPushConstants.mViewCount; i++)
+			if (all(index >= gViews[i].mImageMin) && all(index < gViews[i].mImageMax))
+				return i;
+		return -1;
+	}
 };
 
 #endif

@@ -5,7 +5,7 @@
 
 #include <slang/slang.h>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 Shader::Shader(Device& device, const filesystem::path& sourceFile, const string& entryPoint, const string& profile, const vector<string>& compileArgs, const unordered_map<string, string>& defines)
 	: Device::Resource(device, sourceFile.stem().string() + "_" + entryPoint), mModule(nullptr) {

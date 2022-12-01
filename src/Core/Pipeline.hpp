@@ -5,7 +5,7 @@
 #include "Image.hpp"
 #include "DeviceResourcePool.hpp"
 
-namespace tinyvkpt {
+namespace stm2 {
 
 class PushConstantValue : public vector<byte> {
 public:
@@ -47,7 +47,7 @@ class DescriptorSets : public Device::Resource {
 public:
 	ComputePipeline& mPipeline;
 
-	DescriptorSets(ComputePipeline& pipeline, const string& name, const Descriptors& descriptors = {});
+	DescriptorSets(ComputePipeline& pipeline, const string& name);
 	DescriptorSets() = default;
 	DescriptorSets(const DescriptorSets&) = default;
 	DescriptorSets(DescriptorSets&&) = default;

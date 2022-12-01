@@ -1,11 +1,9 @@
 #ifndef RESERVOIR_H
 #define RESERVOIR_H
 
-#ifdef __cplusplus
-#pragma pack(push)
-#pragma pack(1)
-namespace tinyvkpt {
-#endif
+#include "hlslcompat.h"
+
+STM_NAMESPACE_BEGIN
 
 struct Reservoir {
 	float total_weight;
@@ -25,9 +23,6 @@ struct Reservoir {
 	}
 };
 
-#ifdef __cplusplus
-} // namespace tinyvkpt
-#pragma pack(pop)
-#endif
+STM_NAMESPACE_END
 
 #endif

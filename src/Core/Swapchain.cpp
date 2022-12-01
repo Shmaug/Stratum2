@@ -5,7 +5,7 @@
 #include <imgui/imgui.h>
 #include <stdexcept>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 Swapchain::Swapchain(Device& device, const string& name, Window& window, const uint32_t minImages, const vk::ImageUsageFlags imageUsage, const vk::SurfaceFormatKHR surfaceFormat, const vk::PresentModeKHR presentMode)
 	: Device::Resource(device, name), mSwapchain(nullptr), mWindow(window), mMinImageCount(minImages), mUsage(imageUsage) {

@@ -7,7 +7,7 @@
 #include <Utils/fwd.hpp>
 #include <Utils/utils.hpp>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 class Instance {
 public:

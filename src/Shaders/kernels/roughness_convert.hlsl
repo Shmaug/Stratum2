@@ -1,4 +1,4 @@
-#include "../compat/common.h"
+#include "compat/common.h"
 
 Texture2D<float> gInput;
 RWTexture2D<float> gRoughnessRW;

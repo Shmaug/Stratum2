@@ -13,7 +13,7 @@
 #undef max
 #endif
 
-namespace tinyvkpt {
+namespace stm2 {
 
 using namespace std;
 

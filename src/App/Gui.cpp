@@ -7,7 +7,7 @@
 #include <imgui/imgui_impl_vulkan.h>
 #include <imgui/imgui_impl_glfw.h>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 unordered_map<Image::View, pair<vk::raii::DescriptorSet, vk::raii::Sampler>> Gui::gTextureIDs;
 unordered_set<Image::View> Gui::gFrameTextures;

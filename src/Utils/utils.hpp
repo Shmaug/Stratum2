@@ -17,7 +17,7 @@
 	inline const TYPE & operator*() const { return VAR ; } \
 	inline const TYPE * operator->() const { return & VAR ; }
 
-namespace tinyvkpt {
+namespace stm2 {
 
 using namespace std;
 

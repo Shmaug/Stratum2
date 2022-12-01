@@ -1,10 +1,10 @@
 #pragma once
 
-#include <Utils/math.hpp>
+#include <Utils/hlslmath.hpp>
 #include <Core/Buffer.hpp>
 #include <Core/Image.hpp>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 struct ByteAppendBuffer : public vector<uint32_t> {
 	inline size_t sizeBytes() const {

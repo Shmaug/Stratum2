@@ -2,13 +2,17 @@
 #define DISNEYMATERIAL_H
 
 #ifdef __cplusplus
-#include <Utils/math.hpp>
-namespace tinyvkpt {
+#include <Utils/hlslmath.hpp>
 #endif
 
-#define DISNEY_DATA_N 3
+STM_NAMESPACE_BEGIN
+
+
 struct DisneyMaterialData {
-	float4 data[DISNEY_DATA_N];
+	static const uint gDataSize = 3;
+	static const uint gAlphaMaterialOffset = gDataSize*16;
+
+	float4 data[gDataSize];
 
 #ifdef __cplusplus
 	float3 baseColor()           { return data[0].head<3>(); }
@@ -45,15 +49,13 @@ struct DisneyMaterialData {
 	SLANG_MUTATING
 	void clearcoat(const float v)       { data[2][0] = v; }
 	SLANG_MUTATING
-	void clearcoatGloss(const float v) { data[2][1] = v; }
+	void clearcoatGloss(const float v)  { data[2][1] = v; }
 	SLANG_MUTATING
 	void transmission(const float v)    { data[2][2] = v; }
 	SLANG_MUTATING
 	void eta(const float v)             { data[2][3] = v; }
 };
 
-#ifdef __cplusplus
-} // namespace tinyvkpt
-#endif
+STM_NAMESPACE_END
 
 #endif

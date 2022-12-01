@@ -7,7 +7,7 @@
 #include <imgui/imgui.h>
 #include <algorithm>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) : mInstance(instance), mPhysicalDevice(physicalDevice), mDevice(nullptr), mPipelineCache(nullptr), mDescriptorPool(nullptr), mFrameIndex(0), mLastFrameDone(0) {
 	unordered_set<string> deviceExtensions;

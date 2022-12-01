@@ -2,7 +2,7 @@
 
 #include "Device.hpp"
 
-namespace tinyvkpt {
+namespace stm2 {
 
 class CommandBuffer : public Device::Resource {
 public:

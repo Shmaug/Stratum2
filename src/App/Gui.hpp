@@ -5,7 +5,7 @@
 #include <imgui/imgui.h>
 #include <imgui/imgui_impl_vulkan.h>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 class Gui {
 public:

@@ -8,7 +8,7 @@
 
 #include <portable-file-dialogs.h>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 #ifdef STRATUM_ENABLE_ASSIMP
 NodePtr Scene::loadAssimp(CommandBuffer& commandBuffer, const filesystem::path& filename) {

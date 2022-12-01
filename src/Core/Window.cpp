@@ -8,7 +8,7 @@
 #include <GLFW/glfw3.h>
 #include <imgui/imgui.h>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 void Window::windowSizeCallback(GLFWwindow* window, int width, int height) {
 	Window* w = (Window*)glfwGetWindowUserPointer(window);

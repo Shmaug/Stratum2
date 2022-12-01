@@ -3,7 +3,7 @@
 
 #include <imgui/imgui.h>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 shared_ptr<Profiler::ProfilerSample> Profiler::mCurrentSample;
 vector<pair<chrono::steady_clock::time_point, vector<pair<string,chrono::nanoseconds>>>> Profiler::mTimestamps;

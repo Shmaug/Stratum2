@@ -8,20 +8,20 @@
 #define gDebugMode 0
 #endif
 
-#include "../compat/denoiser.h"
-
-ParameterBlock<DenoiserParameters> gParams;
-
 struct PushConstants {
 	uint gViewCount;
 	float gHistoryLimit;
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> gPushConstants;
 
+#include "compat/denoiser.h"
+
+ParameterBlock<DenoiserParameters> gParams;
+
 SLANG_SHADER("compute")
 [numthreads(8,8,1)]
 void main(uint3 index : SV_DispatchThreadId) {
-	const uint view_index = get_view_index(index.xy, gParams.gViews, gPushConstants.gViewCount);
+	const uint view_index = gParams.getViewIndex(index.xy);
 	if (view_index == -1) return;
 
 	uint2 extent;
@@ -33,10 +33,10 @@ void main(uint3 index : SV_DispatchThreadId) {
 	float2 moments_prev = 0;
 	float sum_w         = 0;
 	if (gReprojection) {
-		const VisibilityInfo vis = gParams.gVisibility[ipos.y*extent.x + ipos.x];
-		const DepthInfo depth    = gParams.gDepth[ipos.y*extent.x + ipos.x];
+		const VisibilityData vis = gParams.gVisibility[ipos.y*extent.x + ipos.x];
+		const DepthData depth    = gParams.gDepth[ipos.y*extent.x + ipos.x];
 		if (vis.instance_index() != INVALID_INSTANCE) {
-			const float2 pos_prev = gParams.gViews[view_index].image_min + gParams.gPrevUVs[ipos] * float2(gParams.gViews[view_index].image_max - gParams.gViews[view_index].image_min) - 0.5;
+			const float2 pos_prev = gParams.gViews[view_index].mImageMin + gParams.gPrevUVs[ipos] * float2(gParams.gViews[view_index].mImageMax - gParams.gViews[view_index].mImageMin) - 0.5;
 			const int2 p = int2(pos_prev);
 			const float2 w = frac(pos_prev);
 			// bilinear interpolation, check each tap individually, renormalize afterwards
@@ -45,7 +45,7 @@ void main(uint3 index : SV_DispatchThreadId) {
 					const int2 ipos_prev = p + int2(xx, yy);
 					if (!gParams.gViews[view_index].test_inside(ipos_prev)) continue;
 
-					const VisibilityInfo prev_vis = gParams.gPrevVisibility[ipos_prev.y*extent.x + ipos_prev.x];
+					const VisibilityData prev_vis = gParams.gPrevVisibility[ipos_prev.y*extent.x + ipos_prev.x];
 					if (gParams.gInstanceIndexMap[vis.instance_index()] != prev_vis.instance_index()) continue;
 					if (dot(vis.normal(), prev_vis.normal()) < cos(degrees(2))) continue;
 					if (abs(depth.prev_z - gParams.gPrevDepth[ipos_prev.y*extent.x + ipos_prev.x].z) >= 1.5*length(depth.dz_dxy)) continue;

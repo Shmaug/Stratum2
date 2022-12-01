@@ -1,15 +1,14 @@
 #ifndef HASHGRID_H
 #define HASHGRID_H
 
-
 float hashgrid_cell_size(const float3 pos) {
 	if (gHashGridBucketPixelRadius < 0)
 		return gHashGridMinBucketRadius;
 	const uint view_index = 0;
 	const TransformData t = gFrameParams.gViewTransforms[view_index];
 	const float dist = length(pos - float3(t.m[0][3], t.m[1][3], t.m[2][3]));
-	const float2 extent = gFrameParams.gViews[view_index].image_max - gFrameParams.gViews[view_index].image_min;
-	const float step = dist * tan(gHashGridBucketPixelRadius * gFrameParams.gViews[view_index].projection.vertical_fov * max(1/extent.y, extent.y/pow2(extent.x)));
+	const float2 extent = gFrameParams.gViews[view_index].mImageMax - gFrameParams.gViews[view_index].mImageMin;
+	const float step = dist * tan(gHashGridBucketPixelRadius * gFrameParams.gViews[view_index].mProjection.mVerticalFoV * max(1/extent.y, extent.y/pow2(extent.x)));
 	return gHashGridMinBucketRadius * (1 << uint(log2(step / gHashGridMinBucketRadius)));
 }
 uint hashgrid_bucket_index(const float3 pos, out uint checksum, const float cell_size) {

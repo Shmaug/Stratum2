@@ -6,7 +6,7 @@
 
 #include <Utils/hash.hpp>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 class Image : public Device::Resource {
 public:
@@ -84,8 +84,8 @@ public:
 		inline View(const shared_ptr<Image>& image, const vk::ImageSubresourceRange& subresource = { vk::ImageAspectFlagBits::eColor, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS }, vk::ImageViewType viewType = vk::ImageViewType::e2D, const vk::ComponentMapping& componentMapping = {})
 			: mImage(image), mSubresource(subresource), mType(viewType), mComponentMapping(componentMapping) {
 			if (image) {
-				if (mSubresource.layerCount == 0) mSubresource.layerCount = image->layers();
-				if (mSubresource.levelCount == 0) mSubresource.levelCount = image->levels();
+				if (mSubresource.levelCount == VK_REMAINING_MIP_LEVELS) mSubresource.levelCount = image->levels();
+				if (mSubresource.layerCount == VK_REMAINING_ARRAY_LAYERS) mSubresource.layerCount = image->layers();
 				mView = image->view(subresource, viewType, componentMapping);
 			}
 		}
@@ -148,16 +148,12 @@ public:
 				src.subresourceLayer(), vk::Offset3D(0,0,0),
 				dst.subresourceLayer(), vk::Offset3D(0,0,0),
 				dst.extent());
-		if (c.srcSubresource.layerCount == VK_REMAINING_ARRAY_LAYERS) c.srcSubresource.layerCount = c.dstSubresource.layerCount;
-		if (c.dstSubresource.layerCount == VK_REMAINING_ARRAY_LAYERS) c.dstSubresource.layerCount = c.srcSubresource.layerCount;
 		copy(commandBuffer, src.image(), dst.image(), c);
 	}
 	inline static void blit(CommandBuffer& commandBuffer, const View& src, const View& dst, const vk::Filter filter = vk::Filter::eLinear) {
 		vk::ImageBlit c(
 				src.subresourceLayer(), { vk::Offset3D(0,0,0), vk::Offset3D(src.extent().width, src.extent().height, src.extent().depth) },
 				dst.subresourceLayer(), { vk::Offset3D(0,0,0), vk::Offset3D(dst.extent().width, dst.extent().height, dst.extent().depth) });
-		if (c.srcSubresource.layerCount == VK_REMAINING_ARRAY_LAYERS) c.srcSubresource.layerCount = c.dstSubresource.layerCount;
-		if (c.dstSubresource.layerCount == VK_REMAINING_ARRAY_LAYERS) c.dstSubresource.layerCount = c.srcSubresource.layerCount;
 		blit(commandBuffer, src.image(), dst.image(), c, filter);
 	}
 
@@ -174,8 +170,8 @@ private:
 namespace std {
 
 template<>
-struct hash<tinyvkpt::Image::View> {
-	inline size_t operator()(const tinyvkpt::Image::View& v) const {
+struct hash<stm2::Image::View> {
+	inline size_t operator()(const stm2::Image::View& v) const {
 		return hash<vk::ImageView>()(*v);
 	}
 };

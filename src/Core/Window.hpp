@@ -6,11 +6,11 @@
 #include <vulkan/vulkan_raii.hpp>
 
 #include <Utils/fwd.hpp>
-#include <Utils/math.hpp>
+#include <Utils/hlslmath.hpp>
 
 struct GLFWwindow;
 
-namespace tinyvkpt {
+namespace stm2 {
 
 // GLFW_KEY_***
 typedef uint32_t KeyCode;

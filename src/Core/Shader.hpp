@@ -5,7 +5,7 @@
 
 #include "Device.hpp"
 
-namespace tinyvkpt {
+namespace stm2 {
 
 using Defines = unordered_map<string, string>;
 

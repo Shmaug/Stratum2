@@ -9,9 +9,9 @@
 #include <chrono>
 
 #include <Utils/fwd.hpp>
-#include <Utils/math.hpp>
+#include <Utils/hlslmath.hpp>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 class Profiler {
 public:

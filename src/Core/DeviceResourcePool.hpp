@@ -2,7 +2,7 @@
 
 #include "Device.hpp"
 
-namespace tinyvkpt {
+namespace stm2 {
 
 template<derived_from<Device::Resource> T>
 class DeviceResourcePool {

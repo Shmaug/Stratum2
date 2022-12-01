@@ -7,12 +7,13 @@
 #include <typeindex>
 #include <ranges>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 using namespace std;
 
 class Node;
 
+// Scene graph node. Nodes hold pointers to parent/children nodes, as well as Components (just shared_ptr's of arbitrary types).
 class Node : public enable_shared_from_this<Node> {
 private:
 	string mName;

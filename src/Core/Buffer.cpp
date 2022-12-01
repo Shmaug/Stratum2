@@ -1,7 +1,7 @@
 #include "Buffer.hpp"
 #include "Image.hpp"
 
-namespace tinyvkpt {
+namespace stm2 {
 
 Buffer::Buffer(Device& device, const string& name, const vk::BufferCreateInfo& createInfo, const vk::MemoryPropertyFlags memoryFlags, const bool randomHostAccess)
 	: Device::Resource(device, name), mSize(createInfo.size), mMemoryFlags(memoryFlags) {

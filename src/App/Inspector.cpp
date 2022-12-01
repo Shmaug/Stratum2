@@ -7,7 +7,7 @@
 
 #include <imgui/imgui.h>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 Inspector::Inspector(Node& node) : mNode(node) {
 	setTypeCallback<Device>();
@@ -64,7 +64,7 @@ void Inspector::draw() {
 				ImGui::SetNextItemWidth(40);
 
 				if (!mSelected->getComponent<TransformData>() && ImGui::Button("Add transform"))
-					mSelected->makeComponent<TransformData>(float3::Zero(), quatf_identity(), float3::Ones());
+					mSelected->makeComponent<TransformData>(float3::Zero(), quatf::identity(), float3::Ones());
 
 				// list components in selected node
 

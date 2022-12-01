@@ -2,7 +2,7 @@
 
 #include "Image.hpp"
 
-namespace tinyvkpt {
+namespace stm2 {
 
 class Swapchain : public Device::Resource {
 public:

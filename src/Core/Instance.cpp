@@ -3,7 +3,7 @@
 #include <imgui/imgui.h>
 #include <GLFW/glfw3.h>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 bool Instance::sDisableDebugCallback = false;
 
@@ -91,9 +91,9 @@ Instance::Instance(const vector<string>& args) : mInstance(nullptr), mDebugMesse
 	// create instance
 
 	vk::ApplicationInfo appInfo = {};
-	appInfo.pApplicationName = "tinyvkpt";
+	appInfo.pApplicationName = "stratum2";
 	appInfo.applicationVersion = VK_MAKE_VERSION(0, 0, 0);
-	appInfo.pEngineName = "tinyvkpt";
+	appInfo.pEngineName = "stratum2";
 	appInfo.engineVersion = VK_MAKE_VERSION(0, 1, 0);
 	appInfo.apiVersion = mVulkanApiVersion = mContext.enumerateInstanceVersion();
 	mInstance = vk::raii::Instance(mContext, vk::InstanceCreateInfo({}, &appInfo, validationLayers, instanceExts));

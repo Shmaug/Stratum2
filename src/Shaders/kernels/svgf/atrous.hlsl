@@ -1,41 +1,9 @@
-/*
-Copyright (c) 2018, Christoph Schied
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-    * Redistributions of source code must retain the above copyright
-      notice, this list of conditions and the following disclaimer.
-    * Redistributions in binary form must reproduce the above copyright
-      notice, this list of conditions and the following disclaimer in the
-      documentation and/or other materials provided with the distribution.
-    * Neither the name of the Karlsruhe Institute of Technology nor the
-      names of its contributors may be used to endorse or promote products
-      derived from this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY
-DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
-ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-*/
-
 #ifndef gDebugMode
 #define gDebugMode 0
 #endif
 #ifndef gFilterKernelType
 #define gFilterKernelType 1u
 #endif
-
-#include "../compat/denoiser.h"
-#include "../compat/filter_type.h"
-
-ParameterBlock<DenoiserParameters> gParams;
 
 struct PushConstants {
 	uint gViewCount;
@@ -44,6 +12,12 @@ struct PushConstants {
 	int gStepSize;
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> gPushConstants;
+
+#include "compat/denoiser.h"
+#include "compat/filter_type.h"
+
+ParameterBlock<DenoiserParameters> gParams;
+
 
 #define gInput gParams.gFilterImages[gPushConstants.gIteration%2]
 #define gOutput gParams.gFilterImages[(gPushConstants.gIteration+1)%2]
@@ -89,8 +63,8 @@ struct TapData {
 		const float l_p = luminance(color_p.rgb);
 		const float w_l = abs(l_p - l_center) / max(sigma_l, 1e-10);
 
-		const VisibilityInfo vis_p = gParams.gVisibility[p.y*screen_width + p.x];
-		const DepthInfo depth_p = gParams.gDepth[p.y*screen_width + p.x];
+		const VisibilityData vis_p = gParams.gVisibility[p.y*screen_width + p.x];
+		const DepthData depth_p = gParams.gDepth[p.y*screen_width + p.x];
 		const float w_z = abs(depth_p.z - z_center) / (length(dz_center * float2(offset * gPushConstants.gStepSize)) + 1e-2);
 		const float w_n = pow(max(0, dot(vis_p.normal(), center_normal)), 256);
 
@@ -194,13 +168,13 @@ SLANG_SHADER("compute")
 [numthreads(8,8,1)]
 void main(uint3 index : SV_DispatchThreadId) {
 	TapData t;
-	t.view_index = get_view_index(index.xy, gParams.gViews, gPushConstants.gViewCount);
+	t.view_index = gParams.getViewIndex(index.xy);
 	if (t.view_index == -1) return;
 	uint h;
 	gOutput.GetDimensions(t.screen_width, h);
 
-	const VisibilityInfo vis = gParams.gVisibility[index.y*t.screen_width + index.x];
-	const DepthInfo depth = gParams.gDepth[index.y*t.screen_width + index.x];
+	const VisibilityData vis = gParams.gVisibility[index.y*t.screen_width + index.x];
+	const DepthData depth = gParams.gDepth[index.y*t.screen_width + index.x];
 	t.index = (int2)index.xy;
 	t.center_normal = vis.normal();
 	t.z_center = depth.z;

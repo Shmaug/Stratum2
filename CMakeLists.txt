@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(tinyvkpt)
+project(Stratum2)
 
 # Find dependencies
 
@@ -8,12 +8,11 @@ find_package(Vulkan REQUIRED)
 find_package(assimp CONFIG)
 find_package(OpenVDB CONFIG)
 
-
 # download slang release rom github if it doesnt already exist
 set(SLANG_ROOT "${CMAKE_CURRENT_LIST_DIR}/extern/slang")
 if (NOT EXISTS ${SLANG_ROOT})
 	message(STATUS "Downloading slang")
-	set(SLANG_URL https://github.com/shader-slang/slang/releases/download/v0.24.35/slang-0.24.35)
+	set(SLANG_URL https://github.com/shader-slang/slang/releases/download/v0.24.46/slang-0.24.46)
 	if (WIN32)
 		file(DOWNLOAD "${SLANG_URL}-win64.zip" "${SLANG_ROOT}.zip")
 		message(STATUS "Extracting slang")
@@ -38,7 +37,7 @@ endif()
 include_directories(extern)
 include_directories(src)
 
-set(TARGET_NAME tinyvkpt)
+set(TARGET_NAME Stratum2)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CXX_STANDARD_REQUIRED TRUE)

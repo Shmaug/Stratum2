@@ -5,7 +5,7 @@
 #include <functional>
 #include <variant>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 template<typename T>
 concept has_drawGui_node = requires(T t, Node& n) { t.drawGui(n); };

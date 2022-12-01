@@ -1,28 +1,29 @@
-Spectrum disneysheen_eval(const DisneyMaterialData bsdf, const Vector3 dir_in, const Vector3 dir_out, const Vector3 h) {
-	const Spectrum Ctint = luminance(bsdf.baseColor()) > 1e-4 ? bsdf.baseColor()/luminance(bsdf.baseColor()) : 1;
-	const Spectrum Csheen = (1 - bsdf.sheen_tint()) + bsdf.sheen_tint()*Ctint;
-	return Csheen * pow(1 - abs(dot(h, dir_out)), 5) * abs(dir_out.z);
+float3 disneysheen_eval(const DisneyMaterialData bsdf, const float3 dirIn, const float3 dirOut, const float3 h) {
+	const float3 Ctint = luminance(bsdf.baseColor()) > 1e-4 ? bsdf.baseColor()/luminance(bsdf.baseColor()) : 1;
+	const float3 Csheen = (1 - bsdf.sheen_tint()) + bsdf.sheen_tint()*Ctint;
+	return Csheen * pow(1 - abs(dot(h, dirOut)), 5) * abs(dirOut.z);
 }
 
-void disneysheen_eval(const DisneyMaterialData bsdf, out MaterialEvalRecord r, const Vector3 dir_in, const Vector3 dir_out, const bool adjoint) {
-	if (dir_in.z * dir_out.z < 0) {
-		r.f = 0;
-		r.pdf_fwd = r.pdf_rev = 0;
-		return; // No light through the surface
+MaterialEvalRecord disneysheen_eval(const DisneyMaterialData bsdf, const float3 dirIn, const float3 dirOut, const bool adjoint) {
+	MaterialEvalRecord r;
+	if (dirIn.z * dirOut.z < 0) {
+		r.mReflectance = 0;
+		r.mFwdPdfW = r.mRevPdfW = 0;
+		return r; // No light through the surface
 	}
-	r.f = disneysheen_eval(bsdf, dir_in, dir_out, normalize(dir_in + dir_out));
-	r.pdf_fwd = cosine_hemisphere_pdfW(abs(dir_out.z));
-	r.pdf_rev = cosine_hemisphere_pdfW(abs(dir_in.z));
+	r.mReflectance = disneysheen_eval(bsdf, dirIn, dirOut, normalize(dirIn + dirOut));
+	r.mFwdPdfW = cosine_hemisphere_pdfW(abs(dirOut.z));
+	r.mRevPdfW = cosine_hemisphere_pdfW(abs(dirIn.z));
+	return r;
 }
 
-Spectrum disneysheen_sample(const DisneyMaterialData bsdf, out MaterialSampleRecord r, const Vector3 rnd, const Vector3 dir_in, inout Spectrum beta, const bool adjoint) {
-	r.dir_out = sample_cos_hemisphere(rnd.x, rnd.y);
-	if (dir_in.z < 0) r.dir_out = -r.dir_out;
-	r.pdf_fwd = cosine_hemisphere_pdfW(abs(r.dir_out.z));
-	r.pdf_rev = cosine_hemisphere_pdfW(abs(dir_in.z));
-	r.eta = 0;
-	r.roughness = 1;
-	const Spectrum f = disneysheen_eval(bsdf, dir_in, r.dir_out, normalize(dir_in + r.dir_out));
-	beta *= f / r.pdf_fwd;
-	return f;
+MaterialSampleRecord disneysheen_sample(const DisneyMaterialData bsdf, const float3 rnd, const float3 dirIn, const bool adjoint) {
+	MaterialSampleRecord r;
+	r.mDirection = sample_cos_hemisphere(rnd.x, rnd.y);
+	if (dirIn.z < 0) r.mDirection = -r.dirOut;
+	r.mFwdPdfW = cosine_hemisphere_pdfW(abs(r.mDirection.z));
+	r.mRevPdfW = cosine_hemisphere_pdfW(abs(dirIn.z));
+	r.mEta = 0;
+	r.mRoughness = 1;
+	return r;
 }

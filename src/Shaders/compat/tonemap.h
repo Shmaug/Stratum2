@@ -1,9 +1,12 @@
 #ifndef TONEMAP_H
 #define TONEMAP_H
 
+#include "hlslcompat.h"
 #ifdef __cplusplus
-namespace tinyvkpt {
+#include <unordered_set>
 #endif
+
+STM_NAMESPACE_BEGIN
 
 enum class TonemapMode {
 	eRaw,
@@ -21,33 +24,35 @@ enum class TonemapMode {
 };
 
 #ifdef __cplusplus
-
-static const unordered_set<TonemapMode> gTonemapModeNeedsMax = {
+static const std::unordered_set<TonemapMode> gTonemapModeNeedsMax = {
 	TonemapMode::eViridisR,
 	TonemapMode::eReinhardExtended,
 	TonemapMode::eReinhardLuminanceExtended,
 	TonemapMode::eUncharted2
 };
+#endif
 
-}
+STM_NAMESPACE_END
 
+
+#ifdef __cplusplus
 namespace std {
-inline string to_string(const tinyvkpt::TonemapMode& m) {
+inline string to_string(const stm2::TonemapMode& m) {
 	switch (m) {
 		default: return "Unknown";
-		case tinyvkpt::TonemapMode::eRaw: return "Raw";
-		case tinyvkpt::TonemapMode::eReinhard: return "Reinhard";
-		case tinyvkpt::TonemapMode::eReinhardExtended: return "Reinhard Extended";
-		case tinyvkpt::TonemapMode::eReinhardLuminance: return "Reinhard (Luminance)";
-		case tinyvkpt::TonemapMode::eReinhardLuminanceExtended: return "Reinhard Extended (Luminance)";
-		case tinyvkpt::TonemapMode::eUncharted2: return "Uncharted 2";
-		case tinyvkpt::TonemapMode::eFilmic: return "Filmic";
-		case tinyvkpt::TonemapMode::eACES: return "ACES";
-		case tinyvkpt::TonemapMode::eACESApprox: return "ACES (approximated)";
-		case tinyvkpt::TonemapMode::eViridisR: return "Viridis Colormap - R channel";
-		case tinyvkpt::TonemapMode::eViridisLengthRGB: return "Viridis Colormap - length(RGB)";
+		case stm2::TonemapMode::eRaw: return "Raw";
+		case stm2::TonemapMode::eReinhard: return "Reinhard";
+		case stm2::TonemapMode::eReinhardExtended: return "Reinhard Extended";
+		case stm2::TonemapMode::eReinhardLuminance: return "Reinhard (Luminance)";
+		case stm2::TonemapMode::eReinhardLuminanceExtended: return "Reinhard Extended (Luminance)";
+		case stm2::TonemapMode::eUncharted2: return "Uncharted 2";
+		case stm2::TonemapMode::eFilmic: return "Filmic";
+		case stm2::TonemapMode::eACES: return "ACES";
+		case stm2::TonemapMode::eACESApprox: return "ACES (approximated)";
+		case stm2::TonemapMode::eViridisR: return "Viridis Colormap - R channel";
+		case stm2::TonemapMode::eViridisLengthRGB: return "Viridis Colormap - length(RGB)";
 	}
-};
+}
 }
 #endif
 

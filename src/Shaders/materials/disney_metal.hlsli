@@ -1,43 +1,44 @@
-Real disneymetal_eval_pdf(const Real D, const Real G_in, const Real cos_theta_in) {
+float disneymetal_eval_pdf(const float D, const float G_in, const float cos_theta_in) {
 	return D * G_in / (4 * abs(cos_theta_in));
 }
 
-Spectrum disneymetal_eval(const Spectrum baseColor, const Real D, const Real G, const Vector3 dir_in, const Real h_dot_out) {
-	return baseColor * schlick_fresnel3(baseColor, abs(h_dot_out)) * D * G / (4 * abs(dir_in.z));
+float3 disneymetal_eval(const float3 baseColor, const float D, const float G, const float3 dirIn, const float h_dot_out) {
+	return baseColor * schlick_fresnel3(baseColor, abs(h_dot_out)) * D * G / (4 * abs(dirIn.z));
 }
 
-void disneymetal_eval(const DisneyMaterialData bsdf, out MaterialEvalRecord r, const Vector3 dir_in, const Vector3 dir_out, const bool adjoint) {
-	if (dir_in.z * dir_out.z < 0) {
-		r.f = 0;
-		r.pdf_fwd = r.pdf_rev = 0;
-		return; // No light through the surface
+MaterialEvalRecord disneymetal_eval(const DisneyMaterialData bsdf, const float3 dirIn, const float3 dirOut, const bool adjoint) {
+	MaterialEvalRecord r;
+	if (dirIn.z * dirOut.z < 0) {
+		r.mReflectance = 0;
+		r.mFwdPdfW = r.mRevPdfW = 0;
+		return r; // No light through the surface
 	}
-	const Real aspect = sqrt(1 - 0.9 * bsdf.anisotropic());
+	const float aspect = sqrt(1 - 0.9 * bsdf.anisotropic());
 	const float2 alpha = max(0.0001, float2(bsdf.alpha() / aspect, bsdf.alpha() * aspect));
 
-	const Vector3 h = normalize(dir_in + dir_out);
-	const Real D = Dm(alpha.x, alpha.y, h);
-	const Real G_in = G1(alpha.x, alpha.y, dir_in);
-	const Real G_out = G1(alpha.x, alpha.y, dir_out);
-	r.f = disneymetal_eval(bsdf.baseColor(), D, G_in * G_out, dir_in, dot(h, dir_out));
-	r.pdf_fwd = disneymetal_eval_pdf(D, G_in, dir_in.z);
-	r.pdf_rev = disneymetal_eval_pdf(D, G_out, dir_out.z);
+	const float3 h = normalize(dirIn + dirOut);
+	const float D = Dm(alpha.x, alpha.y, h);
+	const float G_in = G1(alpha.x, alpha.y, dirIn);
+	const float G_out = G1(alpha.x, alpha.y, dirOut);
+	r.mReflectance = disneymetal_eval(bsdf.baseColor(), D, G_in * G_out, dirIn, dot(h, dirOut));
+	r.mFwdPdfW = disneymetal_eval_pdf(D, G_in, dirIn.z);
+	r.mRevPdfW = disneymetal_eval_pdf(D, G_out, dirOut.z);
 }
 
-Spectrum disneymetal_sample(const DisneyMaterialData bsdf, out MaterialSampleRecord r, const Vector3 rnd, const Vector3 dir_in, inout Spectrum beta, const bool adjoint) {
-	const Real aspect = sqrt(1 - 0.9 * bsdf.anisotropic());
+MaterialSampleRecord disneymetal_sample(const DisneyMaterialData bsdf, const float3 rnd, const float3 dirIn, const bool adjoint) {
+	const float aspect = sqrt(1 - 0.9 * bsdf.anisotropic());
 	const float2 alpha = max(0.0001, float2(bsdf.alpha() / aspect, bsdf.alpha() * aspect));
 
-	const Vector3 h = sample_visible_normals(dir_in, alpha.x, alpha.y, rnd.xy);
-	r.dir_out = reflect(-dir_in, h);
-	const Real D = Dm(alpha.x, alpha.y, h);
-	const Real G_in = G1(alpha.x, alpha.y, dir_in);
-	const Real G_out = G1(alpha.x, alpha.y, r.dir_out);
-	r.pdf_fwd = disneymetal_eval_pdf(D, G_in, dir_in.z);
-	r.pdf_rev = disneymetal_eval_pdf(D, G_out, r.dir_out.z);
-	r.eta = 0;
-	r.roughness = bsdf.roughness();
-	const Spectrum f = disneymetal_eval(bsdf.baseColor(), D, G_in * G_out, dir_in, dot(h, r.dir_out));
-	beta *= f / r.pdf_fwd;
-	return f;
+	const float3 h = sample_visible_normals(dirIn, alpha.x, alpha.y, rnd.xy);
+
+	MaterialSampleRecord r;
+	r.mDirection = reflect(-dirIn, h);
+	const float D = Dm(alpha.x, alpha.y, h);
+	const float G_in = G1(alpha.x, alpha.y, dirIn);
+	const float G_out = G1(alpha.x, alpha.y, r.mDirection);
+	r.mFwdPdfW = disneymetal_eval_pdf(D, G_in, dirIn.z);
+	r.mRevPdfW = disneymetal_eval_pdf(D, G_out, r.mDirection.z);
+	r.mEta = 0;
+	r.mRoughness = bsdf.roughness();
+	return r;
 }

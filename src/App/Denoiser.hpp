@@ -6,7 +6,7 @@
 #include <Shaders/compat/denoiser.h>
 #include <Shaders/compat/filter_type.h>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 class Denoiser {
 public:
@@ -18,7 +18,14 @@ public:
 
 	void drawGui();
 
-	Image::View denoise(CommandBuffer& commandBuffer, const Image::View& radiance, const Image::View& albedo, const Buffer::View<ViewData>& views, const Buffer::View<VisibilityInfo>& visibility, const Buffer::View<DepthInfo>& depths, const Image::View& prev_uvs);
+	void denoise(
+		CommandBuffer& commandBuffer,
+		const Image::View& image,
+		const Image::View& albedo,
+		const Image::View& prevUVs,
+		const Buffer::View<ViewData>& views,
+		const Buffer::View<VisibilityData>& visibility,
+		const Buffer::View<DepthData>& depths);
 
 	inline void resetAccumulation() {
 		mResetAccumulation = true;
@@ -54,8 +61,8 @@ private:
 		Buffer::View<ViewData> mViews;
 		Image::View mRadiance;
 		Image::View mAlbedo;
-		Buffer::View<VisibilityInfo> mVisibility;
-		Buffer::View<DepthInfo> mDepth;
+		Buffer::View<VisibilityData> mVisibility;
+		Buffer::View<DepthData> mDepth;
 		Image::View mAccumColor;
 		Image::View mAccumMoments;
 		Image::View mDebugImage;

@@ -1,39 +1,40 @@
-Spectrum disneydiffuse_eval(const DisneyMaterialData bsdf, const Vector3 dir_in, const Vector3 dir_out) {
-	const Real hdotwo = abs(dot(normalize(dir_in + dir_out), dir_out));
+float3 disneydiffuse_eval(const DisneyMaterialData bsdf, const float3 dirIn, const float3 dirOut) {
+	const float hdotwo = abs(dot(normalize(dirIn + dirOut), dirOut));
 
-	const Real FSS90 = bsdf.roughness() * hdotwo*hdotwo;
-	const Real FD90 = 0.5 + 2*FSS90;
-	const Real ndotwi5 = pow(1 - abs(dir_in.z), 5);
-	const Real ndotwo5 = pow(1 - abs(dir_out.z), 5);
-	const Real FDwi = 1 + (FD90 - 1) * ndotwi5;
-	const Real FDwo = 1 + (FD90 - 1) * ndotwo5;
-	const Spectrum f_base_diffuse = (bsdf.baseColor() / M_PI) * FDwi * FDwo;
+	const float FSS90 = bsdf.roughness() * hdotwo*hdotwo;
+	const float FD90 = 0.5 + 2*FSS90;
+	const float ndotwi5 = pow(1 - abs(dirIn.z), 5);
+	const float ndotwo5 = pow(1 - abs(dirOut.z), 5);
+	const float FDwi = 1 + (FD90 - 1) * ndotwi5;
+	const float FDwo = 1 + (FD90 - 1) * ndotwo5;
+	const float3 f_base_diffuse = (bsdf.baseColor() / M_PI) * FDwi * FDwo;
 
-	const Real FSSwi = 1 + (FSS90 - 1) * ndotwi5;
-	const Real FSSwo = 1 + (FSS90 - 1) * ndotwo5;
-	const Spectrum f_subsurface = (1.25 * bsdf.baseColor() / M_PI) * (FSSwi * FSSwo * (1 / (abs(dir_in.z) + abs(dir_out.z)) - 0.5) + 0.5);
+	const float FSSwi = 1 + (FSS90 - 1) * ndotwi5;
+	const float FSSwo = 1 + (FSS90 - 1) * ndotwo5;
+	const float3 f_subsurface = (1.25 * bsdf.baseColor() / M_PI) * (FSSwi * FSSwo * (1 / (abs(dirIn.z) + abs(dirOut.z)) - 0.5) + 0.5);
 
-	return lerp(f_base_diffuse, f_subsurface, bsdf.subsurface()) * abs(dir_out.z);
+	return lerp(f_base_diffuse, f_subsurface, bsdf.subsurface()) * abs(dirOut.z);
 }
 
-void disneydiffuse_eval(const DisneyMaterialData bsdf, out MaterialEvalRecord r, const Vector3 dir_in, const Vector3 dir_out, const bool adjoint) {
-	if (dir_in.z * dir_out.z < 0) {
-		r.f = 0;
-		r.pdf_fwd = r.pdf_rev = 0;
-		return; // No light through the surface
+MaterialEvalRecord disneydiffuse_eval(const DisneyMaterialData bsdf, const float3 dirIn, const float3 dirOut, const bool adjoint) {
+	MaterialEvalRecord r;
+	if (dirIn.z * dirOut.z < 0) {
+		r.mReflectance = 0;
+		r.mFwdPdfW = r.mRevPdfW = 0;
+		return r; // No light through the surface
 	}
-	r.f = disneydiffuse_eval(bsdf, dir_in, dir_out);
-	r.pdf_fwd = cosine_hemisphere_pdfW(abs(dir_out.z));
-	r.pdf_rev = cosine_hemisphere_pdfW(abs(dir_in.z));
+	r.mReflectance = disneydiffuse_eval(bsdf, dirIn, dirOut);
+	r.mFwdPdfW = cosine_hemisphere_pdfW(abs(dirOut.z));
+	r.mRevPdfW = cosine_hemisphere_pdfW(abs(dirIn.z));
+	return r;
 }
-Spectrum disneydiffuse_sample(const DisneyMaterialData bsdf, out MaterialSampleRecord r, const Vector3 rnd, const Vector3 dir_in, inout Spectrum beta, const bool adjoint) {
-	r.dir_out = sample_cos_hemisphere(rnd.x, rnd.y);
-	if (dir_in.z < 0) r.dir_out = -r.dir_out;
-	r.pdf_fwd = cosine_hemisphere_pdfW(abs(r.dir_out.z));
-	r.pdf_rev = cosine_hemisphere_pdfW(abs(dir_in.z));
-	r.eta = 0;
-	r.roughness = 1;
-	const Spectrum f = disneydiffuse_eval(bsdf, dir_in, r.dir_out);
-	beta *= f / r.pdf_fwd;
-	return f;
+MaterialSampleRecord disneydiffuse_sample(const DisneyMaterialData bsdf, const float3 rnd, const float3 dirIn, const bool adjoint) {
+	MaterialSampleRecord r;
+	r.mDirection = sample_cos_hemisphere(rnd.x, rnd.y);
+	if (dirIn.z < 0) r.mDirection = -r.mDirection;
+	r.mFwdPdfW = cosine_hemisphere_pdfW(abs(r.mDirection.z));
+	r.mRevPdfW = cosine_hemisphere_pdfW(abs(dirIn.z));
+	r.mEta = 0;
+	r.mRoughness = 1;
+	return r;
 }

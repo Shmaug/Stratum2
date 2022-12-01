@@ -7,7 +7,7 @@
 #define TINYGLTF_IMPLEMENTATION
 #include <tiny_gltf.h>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 shared_ptr<Node> Scene::loadGltf(CommandBuffer& commandBuffer, const filesystem::path& filename) {
 	ProfilerScope ps("loadGltf", &commandBuffer);
@@ -90,17 +90,17 @@ shared_ptr<Node> Scene::loadGltf(CommandBuffer& commandBuffer, const filesystem:
 
 	cout << "Loading materials..." << endl;
 	ranges::transform(model.materials, materials.begin(), [&](const tinygltf::Material& material) {
-		ImageValue3 emission(double3::Map(material.emissiveFactor.data()).cast<float>(), getImage(material.emissiveTexture.index, true));
+		ImageValue<3> emission(double3::Map(material.emissiveFactor.data()).cast<float>(), getImage(material.emissiveTexture.index, true));
 		if (material.extras.Has("emissionIntensity"))
-			emission.value *= (float)material.extras.Get("emissionIntensity").GetNumberAsDouble();
+			emission.mValue *= (float)material.extras.Get("emissionIntensity").GetNumberAsDouble();
 
-		ImageValue3 baseColor(double3::Map(material.pbrMetallicRoughness.baseColorFactor.data()).cast<float>(), getImage(material.pbrMetallicRoughness.baseColorTexture.index, true));
-		ImageValue4 metallicRoughness(double4(0, material.pbrMetallicRoughness.roughnessFactor, material.pbrMetallicRoughness.metallicFactor, 0).cast<float>(), getImage(material.pbrMetallicRoughness.metallicRoughnessTexture.index, false));
+		ImageValue<3> baseColor(double3::Map(material.pbrMetallicRoughness.baseColorFactor.data()).cast<float>(), getImage(material.pbrMetallicRoughness.baseColorTexture.index, true));
+		ImageValue<4> metallicRoughness(double4(0, material.pbrMetallicRoughness.roughnessFactor, material.pbrMetallicRoughness.metallicFactor, 0).cast<float>(), getImage(material.pbrMetallicRoughness.metallicRoughnessTexture.index, false));
 		float eta = material.extensions.contains("KHR_materials_ior") ? (float)material.extensions.at("KHR_materials_ior").Get("ior").GetNumberAsDouble() : 1.5f;
 		float transmission = material.extensions.contains("KHR_materials_transmission") ? (float)material.extensions.at("KHR_materials_transmission").Get("transmissionFactor").GetNumberAsDouble() : 0;
 
 
-		Material m = makeMetallicRoughnessMaterial(commandBuffer, baseColor, metallicRoughness, ImageValue3(float3::Constant(transmission), {}), eta, emission);
+		Material m = makeMetallicRoughnessMaterial(commandBuffer, baseColor, metallicRoughness, ImageValue<3>(float3::Constant(transmission), {}), eta, emission);
 
 		if (material.extensions.contains("KHR_materials_clearcoat")) {
 			auto& v = material.extensions.at("KHR_materials_clearcoat");
@@ -252,7 +252,7 @@ shared_ptr<Node> Scene::loadGltf(CommandBuffer& commandBuffer, const filesystem:
 			else translate = double3::Map(node.translation.data()).cast<float>();
 			if (node.scale.empty()) scale = float3::Ones();
 			else scale = double3::Map(node.scale.data()).cast<float>();
-			const quatf rotate = node.rotation.empty() ? quatf_identity() : qnormalize(make_quatf((float)node.rotation[0], (float)node.rotation[1], (float)node.rotation[2], (float)node.rotation[3]));
+			const quatf rotate = node.rotation.empty() ? quatf::identity() : normalize(quatf((float)node.rotation[0], (float)node.rotation[1], (float)node.rotation[2], (float)node.rotation[3]));
 			dst->makeComponent<TransformData>(translate, rotate, scale);
 		} else if (!node.matrix.empty())
 			dst->makeComponent<TransformData>(Eigen::Array<double,4,4>::Map(node.matrix.data()).block<3,4>(0,0).cast<float>());

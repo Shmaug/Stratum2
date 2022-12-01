@@ -3,10 +3,10 @@
 
 #include <map>
 
-namespace tinyvkpt {
+namespace stm2 {
 
 
-DescriptorSets::DescriptorSets(ComputePipeline& pipeline, const string& name, const Descriptors& descriptors) :
+DescriptorSets::DescriptorSets(ComputePipeline& pipeline, const string& name) :
 	Device::Resource(pipeline.mDevice, name), mPipeline(pipeline) {
 	// get descriptor set layouts
 	vector<vk::DescriptorSetLayout> layouts(mPipeline.descriptorSetLayouts().size());
@@ -19,8 +19,6 @@ DescriptorSets::DescriptorSets(ComputePipeline& pipeline, const string& name, co
 	ranges::transform(sets, mDescriptorSets.begin(), [](vk::raii::DescriptorSet& ds) {
 		return make_shared<vk::raii::DescriptorSet>(move(ds));
 	});
-
-	write(descriptors);
 }
 
 void DescriptorSets::write(const Descriptors& descriptors) {
@@ -302,12 +300,9 @@ void ComputePipeline::pushConstants(CommandBuffer& commandBuffer, const PushCons
 
 shared_ptr<DescriptorSets> ComputePipeline::getDescriptorSets(const Descriptors& descriptors) {
 	shared_ptr<DescriptorSets> r = mResources.get();
-	if (r) {
-		r->write(descriptors);
-	} else {
-		r = make_shared<DescriptorSets>(*this, resourceName() + "/Resources", descriptors);
-		mResources.emplace(r);
-	}
+	if (!r)
+		r = mResources.emplace(make_shared<DescriptorSets>(*this, resourceName() + "/Resources"));
+	r->write(descriptors);
 	return r;
 }
 
