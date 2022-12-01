@@ -9,17 +9,17 @@ Required dependencies are in 'extern'. slang is downloaded automatically. Option
 - 'OpenVDB' for loading \*.vdb volumes
 
 # Command-line arguments
-Stratum stores commandline arguments in the `Instance` class and can be queried with the `findArgument` and `findArguments` functions. Many core components use this
+Stratum stores commandline arguments in the `Instance` class and can be queried with the `findArgument` and `findArguments` functions.
 
-# Core arguments
+## Core arguments
 * --instanceExtension=`string`
 * --deviceExtension=`string`
 * --validationLayer=`string`
 * --debugMessenger
 * --noPipelineCache
-* --font=`path,float`
 * --shaderKernelPath=`path`
 * --shaderInclude=`path`
+* --font=`path,float`
 ## Window arguments
 * --width=`int`
 * --height=`int`
@@ -33,10 +33,16 @@ Stratum stores commandline arguments in the `Instance` class and can be queried 
 * --maxDiffuseBounces=`int`
 * --exposure=`float`
 
-Currently, Stratum should be run with the following arguments:
+# Required arguments
+Currently, Stratum requires the following arguments in order to function:
 * --shaderKernelPath=${Stratum2_Dir}/src/Shaders/kernels
 * --shaderInclude=${Stratum2_Dir}/extern
 * --shaderInclude=${Stratum2_Dir}/src/Shaders
 * --deviceExtension=VK_KHR_ray_query
 * --debugMessenger
+
+Optionally, the following arguments are recommended:
 * --font=DroidSans.ttf,16
+* --width=1920
+* --height=1080
+* --presentMode=Immediate
