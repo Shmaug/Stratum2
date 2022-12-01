@@ -1,4 +1,7 @@
-Lightweight vulkan wrapper and scene graph, includes required dependencies. Can load environment maps (\*.hdr, \*.exr), GLTF scenes (\*.glb, \*.gltf), as well a NVDB or Mitsuba volumes (\*.nvdb, \*.vol)
+Lightweight vulkan wrapper and scene graph. By default, supports loading the following files:
+* Environment maps (\*.hdr, \*.exr)
+* GLTF scenes (\*.glb, \*.gltf)
+* NVDB or Mitsuba volumes (\*.nvdb, \*.vol)
 
 # Dependencies
 Required dependencies are in 'extern'. slang is downloaded automatically. Optional dependences (searched via find_package in CMake) are:
