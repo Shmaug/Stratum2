@@ -115,7 +115,7 @@ public:
 		inline void barrier(CommandBuffer& commandBuffer, const Image::SubresourceLayoutState& newState) const {
 			mImage->barrier(commandBuffer, mSubresource, newState);
 		}
-		void barrier(CommandBuffer& commandBuffer, const vk::ImageLayout layout, const vk::PipelineStageFlags stage, const vk::AccessFlags accessMask, uint32_t queueFamily = VK_QUEUE_FAMILY_IGNORED) const {
+		inline void barrier(CommandBuffer& commandBuffer, const vk::ImageLayout layout, const vk::PipelineStageFlags stage, const vk::AccessFlags accessMask, uint32_t queueFamily = VK_QUEUE_FAMILY_IGNORED) const {
 			mImage->barrier(commandBuffer, mSubresource, { layout, stage, accessMask, queueFamily });
 		}
 

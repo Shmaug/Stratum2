@@ -9,7 +9,7 @@
 namespace stm2 {
 
 struct Material {
-    ImageValue<4> mValues[DisneyMaterialData::gDataSize];
+    ImageValue<4> mValues[DisneyMaterialData::gDataCount];
 	Image::View mAlphaMask;
 	Buffer::View<uint32_t> mMinAlpha;
 	Image::View mBumpImage;
@@ -29,7 +29,7 @@ struct Material {
 	float& eta()             { return mValues[2].mValue[3]; }
 
     inline void store(MaterialResources& resources) const {
-		for (int i = 0; i < DisneyMaterialData::gDataSize; i++)
+		for (uint32_t i = 0; i < DisneyMaterialData::gDataCount; i++)
         	mValues[i].store(resources);
 		resources.mMaterialData.Append(resources.getIndex(mAlphaMask));
 		resources.mMaterialData.Append(resources.getIndex(mBumpImage));

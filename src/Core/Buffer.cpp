@@ -3,10 +3,10 @@
 
 namespace stm2 {
 
-Buffer::Buffer(Device& device, const string& name, const vk::BufferCreateInfo& createInfo, const vk::MemoryPropertyFlags memoryFlags, const bool randomHostAccess)
+Buffer::Buffer(Device& device, const string& name, const vk::BufferCreateInfo& createInfo, const vk::MemoryPropertyFlags memoryFlags, const bool hostRandomAccess)
 	: Device::Resource(device, name), mSize(createInfo.size), mMemoryFlags(memoryFlags) {
 	VmaAllocationCreateInfo allocationCreateInfo;
-	allocationCreateInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | (randomHostAccess ? VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT : VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
+	allocationCreateInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | (hostRandomAccess ? VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT : VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
     allocationCreateInfo.usage = (memoryFlags & vk::MemoryPropertyFlagBits::eDeviceLocal) ? VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE : VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
     allocationCreateInfo.requiredFlags = (VkMemoryPropertyFlags)memoryFlags;
     allocationCreateInfo.memoryTypeBits = 0;
@@ -84,6 +84,11 @@ void Buffer::copyToImage(CommandBuffer& commandBuffer, const shared_ptr<Image>& 
 	commandBuffer.trackResource(dst);
 	dst->barrier(commandBuffer, vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1), vk::ImageLayout::eTransferDstOptimal, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferWrite);
 	commandBuffer->copyBufferToImage(mBuffer, **dst, vk::ImageLayout::eTransferDstOptimal, copies);
+}
+void Buffer::copyFromImage(CommandBuffer& commandBuffer, const shared_ptr<Image>& src, const vk::ArrayProxy<vk::BufferImageCopy>& copies) const {
+	src->barrier(commandBuffer, vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1), vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferRead);
+	commandBuffer.trackResource(src);
+	commandBuffer->copyImageToBuffer(**src, vk::ImageLayout::eTransferSrcOptimal, mBuffer, copies);
 }
 
 }

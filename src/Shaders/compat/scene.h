@@ -6,78 +6,120 @@
 
 STM_NAMESPACE_BEGIN
 
-#define INSTANCE_TYPE_TRIANGLES 0
-#define INSTANCE_TYPE_SPHERE 1
-#define INSTANCE_TYPE_VOLUME 2
-
 #define BVH_FLAG_NONE 0
 #define BVH_FLAG_TRIANGLES BIT(0)
 #define BVH_FLAG_SPHERES BIT(1)
 #define BVH_FLAG_VOLUME BIT(2)
 #define BVH_FLAG_EMITTER BIT(3)
 
+#define INSTANCE_TYPE_MESH 0
+#define INSTANCE_TYPE_SPHERE 1
+#define INSTANCE_TYPE_VOLUME 2
+
 #define INVALID_INSTANCE 0xFFFF
 #define INVALID_PRIMITIVE 0xFFFF
 
+#define gVertexBufferCount 1024
 #define gImageCount 1024
 #define gVolumeCount 8
 
+inline static TransformData makeMotionTransform(const TransformData worldToObject, const TransformData prevObjectToWorld) {
+	return tmul(prevObjectToWorld, worldToObject);
+}
+
 struct InstanceData {
-	uint4 packed;
+	uint mTypeMaterialAddress;
+	uint mData;
 
-	inline uint type() CONST_CPP              { return BF_GET(packed[0], 0, 4); }
-	inline uint materialAddress() CONST_CPP   { return BF_GET(packed[0], 4, 28); }
-	inline uint lightIndex() CONST_CPP        { return BF_GET(packed[1], 0, 12); }
-
-	inline static TransformData makeMotionTransform(const TransformData worldToObject, const TransformData prevObjectToWorld) {
-		return tmul(prevObjectToWorld, worldToObject);
-	}
+	inline uint type() CONST_CPP            { return BF_GET(mTypeMaterialAddress, 0, 4); }
+	inline uint materialAddress() CONST_CPP { return BF_GET(mTypeMaterialAddress, 4, 28); }
 
 #ifdef __cplusplus
 	inline InstanceData(const uint type, const uint materialAddress) {
-		packed = 0;
-		BF_SET(packed[0], type, 0, 4);
-		BF_SET(packed[0], materialAddress, 4, 28);
-		BF_SET(packed[1], -1, 0, 12);
+		mTypeMaterialAddress = 0;
+		BF_SET(mTypeMaterialAddress, type, 0, 4);
+		BF_SET(mTypeMaterialAddress, materialAddress, 4, 28);
 	}
 #endif
 };
 
-struct TrianglesInstanceData : InstanceData {
-	inline uint primitiveCount() CONST_CPP    { return BF_GET(packed[1], 12, 16); }
-	inline uint indexStride() CONST_CPP       { return BF_GET(packed[1], 28, 4); }
-	inline uint firstVertex() CONST_CPP       { return packed[2]; }
-	inline uint indicesByteOffset() CONST_CPP { return packed[3]; }
+struct MeshInstanceData : InstanceData {
+	inline uint vertexInfoIndex() CONST_CPP { return BF_GET(mData,  0, 16); }
+	inline uint primitiveCount() CONST_CPP  { return BF_GET(mData, 16, 16); }
 
 #ifdef __cplusplus
-	inline TrianglesInstanceData(const uint materialAddress, const uint primCount, const uint firstVertex, const uint indexByteOffset, const uint indexStride)
-		: InstanceData(INSTANCE_TYPE_TRIANGLES, materialAddress) {
-		BF_SET(packed[1], primCount, 12, 16);
-		BF_SET(packed[1], indexStride, 28, 4);
-		packed[2] = firstVertex;
-		packed[3] = indexByteOffset;
+	inline MeshInstanceData(const uint materialAddress, const uint vertexInfoIndex, const uint primitiveCount)
+		: InstanceData(INSTANCE_TYPE_MESH, materialAddress) {
+		mData = 0;
+		BF_SET(mData, vertexInfoIndex,  0, 16);
+		BF_SET(mData, primitiveCount , 16, 16);
 	}
 #endif
 };
 
 struct SphereInstanceData : InstanceData {
-	inline float radius() CONST_CPP { return asfloat(packed[2]); }
+	inline float radius() CONST_CPP { return asfloat(mData); }
 
 #ifdef __cplusplus
 	inline SphereInstanceData(const uint materialAddress, const float radius)
 		: InstanceData(INSTANCE_TYPE_SPHERE, materialAddress) {
-		packed[2] = asuint(radius);
+		mData = asuint(radius);
 	}
 #endif
 };
 
 struct VolumeInstanceData : InstanceData {
-	inline uint volumeIndex() CONST_CPP { return packed[2]; }
+	inline uint volumeIndex() CONST_CPP { return mData; }
 
 #ifdef __cplusplus
 	inline VolumeInstanceData(const uint materialAddress, const uint volumeIndex)
 		: InstanceData(INSTANCE_TYPE_VOLUME, materialAddress) {
-		packed[2] = volumeIndex;
+		mData = volumeIndex;
+	}
+#endif
+};
+
+struct MeshVertexInfo {
+	uint2 mPackedBufferIndices;
+	uint mPackedStrides;
+	uint pad;
+	uint4 mPackedOffsets;
+
+	inline uint indexBuffer()    CONST_CPP { return BF_GET(mPackedBufferIndices[0],  0, 16); }
+	inline uint positionBuffer() CONST_CPP { return BF_GET(mPackedBufferIndices[0], 16, 16); }
+	inline uint normalBuffer()   CONST_CPP { return BF_GET(mPackedBufferIndices[1],  0, 16); }
+	inline uint texcoordBuffer() CONST_CPP { return BF_GET(mPackedBufferIndices[1], 16, 16); }
+
+	inline uint indexOffset()    CONST_CPP { return mPackedOffsets[0]; };
+	inline uint positionOffset() CONST_CPP { return mPackedOffsets[1]; };
+	inline uint normalOffset()   CONST_CPP { return mPackedOffsets[2]; };
+	inline uint texcoordOffset() CONST_CPP { return mPackedOffsets[3]; };
+
+	inline uint indexStride()    CONST_CPP { return BF_GET(mPackedStrides,  0, 8); }
+	inline uint positionStride() CONST_CPP { return BF_GET(mPackedStrides,  8, 8); }
+	inline uint normalStride()   CONST_CPP { return BF_GET(mPackedStrides, 16, 8); }
+	inline uint texcoordStride() CONST_CPP { return BF_GET(mPackedStrides, 24, 8); }
+
+#ifdef __cplusplus
+	inline MeshVertexInfo(
+		const uint _indexBuffer   , const uint _indexOffset   , const uint _indexStride,
+		const uint _positionBuffer, const uint _positionOffset, const uint _positionStride,
+		const uint _normalBuffer  , const uint _normalOffset  , const uint _normalStride,
+		const uint _texcoordBuffer, const uint _texcoordOffset, const uint _texcoordStride) {
+		BF_SET(mPackedBufferIndices[0], _indexBuffer   ,  0, 16);
+		BF_SET(mPackedBufferIndices[0], _positionBuffer, 16, 16);
+		BF_SET(mPackedBufferIndices[1], _normalBuffer  ,  0, 16);
+		BF_SET(mPackedBufferIndices[1], _texcoordBuffer, 16, 16);
+
+		BF_SET(mPackedStrides, _indexStride   ,  0, 8);
+		BF_SET(mPackedStrides, _positionStride,  8, 8);
+		BF_SET(mPackedStrides, _normalStride  , 16, 8);
+		BF_SET(mPackedStrides, _texcoordStride, 24, 8);
+
+		mPackedOffsets[0] = _indexOffset;
+		mPackedOffsets[1] = _positionOffset;
+		mPackedOffsets[2] = _normalOffset;
+		mPackedOffsets[3] = _texcoordOffset;
 	}
 #endif
 };
@@ -131,65 +173,6 @@ struct DepthData {
 	float mDepth;
 	float mPrevDepth;
 	float2 mDepthDerivative;
-};
-
-struct PackedVertexData {
-	float3 mPosition;
-	float mTexcoord0;
-	float3 mNormal;
-	float mTexcoord1;
-
-	inline float2 uv() { return float2(mTexcoord0, mTexcoord1); }
-
-	SLANG_CTOR(PackedVertexData) (const float3 p, const float3 n, const float2 uv) {
-		mPosition = p;
-		mTexcoord0 = uv[0];
-		mNormal = n;
-		mTexcoord1= uv[1];
-	}
-};
-
-
-#define SHADING_FLAG_FLIP_BITANGENT BIT(0)
-
-// 48 bytes
-struct ShadingData {
-	float3 mPosition;
-	uint mFlagsMaterialAddress;
-
-	uint mPackedGeometryNormal;
-	uint mPackedShadingNormal;
-	uint mPackedTangent;
-	float mShapeArea;
-
-	float2 mTexcoord;
-	float mTexcoordScreenSize;
-	float mMeanCurvature;
-
-#ifdef __HLSL__
-	property bool isSurface    { get { return mShapeArea > 0; } }
-	property bool isBackground { get { return mShapeArea < 0; } }
-	property bool isMedium     { get { return mShapeArea == 0; } }
-	property uint materialAddress { get { return BF_GET(mFlagsMaterialAddress, 4, 28); } }
-
-	property bool isBitangentFlipped { get { return (bool)(mFlagsMaterialAddress & SHADING_FLAG_FLIP_BITANGENT); } }
-	property int bitangentDirection  { get { return isBitangentFlipped ? -1 : 1; } }
-
-	property float3 geometryNormal   { get { return unpackNormal(mPackedGeometryNormal); } }
-	property float3 shadingNormal    { get { return unpackNormal(mPackedShadingNormal); } }
-	property float3 tangent          { get { return unpackNormal(mPackedTangent); } }
-
-	float3 toWorld(const float3 v) {
-		const float3 n = shadingNormal;
-		const float3 t = tangent;
-		return v.x*t + v.y*cross(n, t)*bitangentDirection + v.z*n;
-	}
-	float3 toLocal(const float3 v) {
-		const float3 n = shadingNormal;
-		const float3 t = tangent;
-		return float3(dot(v, t), dot(v, cross(n, t)*bitangentDirection), dot(v, n));
-	}
-#endif
 };
 
 STM_NAMESPACE_END

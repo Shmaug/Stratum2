@@ -1,5 +1,5 @@
-#ifndef DISNEYMATERIAL_H
-#define DISNEYMATERIAL_H
+#ifndef DISNEYDATA_H
+#define DISNEYDATA_H
 
 #ifdef __cplusplus
 #include <Utils/hlslmath.hpp>
@@ -9,10 +9,8 @@ STM_NAMESPACE_BEGIN
 
 
 struct DisneyMaterialData {
-	static const uint gDataSize = 3;
-	static const uint gAlphaMaterialOffset = gDataSize*16;
-
-	float4 data[gDataSize];
+	static const uint gDataCount = 3;
+	float4 data[gDataCount];
 
 #ifdef __cplusplus
 	float3 baseColor()           { return data[0].head<3>(); }

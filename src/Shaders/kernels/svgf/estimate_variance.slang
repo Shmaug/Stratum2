@@ -13,28 +13,27 @@ ParameterBlock<DenoiserParameters> gParams;
 #define gDebugMode 0
 #endif
 
-SLANG_SHADER("compute")
+[shader("compute")]
 [numthreads(8,8,1)]
 void main(uint3 index : SV_DispatchThreadId, uint3 group_index : SV_GroupThreadID) {
 	const uint view_index = gParams.getViewIndex(index.xy);
 	if (view_index == -1) return;
 
 	uint2 extent;
-	gParams.gFilterImages[0].GetDimensions(extent.x, extent.y);
-	const uint index_1d = index.y*extent.x + index.x;
+	gParams.mFilterImages[0].GetDimensions(extent.x, extent.y);
 
-	float4 c = gParams.gAccumColor[index.xy];
-	float2 m = gParams.gAccumMoments[index.xy];
+	float4 c = gParams.mAccumColor[index.xy];
+	float2 m = gParams.mAccumMoments[index.xy];
 
-	const VisibilityData vis = gParams.gVisibility[index_1d];
+	const VisibilityData vis = reinterpret<VisibilityData>(gParams.mVisibility[index.xy]);
 
 	const float histlen = c.a;
-	if (vis.instance_index() == INVALID_INSTANCE || histlen >= gPushConstants.gHistoryLimit) {
-		gParams.gFilterImages[0][index.xy] = float4(c.rgb, abs(m.y - pow2(m.x)));
+	if (vis.instanceIndex() == INVALID_INSTANCE || histlen >= gPushConstants.gHistoryLimit) {
+		gParams.mFilterImages[0][index.xy] = float4(c.rgb, abs(m.y - pow2(m.x)));
 		return;
 	}
 
-	const DepthData depth = gParams.gDepth[index_1d];
+	const DepthData depth = reinterpret<DepthData>(gParams.mDepth[index.xy]);
 
 	float sum_w = 1;
 
@@ -44,18 +43,18 @@ void main(uint3 index : SV_DispatchThreadId, uint3 group_index : SV_GroupThreadI
 			if (xx == 0 && yy == 0) continue;
 
 			const int2 p = int2(index.xy) + int2(xx, yy);
-			if (!gParams.gViews[view_index].test_inside(p)) continue;
+			if (!gParams.mViews[view_index].isInside(p)) continue;
 
-			const VisibilityData vis_p = gParams.gVisibility[p.y*extent.x + p.x];
-			if (gParams.gInstanceIndexMap[vis.instance_index()] != vis_p.instance_index()) continue;
+            const VisibilityData vis_p = reinterpret<VisibilityData>(gParams.mVisibility[p]);
+            if (gParams.mInstanceIndexMap[vis.instanceIndex()] != vis_p.instanceIndex()) continue;
 
-			const float w_z = abs(gParams.gDepth[p.y*extent.x + p.x].z - depth.z) / (length(depth.dz_dxy * float2(xx, yy)) + 1e-2);
+			const float w_z = abs(reinterpret<DepthData>(gParams.mDepth[p]).mDepth - depth.mDepth) / (length(depth.mDepthDerivative * float2(xx, yy)) + 1e-2);
 			const float w_n = pow(saturate(dot(vis_p.normal(), vis.normal())), 128);
 			const float w = exp(-w_z) * w_n;
 			if (isnan(w) || isinf(w)) continue;
 
-			m += gParams.gAccumMoments[p] * w;
-			c.rgb += gParams.gAccumColor[p].rgb * w;
+			m += gParams.mAccumMoments[p] * w;
+			c.rgb += gParams.mAccumColor[p].rgb * w;
 			sum_w += w;
 		}
 
@@ -66,5 +65,5 @@ void main(uint3 index : SV_DispatchThreadId, uint3 group_index : SV_GroupThreadI
 	float v = abs(m.y - pow2(m.x));
 	if (gPushConstants.gVarianceBoostLength > 0)
 		v *= max(1, gPushConstants.gVarianceBoostLength/(1+c.a));
-	gParams.gFilterImages[0][index.xy] = float4(c.rgb, v);
+	gParams.mFilterImages[0][index.xy] = float4(c.rgb, v);
 }

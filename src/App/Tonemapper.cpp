@@ -20,16 +20,14 @@ Tonemapper::Tonemapper(Node& node) : mNode(node) {
 
 void Tonemapper::createPipelines(Device& device) {
 	if (mPushConstants.empty()) {
-		mPushConstants["gExposure"] = 0.f;
-		mPushConstants["gExposureAlpha"] = 0.1f;
+		mPushConstants["mExposure"] = 0.f;
 
 		if (auto arg = device.mInstance.findArgument("exposure"); arg) mPushConstants["mExposure"] = atof(arg->c_str());
 	}
 
 	const filesystem::path shaderPath = *device.mInstance.findArgument("shaderKernelPath");
-
-	mPipeline          = ComputePipelineCache(shaderPath / "tonemap.hlsl");
-	mMaxReducePipeline = ComputePipelineCache(shaderPath / "tonemap.hlsl", "maxReduce");
+	mPipeline          = ComputePipelineCache(shaderPath / "tonemap.slang");
+	mMaxReducePipeline = ComputePipelineCache(shaderPath / "tonemap.slang", "maxReduce");
 }
 
 void Tonemapper::drawGui() {
@@ -48,7 +46,7 @@ void Tonemapper::drawGui() {
 	ImGui::Checkbox("Gamma correct", &mGammaCorrect);
 }
 
-void Tonemapper::render(CommandBuffer& commandBuffer, const Image::View& image, const Image::View& albedo) {
+void Tonemapper::render(CommandBuffer& commandBuffer, const Image::View& input, const Image::View& output, const Image::View& albedo) {
 	ProfilerScope ps("Tonemapper::render", &commandBuffer);
 
 	Buffer::View maxBuf = make_shared<Buffer>(commandBuffer.mDevice, "Tonemap max", sizeof(uint4), vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst);
@@ -58,7 +56,7 @@ void Tonemapper::render(CommandBuffer& commandBuffer, const Image::View& image, 
 	if (albedo)        defines.emplace("gModulateAlbedo", "true");
 	if (mGammaCorrect) defines.emplace("gGammaCorrection", "true");
 
-	const vk::Extent3D extent = image.extent();
+	const vk::Extent3D extent = input.extent();
 
 	// get maximum value in image
 	{
@@ -68,8 +66,8 @@ void Tonemapper::render(CommandBuffer& commandBuffer, const Image::View& image, 
 		maxBuf.barrier(commandBuffer, vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 
 		mMaxReducePipeline.get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, extent, {
-				{ {"gImage", 0} , ImageDescriptor{ image, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderRead, {}} },
-				{ {"gAlbedo", 0}, ImageDescriptor{ albedo, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderRead, {}} },
+				{ {"gInput", 0} , ImageDescriptor{ input, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}} },
+				{ {"gAlbedo", 0}, ImageDescriptor{ albedo.image()?albedo:input, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}} },
 				{ {"gMax", 0}, maxBuf }
 			}, {}, {});
 	}
@@ -80,8 +78,9 @@ void Tonemapper::render(CommandBuffer& commandBuffer, const Image::View& image, 
 	{
 		ProfilerScope ps("Tonemap", &commandBuffer);
 		mPipeline.get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, extent, {
-			{ { "gImage", 0 }, ImageDescriptor{ image, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} } },
-			{ { "gAlbedo", 0 }, ImageDescriptor{ albedo, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderRead, {} } },
+			{ { "gInput", 0 }, ImageDescriptor{ input, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} } },
+			{ { "gOutput", 0 }, ImageDescriptor{ output, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} } },
+			{ { "gAlbedo", 0 }, ImageDescriptor{ albedo.image()?albedo:input, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} } },
 			{ { "gMax", 0 }, maxBuf },
 			}, {}, mPushConstants);
 	}

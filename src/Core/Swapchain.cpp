@@ -39,9 +39,12 @@ bool Swapchain::create() {
 	if (mExtent.width == 0 || mExtent.height == 0 || mExtent.width > mDevice.limits().maxImageDimension2D || mExtent.height > mDevice.limits().maxImageDimension2D)
 		return false;
 
+	auto oldSwapchain = mSwapchain;
+	mSwapchain.reset();
+
 	vk::SwapchainCreateInfoKHR info = {};
 	info.surface = *mWindow.surface();
-	if (mSwapchain) info.oldSwapchain = **mSwapchain;
+	if (oldSwapchain) info.oldSwapchain = **oldSwapchain;
 	info.minImageCount = mMinImageCount;
 	info.imageFormat = mSurfaceFormat.format;
 	info.imageColorSpace = mSurfaceFormat.colorSpace;
@@ -55,6 +58,8 @@ bool Swapchain::create() {
 	info.clipped = VK_FALSE;
 	mSwapchain = make_shared<vk::raii::SwapchainKHR>(*mDevice, info);
 	mDevice.setDebugName(**mSwapchain, resourceName());
+
+	oldSwapchain.reset();
 
 	const vector<VkImage> images = mSwapchain->getImages();
 	mImages.resize(images.size());
@@ -145,8 +150,7 @@ void Swapchain::drawGui() {
 		ImGui::EndCombo();
 	}
 
-	if (ImGui::InputScalar("Swapchain image timeout (ns)", ImGuiDataType_U64, &mAcquireImageTimeout))
-		mDirty = true;
+	ImGui::InputScalar("Swapchain image timeout (ns)", ImGuiDataType_U64, &mAcquireImageTimeout);
 }
 
 }

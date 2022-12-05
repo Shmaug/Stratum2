@@ -35,6 +35,7 @@ Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily
 	// Setup Dear ImGui style
 	ImGui::StyleColorsDark();
 	ImGui::GetStyle().IndentSpacing *= 0.75f;
+	ImGui::GetIO().ConfigWindowsMoveFromTitleBarOnly = true;
 
 	ImGui_ImplGlfw_InitForVulkan(swapchain.mWindow.window(), true);
 
@@ -47,8 +48,8 @@ Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily
 	init_info.PipelineCache  = *swapchain.mDevice.pipelineCache();
 	init_info.DescriptorPool = *swapchain.mDevice.descriptorPool();
 	init_info.Subpass = 0;
-	init_info.MinImageCount = swapchain.minImageCount() + 1; // HACK: +1 to fix ImGui destroying in-flight resources
-	init_info.ImageCount    = swapchain.imageCount() + 1;
+	init_info.MinImageCount = max(swapchain.minImageCount(), 2u);
+	init_info.ImageCount    = max(swapchain.imageCount(), 2u);
 	init_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 	init_info.Allocator = nullptr;
 	//init_info.CheckVkResultFn = check_vk_result;
@@ -66,7 +67,7 @@ Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily
 		}
 	}
 
-	shared_ptr<CommandBuffer> commandBufferPtr = swapchain.mDevice.getCommandBuffer(0);
+	shared_ptr<CommandBuffer> commandBufferPtr = make_shared<CommandBuffer>(swapchain.mDevice, "ImGui CreateFontsTexture", swapchain.mDevice.findQueueFamily());
 	CommandBuffer& commandBuffer = *commandBufferPtr;
 	commandBuffer->begin(vk::CommandBufferBeginInfo());
 

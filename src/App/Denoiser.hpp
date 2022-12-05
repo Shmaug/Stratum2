@@ -18,14 +18,14 @@ public:
 
 	void drawGui();
 
-	void denoise(
+	Image::View denoise(
 		CommandBuffer& commandBuffer,
 		const Image::View& image,
 		const Image::View& albedo,
 		const Image::View& prevUVs,
-		const Buffer::View<ViewData>& views,
-		const Buffer::View<VisibilityData>& visibility,
-		const Buffer::View<DepthData>& depths);
+		const Image::View& visibility,
+		const Image::View& depths,
+		const Buffer::View<ViewData>& views);
 
 	inline void resetAccumulation() {
 		mResetAccumulation = true;
@@ -61,11 +61,11 @@ private:
 		Buffer::View<ViewData> mViews;
 		Image::View mRadiance;
 		Image::View mAlbedo;
-		Buffer::View<VisibilityData> mVisibility;
-		Buffer::View<DepthData> mDepth;
+		Image::View mVisibility;
+		Image::View mDepth;
+
 		Image::View mAccumColor;
 		Image::View mAccumMoments;
-		Image::View mDebugImage;
 		array<Image::View, 2> mTemp;
 		shared_ptr<DescriptorSets> mDescriptors;
 	};

@@ -46,15 +46,15 @@ struct DisneyMaterial : BSDF {
 	DisneyMaterialData bsdf;
 
 	SLANG_MUTATING
-	void load(const SceneParameters scene, uint address, const float2 uv, const float uvScreenSize, inout uint packedShadingNormal, inout uint packedTangent, const bool flipBitangent) {
-		for (int i = 0; i < DisneyMaterialData::gDataSize; i++)
+	void load(uint address, const float2 uv, const float uvScreenSize, inout uint packedShadingNormal, inout uint packedTangent, const bool flipBitangent) {
+		for (int i = 0; i < DisneyMaterialData::gDataCount; i++)
 			bsdf.data[i] = ImageValue4(address).eval(uv, uvScreenSize);
 
 		address += 4; // skip alpha mask
 
 		// normal map
 		if (gUseNormalMaps) {
-			const uint2 p = scene.mMaterialData.Load<uint2>(address);
+			const uint2 p = gScene.mMaterialData.Load<uint2>(address);
 			ImageValue3 bump_img = { 1, p.x };
 			if (bump_img.hasImage() && asfloat(p.y) > 0) {
 				float3 bump = bump_img.eval(uv, uvScreenSize)*2-1;
@@ -73,16 +73,16 @@ struct DisneyMaterial : BSDF {
 	}
 
 	SLANG_MUTATING
-	void load(const SceneParameters scene, inout ShadingData sd) {
-		load(scene, sd.materialAddress, sd.mTexcoord, sd.mTexcoordScreenSize, sd.mPackedShadingNormal, sd.mPackedTangent, sd.isBitangentFlipped());
+	void load(inout ShadingData sd) {
+		load(sd.materialAddress, sd.mTexcoord, sd.mTexcoordScreenSize, sd.mPackedShadingNormal, sd.mPackedTangent, sd.isBitangentFlipped());
 	}
 
-	__init(const SceneParameters scene, uint address, const float2 uv, const float uvScreenSize, inout uint packedShadingNormal, inout uint packedTangent, const bool flipBitangent) {
-		load(scene, address, uv, uvScreenSize, packedShadingNormal, packedTangent, flipBitangent);
+	__init(uint address, const float2 uv, const float uvScreenSize, inout uint packedShadingNormal, inout uint packedTangent, const bool flipBitangent) {
+		load(address, uv, uvScreenSize, packedShadingNormal, packedTangent, flipBitangent);
 
 	}
-	__init(const SceneParameters scene, inout ShadingData sd) {
-		load(scene, sd);
+	__init(inout ShadingData sd) {
+		load(sd);
 	}
 
 

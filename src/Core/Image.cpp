@@ -68,7 +68,7 @@ Image::PixelData Image::loadFile(Device& device, const filesystem::path& filenam
 			FreeEXRErrorMessage(err);
 			throw runtime_error(std::string("Failure when loading image: ") + filename.string());
 		}
-		auto buf = make_shared<Buffer>(device, filename.stem().string(), width*height*sizeof(float)*4, vk::BufferUsageFlagBits::eTransferSrc|vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+		auto buf = make_shared<Buffer>(device, filename.stem().string() + "/Staging", width*height*sizeof(float)*4, vk::BufferUsageFlagBits::eTransferSrc|vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
 		memcpy(buf->data(), data, buf->size());
 		free(data);
 		return Image::PixelData{buf, vk::Format::eR32G32B32A32Sfloat, vk::Extent3D(width,height,1)};
@@ -83,7 +83,7 @@ Image::PixelData Image::loadFile(Device& device, const filesystem::path& filenam
 
 		const DDSFile::ImageData* img = dds.GetImageData(0, 0);
 
-		auto buf = make_shared<Buffer>(device, filename.stem().string(), img->m_memSlicePitch, vk::BufferUsageFlagBits::eTransferSrc|vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+		auto buf = make_shared<Buffer>(device, filename.stem().string() + "/Staging", img->m_memSlicePitch, vk::BufferUsageFlagBits::eTransferSrc|vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
 		memcpy(buf->data(), img->m_mem, buf->size());
 		return Image::PixelData{buf, dxgiToVulkan(dds.GetFormat(), false), vk::Extent3D(dds.GetWidth(), dds.GetHeight(), dds.GetDepth())};
 	} else {

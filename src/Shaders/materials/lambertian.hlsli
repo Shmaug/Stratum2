@@ -7,16 +7,14 @@
 struct LambertianMaterial : BSDF {
 	DisneyMaterialData bsdf;
 
-	SLANG_MUTATING
-	void load(const SceneParameters scene, uint address, const float2 uv, const float uvScreenSize, inout uint packedShadingNormal, inout uint packedTangent, const bool flipBitangent) {
-		for (int i = 0; i < DisneyMaterialData::gDataSize; i++)
-			bsdf.data[i] = ImageValue4(address).eval(uv, uvScreenSize);
-
-		address += 4; // skip alpha mask
+    SLANG_MUTATING
+    void load(const uint address, const float2 uv, const float uvScreenSize, inout uint packedShadingNormal, inout uint packedTangent, const bool flipBitangent) {
+        for (int i = 0; i < DisneyMaterialData::gDataCount; i++)
+            bsdf.data[i] = ImageValue4(gScene.mMaterialData, address + i*ImageValue4::PackedSize).eval(uv, uvScreenSize);
 
 		// normal map
-		if (gUseNormalMaps) {
-			const uint2 p = scene.mMaterialData.Load<uint2>(address);
+        if (CHECK_FEATURE(NormalMaps)) {
+            const uint2 p = gScene.mMaterialData.Load<uint2>(address + (ImageValue4::PackedSize * DisneyMaterialData::gDataCount) + 4);
 			ImageValue3 bump_img = { 1, p.x };
 			if (bump_img.hasImage() && asfloat(p.y) > 0) {
 				float3 bump = bump_img.eval(uv, uvScreenSize)*2-1;
@@ -29,22 +27,22 @@ struct LambertianMaterial : BSDF {
 				t = normalize(t - n*dot(n, t));
 
 				packedShadingNormal = packNormal(n);
-				packedTangent        = packNormal(t);
+				packedTangent       = packNormal(t);
 			}
 		}
 	}
 
 	SLANG_MUTATING
-	void load(const SceneParameters scene, inout ShadingData sd) {
-		load(scene, sd.materialAddress, sd.mTexcoord, sd.mTexcoordScreenSize, sd.mPackedShadingNormal, sd.mPackedTangent, sd.isBitangentFlipped);
+	void load(inout ShadingData sd) {
+		load(sd.materialAddress, sd.mTexcoord, sd.mTexcoordScreenSize, sd.mPackedShadingNormal, sd.mPackedTangent, sd.isBitangentFlipped);
 	}
 
-	__init(const SceneParameters scene, uint address, const float2 uv, const float uvScreenSize, inout uint packedShadingNormal, inout uint packedTangent, const bool flipBitangent) {
-		load(scene, address, uv, uvScreenSize, packedShadingNormal, packedTangent, flipBitangent);
+	__init(const uint address, const float2 uv, const float uvScreenSize, inout uint packedShadingNormal, inout uint packedTangent, const bool flipBitangent) {
+		load(address, uv, uvScreenSize, packedShadingNormal, packedTangent, flipBitangent);
 
 	}
-	__init(const SceneParameters scene, inout ShadingData sd) {
-		load(scene, sd);
+	__init(inout ShadingData sd) {
+		load(sd);
 	}
 
 
@@ -53,7 +51,7 @@ struct LambertianMaterial : BSDF {
 	bool canEvaluate() { return bsdf.emission() <= 0 && any(bsdf.baseColor() > 0); }
 	bool isSingular() { return false; }
 
-	MaterialEvalRecord evaluate(const float3 dirIn, const float3 dirOut, const bool adjoint) {
+	MaterialEvalRecord evaluate<let Adjoint : bool>(const float3 dirIn, const float3 dirOut) {
 		MaterialEvalRecord r;
 		if (bsdf.emission() > 0 || dirIn.z * dirOut.z < 0) {
 			r.mReflectance = 0;
@@ -67,7 +65,7 @@ struct LambertianMaterial : BSDF {
 		return r;
 	}
 
-	MaterialSampleRecord sample(const float3 rnd, const float3 dirIn, const bool adjoint) {
+	MaterialSampleRecord sample<let Adjoint : bool>(const float3 rnd, const float3 dirIn) {
 		MaterialSampleRecord r;
 		if (bsdf.emission() > 0) {
 			r.mFwdPdfW = r.mRevPdfW = 0;

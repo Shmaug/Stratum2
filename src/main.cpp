@@ -12,8 +12,10 @@
 
 #include <GLFW/glfw3.h>
 
-#include <App/TinyPT.hpp>
-#define RendererType TinyPT
+#include <App/PathTracer.hpp>
+#include <App/Denoiser.hpp>
+#include <App/Tonemapper.hpp>
+#define RendererType PathTracer
 
 namespace stm2 {
 
@@ -26,16 +28,18 @@ struct App {
 	uint32_t mPresentQueueFamily;
 	vk::raii::Queue mPresentQueue;
 
+	vector<shared_ptr<CommandBuffer>> mCommandBuffers;
+
 	shared_ptr<Node> mSwapchainNode;
 	shared_ptr<Swapchain> mSwapchain;
 	shared_ptr<Gui> mGui;
 	shared_ptr<Inspector> mInspector;
 	shared_ptr<Scene> mScene;
 
-	shared_ptr<RendererType> mRenderer;
-
 	shared_ptr<FlyCamera> mFlyCamera;
 	shared_ptr<Camera> mCamera;
+
+	shared_ptr<RendererType> mRenderer;
 
 	chrono::high_resolution_clock::time_point mLastUpdate;
 	int mProfilerHistoryCount = 3;
@@ -45,7 +49,7 @@ struct App {
 		mInstance = mRootNode->makeComponent<Instance>(args);
 
 		const shared_ptr<Node> deviceNode = mRootNode->addChild("Device");
-		mWindow = deviceNode->makeComponent<Window>(*mInstance, "stratum2", vk::Extent2D{ 1600, 900 });
+		mWindow = deviceNode->makeComponent<Window>(*mInstance, "Stratum2", vk::Extent2D{ 1600, 900 });
 
 		vk::raii::PhysicalDevice physicalDevice = nullptr;
 		tie(physicalDevice, mPresentQueueFamily) = mWindow->findPhysicalDevice();
@@ -54,14 +58,24 @@ struct App {
 		mPresentQueue = vk::raii::Queue(**mDevice, mPresentQueueFamily, 0);
 
 		mSwapchainNode = deviceNode->addChild("Swapchain");
-		mSwapchain     = mSwapchainNode->makeComponent<Swapchain>(*mDevice, "stratum2/Swapchain", *mWindow, 2, vk::ImageUsageFlagBits::eTransferDst|vk::ImageUsageFlagBits::eColorAttachment);
+		mSwapchain     = mSwapchainNode->makeComponent<Swapchain>(*mDevice, "Swapchain", *mWindow, 2);
+
+		mCommandBuffers.resize(mSwapchain->imageCount());
+		for (auto& cb : mCommandBuffers) {
+			cb = make_shared<CommandBuffer>(*mDevice, "CommandBuffer", mPresentQueueFamily);
+			mDevice->incrementFrameIndex();
+		}
+		mDevice->updateLastFrameDone(0);
 
 		mGui = make_shared<Gui>(*mSwapchain, mPresentQueue, mPresentQueueFamily, vk::ImageLayout::ePresentSrcKHR, false);
 		mInspector = mSwapchainNode->makeComponent<Inspector>(*mSwapchainNode);
 
 		auto sceneNode = deviceNode->addChild("Scene");
+		mInspector->select(sceneNode);
 		mScene = sceneNode->makeComponent<Scene>(*sceneNode);
 		mRenderer = sceneNode->makeComponent<RendererType>(*sceneNode);
+		sceneNode->makeComponent<Denoiser>(*sceneNode);
+		sceneNode->makeComponent<Tonemapper>(*sceneNode);
 
 		auto cameraNode = sceneNode->addChild("Camera");
 		cameraNode->makeComponent<TransformData>( float3(0,1.5f,0), quatf::identity(), float3::Ones() );
@@ -79,7 +93,7 @@ struct App {
 
 		// profiler timings
 
-		if (ImGui::Begin("vkpt")) {
+		if (ImGui::Begin("Profiler")) {
 			Profiler::frameTimesGui();
 
 			ImGui::SliderInt("Count", &mProfilerHistoryCount, 1, 32);
@@ -87,8 +101,6 @@ struct App {
 			if (ImGui::Button(Profiler::hasHistory() ? "Hide timeline" : "Show timeline"))
 				Profiler::resetHistory(Profiler::hasHistory() ? 0 : mProfilerHistoryCount);
 			ImGui::PopID();
-
-			ImGui::Text("%u Back buffers", mSwapchain->imageCount());
 		}
 		ImGui::End();
 
@@ -131,10 +143,20 @@ struct App {
 	inline void doFrame() {
 		ProfilerScope ps("App::doFrame");
 
+		mDevice->incrementFrameIndex();
+
+		shared_ptr<CommandBuffer> commandBufferPtr = mCommandBuffers[mDevice->frameIndex() % mSwapchain->imageCount()];
+		CommandBuffer& commandBuffer = *commandBufferPtr;
+
+		if (commandBuffer.fence()) {
+			if ((*mDevice)->waitForFences(**commandBuffer.fence(), true, ~0ull) != vk::Result::eSuccess)
+				throw runtime_error("Error: waitForFences failed");
+		}
+		mDevice->updateLastFrameDone(mDevice->frameIndex() - mCommandBuffers.size());
+
 		// Record commands
 
-		shared_ptr<CommandBuffer> commandBufferPtr = mDevice->getCommandBuffer(mPresentQueueFamily);
-		CommandBuffer& commandBuffer = *commandBufferPtr;
+		commandBuffer.reset();
 		commandBuffer->begin(vk::CommandBufferBeginInfo());
 
 		update(commandBuffer);
@@ -163,18 +185,20 @@ struct App {
 
 			Profiler::beginFrame();
 
-			mDevice->updateFrame();
-
 			// recreate swapchain if needed
 
 			if (mSwapchain->isDirty()) {
+				(*mDevice)->waitIdle();
 				if (!mSwapchain->create())
 					continue;
 
 				// recreate swapchain-dependent resources
-				(*mDevice)->waitIdle();
+				mCommandBuffers.resize(mSwapchain->imageCount());
+				for (auto& cb : mCommandBuffers)
+					cb = make_shared<CommandBuffer>(*mDevice, "CommandBuffer", mPresentQueueFamily);
+
 				mGui.reset();
-				mGui = make_shared<Gui>(*mSwapchain, mPresentQueue, mPresentQueueFamily, vk::ImageLayout::ePresentSrcKHR, true);
+				mGui = make_shared<Gui>(*mSwapchain, mPresentQueue, mPresentQueueFamily, vk::ImageLayout::ePresentSrcKHR, false);
 			}
 
 			// do frame

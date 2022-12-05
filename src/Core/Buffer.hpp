@@ -8,9 +8,9 @@ namespace stm2 {
 
 class Buffer : public Device::Resource {
 public:
-	Buffer(Device& device, const string& name, const vk::BufferCreateInfo& createInfo, const vk::MemoryPropertyFlags memoryFlags = vk::MemoryPropertyFlagBits::eDeviceLocal, const bool randomHostAccess = false);
-	inline Buffer(Device& device, const string& name, const vk::DeviceSize& size, const vk::BufferUsageFlags usage, const vk::MemoryPropertyFlags memoryFlags = vk::MemoryPropertyFlagBits::eDeviceLocal, const bool randomHostAccess = false) :
-		Buffer(device, name, vk::BufferCreateInfo({}, size, usage), memoryFlags, randomHostAccess) {}
+	Buffer(Device& device, const string& name, const vk::BufferCreateInfo& createInfo, const vk::MemoryPropertyFlags memoryFlags = vk::MemoryPropertyFlagBits::eDeviceLocal, const bool hostRandomAccess = false);
+	inline Buffer(Device& device, const string& name, const vk::DeviceSize& size, const vk::BufferUsageFlags usage, const vk::MemoryPropertyFlags memoryFlags = vk::MemoryPropertyFlagBits::eDeviceLocal, const bool hostRandomAccess = false) :
+		Buffer(device, name, vk::BufferCreateInfo({}, size, usage), memoryFlags, hostRandomAccess) {}
 	~Buffer();
 
 	DECLARE_DEREFERENCE_OPERATORS(vk::Buffer, mBuffer)
@@ -33,11 +33,13 @@ public:
 		const uint32_t srcQueue = VK_QUEUE_FAMILY_IGNORED, const uint32_t dstQueue = VK_QUEUE_FAMILY_IGNORED,
 		const vk::DeviceSize offset = 0, const vk::DeviceSize size = VK_WHOLE_SIZE) const;
 
-	// note: does NOT call commandBuffer.trackResource
+	// note: these fucntions do NOT call commandBuffer.trackResource on this buffer
+
 	void fill(CommandBuffer& commandBuffer, const uint32_t data, const vk::DeviceSize offset = 0, const vk::DeviceSize size = VK_WHOLE_SIZE) const;
 
 	void copyToImage(CommandBuffer& commandBuffer, const shared_ptr<Image>& dst, const vk::DeviceSize offset = 0) const;
 	void copyToImage(CommandBuffer& commandBuffer, const shared_ptr<Image>& dst, const vk::ArrayProxy<vk::BufferImageCopy>& copies) const;
+	void copyFromImage(CommandBuffer& commandBuffer, const shared_ptr<Image>& src, const vk::ArrayProxy<vk::BufferImageCopy>& copies) const;
 
 	template<typename T = byte>
 	class View {
@@ -92,12 +94,30 @@ public:
 			const uint32_t srcQueue = VK_QUEUE_FAMILY_IGNORED, const uint32_t dstQueue = VK_QUEUE_FAMILY_IGNORED) const {
 			mBuffer->barrier(commandBuffer, srcStage, dstStage, srcAccess, dstAccess, srcQueue, dstQueue, offset(), sizeBytes());
 		}
+
 		inline void fill(CommandBuffer& commandBuffer, const uint32_t value) const {
 			mBuffer->fill(commandBuffer, value, offset(), sizeBytes());
 			commandBuffer.trackResource(mBuffer);
 		}
+
+		inline void copyToImage(CommandBuffer& commandBuffer, const shared_ptr<Image>& dst, const vk::ArrayProxy<vk::BufferImageCopy>& copies) const {
+			mBuffer->copyToImage(commandBuffer, dst, copies);
+			commandBuffer.trackResource(mBuffer);
+		}
 		inline void copyToImage(CommandBuffer& commandBuffer, const shared_ptr<Image>& dst) const {
 			mBuffer->copyToImage(commandBuffer, dst, offset());
+			commandBuffer.trackResource(mBuffer);
+		}
+
+		inline void copyFromImage(CommandBuffer& commandBuffer, const shared_ptr<Image>& src, const vk::ArrayProxy<vk::BufferImageCopy>& copies) const {
+			mBuffer->copyFromImage(commandBuffer, src, copies);
+			commandBuffer.trackResource(mBuffer);
+		}
+		inline void copyFromImage(CommandBuffer& commandBuffer, const shared_ptr<Image>& src, const vk::ImageSubresourceLayers& subresource, const vk::Offset3D& imageOffset, const vk::Extent3D& imageExtent) const {
+			vk::BufferImageCopy copy(
+				offset(), 0, 0,
+				subresource, imageOffset, imageExtent);
+			mBuffer->copyFromImage(commandBuffer, src, copy);
 			commandBuffer.trackResource(mBuffer);
 		}
 
@@ -149,12 +169,12 @@ public:
 		}
 	};
 
+	static void copy(CommandBuffer& commandBuffer, const Buffer::View<byte>& src, const Buffer::View<byte>& dst);
+
 	static void barriers(CommandBuffer& commandBuffer, const vector<Buffer::View<byte>>& buffers,
 		const vk::PipelineStageFlags srcStage, const vk::PipelineStageFlags dstStage,
 		const vk::AccessFlags srcAccess, const vk::AccessFlags dstAccess,
 		const uint32_t srcQueue = VK_QUEUE_FAMILY_IGNORED, const uint32_t dstQueue = VK_QUEUE_FAMILY_IGNORED);
-
-	static void copy(CommandBuffer& commandBuffer, const Buffer::View<byte>& src, const Buffer::View<byte>& dst);
 
 private:
 	vk::Buffer mBuffer;

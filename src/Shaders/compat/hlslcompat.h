@@ -9,13 +9,11 @@
 #ifdef __SLANG__
 
 #define SLANG_MUTATING [mutating]
-#define SLANG_SHADER(type) [shader(type)]
 #define SLANG_CTOR(type) __init
 
 #else // __SLANG__
 
 #define SLANG_MUTATING
-#define SLANG_SHADER(type)
 #define SLANG_CTOR(type) inline type
 
 #endif

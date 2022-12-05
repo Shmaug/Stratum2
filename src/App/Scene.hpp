@@ -55,8 +55,9 @@ public:
 		unordered_map<const void* /* address of component */, pair<TransformData, uint32_t /* instance index */ >> mInstanceTransformMap;
 		vector<weak_ptr<Node>> mInstanceNodes;
 
-		Buffer::View<PackedVertexData> mVertices;
-		Buffer::View<byte> mIndices;
+		vector<shared_ptr<Buffer>> mVertexBuffers;
+		Buffer::View<MeshVertexInfo> mMeshVertexInfo;
+
 		Buffer::View<uint32_t> mMaterialData;
 		Buffer::View<InstanceData> mInstances;
 		Buffer::View<TransformData> mInstanceTransforms;
@@ -66,6 +67,8 @@ public:
 		Buffer::View<uint32_t> mInstanceIndexMap;
 
 		MaterialResources mMaterialResources;
+		Buffer::View<uint32_t> mImage1Extents;
+		Buffer::View<uint32_t> mImage4Extents;
 		uint32_t mEnvironmentMaterialAddress;
 		uint32_t mMaterialCount;
 		uint32_t mEmissivePrimitiveCount;
@@ -162,7 +165,6 @@ private:
 	DeviceResourcePool<FrameResources> mResourcePool;
 	shared_ptr<FrameResources> mResources;
 
-	ComputePipelineCache mCopyVerticesPipeline;
 	ComputePipelineCache mConvertAlphaToRoughnessPipeline;
 	ComputePipelineCache mConvertShininessToRoughnessPipeline;
 	ComputePipelineCache mConvertPbrPipeline;

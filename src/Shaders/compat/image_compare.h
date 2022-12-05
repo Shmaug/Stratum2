@@ -1,5 +1,5 @@
-#ifndef MSE_H
-#define MSE_H
+#ifndef IMAGE_COMPARE_H
+#define IMAGE_COMPARE_H
 
 #include "hlslcompat.h"
 

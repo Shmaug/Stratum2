@@ -123,12 +123,15 @@ public:
 	template<typename T, typename Ty>
 	inline static bool enumDropdown(const char* label, Ty& selected, const uint32_t count) {
 		bool ret = false;
-		if (ImGui::BeginCombo(label, to_string((T)selected).c_str())) {
-			for (uint32_t i = 0; i < count; i++)
-				if (ImGui::Selectable(to_string((T)i).c_str(), (uint32_t)selected == i)) {
+		const string previewstr = to_string((T)selected);
+		if (ImGui::BeginCombo(label, previewstr.c_str())) {
+			for (uint32_t i = 0; i < count; i++) {
+				const string stri = to_string((T)i);
+				if (ImGui::Selectable(stri.c_str(), (uint32_t)selected == i)) {
 					selected = (Ty)i;
 					ret = true;
 				}
+			}
 			ImGui::EndCombo();
 		}
 		return ret;

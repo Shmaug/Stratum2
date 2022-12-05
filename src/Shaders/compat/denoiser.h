@@ -35,27 +35,27 @@ inline string to_string(const stm2::DenoiserDebugMode& m) {
 #include "scene.h"
 
 struct DenoiserParameters {
-	StructuredBuffer<ViewData> gViews;
-	StructuredBuffer<uint> gInstanceIndexMap;
-	StructuredBuffer<VisibilityData> gVisibility;
-	StructuredBuffer<VisibilityData> gPrevVisibility;
-	StructuredBuffer<DepthData> gDepth;
-	StructuredBuffer<DepthData> gPrevDepth;
-	Texture2D<float2> gPrevUVs;
-	Texture2D<float4> gRadiance;
-	Texture2D<float4> gAlbedo;
-	RWTexture2D<float4> gAccumColor;
-	RWTexture2D<float2> gAccumMoments;
-	RWTexture2D<float4> gFilterImages[2];
-	Texture2D<float4> gPrevRadiance;
-	Texture2D<float4> gPrevAccumColor;
-	Texture2D<float2> gPrevAccumMoments;
+	StructuredBuffer<ViewData> mViews;
+	StructuredBuffer<uint> mInstanceIndexMap;
+	Texture2D<float2> mVisibility;
+	Texture2D<float2> mPrevVisibility;
+	Texture2D<float4> mDepth;
+	Texture2D<float4> mPrevDepth;
+	Texture2D<float2> mPrevUVs;
+	Texture2D<float4> mInput;
+	Texture2D<float4> mAlbedo;
+	RWTexture2D<float4> mAccumColor;
+	RWTexture2D<float2> mAccumMoments;
+	RWTexture2D<float4> mFilterImages[2];
+
+	Texture2D<float4> mPrevAccumColor;
+	Texture2D<float2> mPrevAccumMoments;
+
 	SamplerState mStaticSampler;
-	RWTexture2D<float4> gDebugImage;
 
 	uint getViewIndex(const uint2 index) {
 		for (uint i = 0; i < gPushConstants.mViewCount; i++)
-			if (all(index >= gViews[i].mImageMin) && all(index < gViews[i].mImageMax))
+			if (all(index >= mViews[i].mImageMin) && all(index < mViews[i].mImageMax))
 				return i;
 		return -1;
 	}

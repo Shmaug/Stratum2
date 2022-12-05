@@ -1,4 +1,4 @@
-#include "TinyPT.hpp"
+#include "PathTracer.hpp"
 #include "Denoiser.hpp"
 #include "Tonemapper.hpp"
 #include "Gui.hpp"
@@ -13,9 +13,9 @@
 
 namespace stm2 {
 
-TinyPT::TinyPT(Node& node) : mNode(node) {
+PathTracer::PathTracer(Node& node) : mNode(node) {
 	if (shared_ptr<Inspector> inspector = mNode.root()->findDescendant<Inspector>())
-		inspector->setTypeCallback<TinyPT>();
+		inspector->setTypeCallback<PathTracer>();
 
 	Device& device = *mNode.findAncestor<Device>();
 	createPipelines(device);
@@ -26,7 +26,7 @@ TinyPT::TinyPT(Node& node) : mNode(node) {
 	if (auto arg = device.mInstance.findArgument("maxDiffuseBounces"); arg) mPushConstants.mMaxDiffuseBounces = atoi(arg->c_str());
 }
 
-void TinyPT::createPipelines(Device& device) {
+void PathTracer::createPipelines(Device& device) {
 	const auto samplerRepeat = make_shared<vk::raii::Sampler>(*device, vk::SamplerCreateInfo({},
 		vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eLinear,
 		vk::SamplerAddressMode::eRepeat, vk::SamplerAddressMode::eRepeat, vk::SamplerAddressMode::eRepeat,
@@ -35,9 +35,10 @@ void TinyPT::createPipelines(Device& device) {
 	ComputePipeline::Metadata md;
 	md.mImmutableSamplers["gScene.mStaticSampler"]  = { samplerRepeat };
 	md.mImmutableSamplers["gScene.mStaticSampler1"] = { samplerRepeat };
-	md.mBindingFlags["gScene.gVolumes"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
-	md.mBindingFlags["gScene.gImages"]  = vk::DescriptorBindingFlagBits::ePartiallyBound;
-	md.mBindingFlags["gScene.gImage1s"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	md.mBindingFlags["gScene.mVertexBuffers"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	md.mBindingFlags["gScene.mImages"]  = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	md.mBindingFlags["gScene.mImage1s"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	md.mBindingFlags["gScene.mVolumes"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
 
 	const filesystem::path shaderPath = *device.mInstance.findArgument("shaderKernelPath");
 	const vector<string>& args = { "-matrix-layout-row-major", "-capability", "spirv_1_5", "-Wno-30081", "-capability", "GL_EXT_ray_tracing" };
@@ -56,7 +57,7 @@ void TinyPT::createPipelines(Device& device) {
 	mPushConstants.mMaxDiffuseBounces = 2;
 }
 
-void TinyPT::drawGui() {
+void PathTracer::drawGui() {
 	ImGui::PushID(this);
 	if (ImGui::Button("Reload shaders")) {
 		Device& device = *mNode.findAncestor<Device>();
@@ -70,8 +71,14 @@ void TinyPT::drawGui() {
 	}
 	ImGui::PopID();
 
-	ImGui::Checkbox("Performance counters", &mPerformanceCounters);
-	if (mPerformanceCounters) {
+	Gui::enumDropdown<TinyPTDebugMode>("Debug mode", mDebugMode, (uint32_t)TinyPTDebugMode::eNumTinyPTDebugMode);
+
+	if (ImGui::CollapsingHeader("Feature flags")) {
+		for (uint32_t i = 0; i < (uint32_t)TinyPTFeatureFlagBits::eNumTinyPTFeatureFlagBits; i++)
+			ImGui::CheckboxFlags(std::to_string((TinyPTFeatureFlagBits)i).c_str(), &mFeatureFlags, BIT(i));
+	}
+
+	if (mFeatureFlags & BIT((uint32_t)TinyPTFeatureFlagBits::ePerformanceCounters)) {
 		const auto [rps, ext] = formatNumber(mRaysPerSecond[0]);
 		ImGui::Text("%.2f%s Rays/second (%u%% shadow rays)", rps, ext, (uint32_t)(100 - (100*(uint64_t)mRaysPerSecond[1]) / mRaysPerSecond[0]));
 	}
@@ -79,7 +86,6 @@ void TinyPT::drawGui() {
 	if (ImGui::CollapsingHeader("Configuration")) {
 		ImGui::Checkbox("Random frame seed", &mRandomPerFrame);
 		ImGui::Checkbox("Half precision", &mHalfColorPrecision);
-		ImGui::Checkbox("Show albedo", &mShowAlbedo);
 
 		if (auto denoiser = mNode.getComponent<Denoiser>(); denoiser)
 			if (ImGui::Checkbox("Enable denoiser", &mDenoise))
@@ -138,14 +144,14 @@ void TinyPT::drawGui() {
 	*/
 }
 
-void TinyPT::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
+void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
 	auto sceneResources = mNode.getComponent<Scene>()->resources();
 	if (!sceneResources) {
 		renderTarget.clearColor(commandBuffer, vk::ClearColorValue(array<uint32_t, 4>{ 0, 0, 0, 0 }));
 		return;
 	}
 
-	ProfilerScope ps("TinyPT::render", &commandBuffer);
+	ProfilerScope ps("PathTracer::render", &commandBuffer);
 
 	// reuse old frame resources
 	auto frame = mFrameResourcePool.get();
@@ -210,11 +216,11 @@ void TinyPT::render(CommandBuffer& commandBuffer, const Image::View& renderTarge
 		// upload viewdata
 		auto viewsBuffer                 = frame->getBuffer<ViewData>     ("mViews"                , views.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
 		auto viewTransformsBuffer        = frame->getBuffer<TransformData>("mViewTransforms"       , views.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
-		auto viewInverseTransformsBuffer = frame->getBuffer<TransformData>("mViewInverseTransforms", views.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+		//auto viewInverseTransformsBuffer = frame->getBuffer<TransformData>("mViewInverseTransforms", views.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
 		for (uint32_t i = 0; i < views.size(); i++) {
 			viewsBuffer[i] = views[i].first;
 			viewTransformsBuffer[i] = views[i].second;
-			viewInverseTransformsBuffer[i] = views[i].second.inverse();
+			//viewInverseTransformsBuffer[i] = views[i].second.inverse();
 		}
 
 		// find if views are inside a volume
@@ -234,7 +240,10 @@ void TinyPT::render(CommandBuffer& commandBuffer, const Image::View& renderTarge
 	mPushConstants.mEnvironmentMaterialAddress = frame->mSceneData->mEnvironmentMaterialAddress;
 	mPushConstants.mLightCount = (uint32_t)frame->mSceneData->mLightInstanceMap.size();
 
-	Defines defines;
+	const Defines defines {
+		{ string("gDebugMode"), "(TinyPTDebugMode)" + to_string((uint32_t)mDebugMode) },
+		{ string("gFeatureFlags"), to_string(mFeatureFlags) }
+	};
 
 	const vk::Extent3D extent = renderTarget.extent();
 
@@ -247,13 +256,11 @@ void TinyPT::render(CommandBuffer& commandBuffer, const Image::View& renderTarge
 		auto format = mHalfColorPrecision ? vk::Format::eR16G16B16A16Sfloat : vk::Format::eR32G32B32A32Sfloat;
 		auto usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst;
 
-		frame->getImage("mRadiance", extent, format, usage);
+		frame->getImage("mOutput",   extent, format, usage);
 		frame->getImage("mAlbedo",   extent, format, usage);
 		frame->getImage("mPrevUVs",  extent, vk::Format::eR32G32Sfloat, usage);
-
-		frame->getBuffer<VisibilityData>("mVisibility",        pixelCount, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferSrc);
-		frame->getBuffer<DepthData>     ("mDepth",             pixelCount, vk::BufferUsageFlagBits::eStorageBuffer);
-		frame->getBuffer<float4>        ("mLightTraceSamples", pixelCount, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst);
+		frame->getImage("mVisibility",  extent, vk::Format::eR32G32Sfloat, usage);
+		frame->getImage("mDepth",  extent, vk::Format::eR32G32B32A32Sfloat, usage);
 
 		if (!frame->mSelectionData)
 			frame->mSelectionData = make_shared<Buffer>(commandBuffer.mDevice, "mSelectionData", sizeof(VisibilityData), vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
@@ -292,7 +299,7 @@ void TinyPT::render(CommandBuffer& commandBuffer, const Image::View& renderTarge
 	}
 
 
-	Image::View renderResult = get<Image::View>(frame->mImages.at(mShowAlbedo ? "mAlbedo" : "mOutput"));
+	Image::View renderResult = get<Image::View>(frame->mImages.at((mDebugMode == TinyPTDebugMode::eAlbedo) ? "mAlbedo" : "mOutput"));
 
 	shared_ptr<Denoiser> denoiser = mNode.findDescendant<Denoiser>();
 	if (mDenoise && denoiser) {
@@ -300,37 +307,38 @@ void TinyPT::render(CommandBuffer& commandBuffer, const Image::View& renderTarge
 		if (changed && !denoiser->reprojection())
 			denoiser->resetAccumulation();
 
-		denoiser->denoise(
+		renderResult = denoiser->denoise(
 			commandBuffer,
 			renderResult,
 			get<Image::View>(frame->mImages.at("mAlbedo")),
 			get<Image::View>(frame->mImages.at("mPrevUVs")),
-			frame->mBuffers.at("mViews").cast<ViewData>(),
-			frame->mBuffers.at("mVisibility").cast<VisibilityData>(),
-			frame->mBuffers.at("mDepth").cast<DepthData>() );
+			get<Image::View>(frame->mImages.at("mVisibility")),
+			get<Image::View>(frame->mImages.at("mDepth")),
+			frame->mBuffers.at("mViews").cast<ViewData>() );
 	}
 
 	shared_ptr<Tonemapper> tonemapper = mNode.findDescendant<Tonemapper>();
 	if (mTonemap && tonemapper)
-		tonemapper->render(commandBuffer, renderResult, (mDenoise && denoiser && denoiser->demodulateAlbedo()) ? get<Image::View>(frame->mImages.at("mAlbedo")) : Image::View{});
-
-	// copy renderResult to rendertarget directly
-	if (renderResult.image()->format() == renderTarget.image()->format())
-		Image::copy(commandBuffer, renderResult, renderTarget);
-	else
-		Image::blit(commandBuffer, renderResult, renderTarget);
+		tonemapper->render(commandBuffer, renderResult, renderTarget, (mDenoise && denoiser && denoiser->demodulateAlbedo()) ? get<Image::View>(frame->mImages.at("mAlbedo")) : Image::View{});
+	else {
+		// copy renderResult to rendertarget directly
+		if (renderResult.image()->format() == renderTarget.image()->format())
+			Image::copy(commandBuffer, renderResult, renderTarget);
+		else
+			Image::blit(commandBuffer, renderResult, renderTarget);
+	}
 
 	// copy VisibilityData for selected pixel
+	frame->mSelectionDataValid = false;
 	if (!ImGui::GetIO().WantCaptureMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-		const Buffer::View<VisibilityData> v = frame->mBuffers.at("mVisibility").cast<VisibilityData>();
-		v.barrier(commandBuffer, vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead);
+		const Image::View v = get<Image::View>(frame->mImages.at("mVisibility"));
+		v.barrier(commandBuffer, vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferRead);
 
 		const ImVec2 c = ImGui::GetCursorPos();
-		const int2 cp = int2((int)c.x, (int)c.y);
-		frame->mSelectionDataValid = false;
+		const int2 ci(c.x, c.y);
 		for (const auto&[view, transform] : views)
-			if (view.isInside(cp)) {
-				Buffer::copy(commandBuffer, Buffer::View<VisibilityData>(v, cp.y() * view.extent().x() + cp.x(), 1), frame->mSelectionData);
+			if (view.isInside(ci)) {
+				frame->mSelectionData.copyFromImage(commandBuffer, v.image(), v.subresourceLayer(), vk::Offset3D{ci[0], ci[1], 0}, vk::Extent3D{1,1,1});
 				frame->mSelectionDataValid = true;
 			}
 	}

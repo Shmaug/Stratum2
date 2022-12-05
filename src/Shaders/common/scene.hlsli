@@ -1,11 +1,6 @@
 struct SceneParameters {
 	RaytracingAccelerationStructure mAccelerationStructure;
 
-	ByteAddressBuffer mMaterialData;
-
-	StructuredBuffer<PackedVertexData> mVertices;
-	ByteAddressBuffer mIndices;
-
 	StructuredBuffer<InstanceData> mInstances;
 
 	StructuredBuffer<TransformData> mInstanceTransforms;
@@ -14,11 +9,15 @@ struct SceneParameters {
 
 	StructuredBuffer<uint> mLightInstances; // gLightInstances[light] -> instance
 
+	ByteAddressBuffer mMaterialData;
+	ByteAddressBuffer mVertexBuffers[gVertexBufferCount];
+	StructuredBuffer<MeshVertexInfo> mMeshVertexInfo;
+
 	RWStructuredBuffer<uint> mPerformanceCounters;
 
-	SamplerState mStaticSampler;
-
-	StructuredBuffer<uint> mVolumes[gVolumeCount];
 	Texture2D<float4> mImages[gImageCount];
 	Texture2D<float> mImage1s[gImageCount];
+	StructuredBuffer<uint> mVolumes[gVolumeCount];
+
+	SamplerState mStaticSampler;
 };

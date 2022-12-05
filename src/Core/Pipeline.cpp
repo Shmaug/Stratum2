@@ -277,16 +277,15 @@ ComputePipeline::ComputePipeline(const string& name, const shared_ptr<Shader>& s
 
 void ComputePipeline::pushConstants(CommandBuffer& commandBuffer, const PushConstants& constants) const {
 	for (const auto[name, pushConstant] : constants) {
+		if (name == "") {
+			commandBuffer->pushConstants<byte>(**layout(), shader()->stage(), 0, pushConstant);
+			continue;
+		}
+
 		auto it = shader()->pushConstants().find(name);
 		if (it == shader()->pushConstants().end()) {
-			if (name == "") {
-				commandBuffer->pushConstants<byte>(**layout(), shader()->stage(), 0, pushConstant);
-				continue;
-			} else {
-				const string msg = "Push constant " + name + " does not exist in shader " + shader()->resourceName();
-				cerr << "Error: " << msg << endl;
-				throw runtime_error(msg);
-			}
+			cerr << "Warning: Push constant " + name + " does not exist in shader " + shader()->resourceName() << endl;
+			continue;
 		}
 
 		if (it->second.mTypeSize != pushConstant.size())

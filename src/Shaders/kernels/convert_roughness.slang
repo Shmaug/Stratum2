@@ -3,7 +3,7 @@
 Texture2D<float> gInput;
 RWTexture2D<float> gRoughnessRW;
 
-SLANG_SHADER("compute")
+[shader("compute")]
 [numthreads(8,8,1)]
 void alpha_to_roughness(uint3 index : SV_DispatchThreadId) {
 	uint2 size;
@@ -12,7 +12,7 @@ void alpha_to_roughness(uint3 index : SV_DispatchThreadId) {
 	gRoughnessRW[index.xy] = saturate(sqrt(gInput[index.xy]));
 }
 
-SLANG_SHADER("compute")
+[shader("compute")]
 [numthreads(8,8,1)]
 void shininess_to_roughness(uint3 index : SV_DispatchThreadId) {
 	uint2 size;

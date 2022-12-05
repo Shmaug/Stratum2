@@ -5,13 +5,14 @@
 #define gMode 0
 #endif
 #ifndef gModulateAlbedo
-#define gModulateAlbedo true
+#define gModulateAlbedo false
 #endif
 #ifndef gGammaCorrection
-#define gGammaCorrection true
+#define gGammaCorrection false
 #endif
 
-RWTexture2D<float4> gImage;
+Texture2D<float4> gInput;
+RWTexture2D<float4> gOutput;
 Texture2D<float4> gAlbedo;
 RWByteAddressBuffer gMax;
 
@@ -103,14 +104,14 @@ float3 aces_approx(float3 v) {
 
 #define gMaxQuantization 16384
 
-SLANG_SHADER("compute")
+[shader("compute")]
 [numthreads(8, 8, 1)]
 void maxReduce(uint3 index : SV_DispatchThreadID, uint group_index : SV_GroupIndex) {
 	uint2 resolution;
-	gImage.GetDimensions(resolution.x, resolution.y);
+	gInput.GetDimensions(resolution.x, resolution.y);
     if (any(index.xy >= resolution)) return;
 
-	float4 v = float4(gImage[index.xy].rgb, 0);
+	float4 v = float4(gInput[index.xy].rgb, 0);
 	if (gModulateAlbedo) v.rgb *= gAlbedo[index.xy].rgb;
 	v.w = luminance(v.rgb);
 
@@ -129,14 +130,14 @@ void maxReduce(uint3 index : SV_DispatchThreadID, uint group_index : SV_GroupInd
 	//if (vi.w > 0xFFFFFFFF - prev.w) gMax.InterlockedOr(40, (1 << 3));
 }
 
-SLANG_SHADER("compute")
+[shader("compute")]
 [numthreads(8,8,1)]
 void main(uint3 index : SV_DispatchThreadID) {
 	uint2 extent;
-	gImage.GetDimensions(extent.x, extent.y);
+	gInput.GetDimensions(extent.x, extent.y);
 	if (any(index.xy >= extent)) return;
 
-	float3 radiance = gImage[index.xy].rgb;
+	float3 radiance = gInput[index.xy].rgb;
 
 	if (gModulateAlbedo)
 		radiance *= (1e-2 + gAlbedo[index.xy].rgb);
@@ -171,13 +172,13 @@ void main(uint3 index : SV_DispatchThreadID) {
 		radiance = aces_approx(radiance);
 		break;
 	case (uint)TonemapMode::eViridisR:
-		radiance = viridis_quintic(saturate(luminance(radiance)));
+		radiance = viridisQuintic(saturate(luminance(radiance)));
 		break;
 	case (uint)TonemapMode::eViridisLengthRGB:
-		radiance = viridis_quintic(saturate(luminance(radiance) / (maxValue.w == 0 ? 1 : maxValue.w)));
+		radiance = viridisQuintic(saturate(luminance(radiance) / (maxValue.w == 0 ? 1 : maxValue.w)));
 		break;
-	}
-	if (gGammaCorrection) radiance = rgb_to_srgb(radiance);
+    }
+    if (gGammaCorrection) radiance = rgbToSrgb(radiance);
 
-	gImage[index.xy] = float4(radiance, 1);
+	gOutput[index.xy] = float4(radiance, 1);
 }

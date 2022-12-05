@@ -20,14 +20,12 @@ struct Environment {
 
 #ifdef __HLSL__
 	__init(uint address) {
-		mEmission = ImageValue3(address);
+		mEmission = ImageValue3(gScene.mMaterialData, address);
 	}
 
 	float3 evaluate(const float3 dirOut) {
 		if (!mEmission.hasImage())
 			return mEmission.mValue;
-		uint w, h;
-		mEmission.image().GetDimensions(w, h);
 		const float2 uv = cartesianToSphericalUv(dirOut);
 		return mEmission.eval(uv, 0).rgb;
 	}
@@ -38,10 +36,8 @@ struct Environment {
 			dirOut = sphericalUvToCartesian(uv);
 			pdf = 1/(4*M_PI);
 			return mEmission.mValue;
-		} else {
-			uint w, h;
-			mEmission.image().GetDimensions(w, h);
-			const float2 uv = sampleTexel(mEmission.image(), rnd, pdf);
+        } else {
+            const float2 uv = sampleTexel(gScene.mImages[mEmission.mImage], rnd, pdf);
 			dirOut = sphericalUvToCartesian(uv);
 			pdf /= (2 * M_PI * M_PI * sqrt(1 - dirOut.y*dirOut.y));
 			return mEmission.eval(uv, 0).rgb;
@@ -53,7 +49,7 @@ struct Environment {
 			return 1/(4*M_PI);
 		else {
 			const float2 uv = cartesianToSphericalUv(dirOut);
-			const float pdf = sampleTexelPdf(mEmission.image(), uv);
+			const float pdf = sampleTexelPdf(gScene.mImages[mEmission.mImage], uv);
 			return pdf / (2 * M_PI * M_PI * sqrt(1 - dirOut.y*dirOut.y));
 		}
 	}

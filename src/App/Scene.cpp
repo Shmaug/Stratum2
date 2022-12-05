@@ -25,8 +25,18 @@ tuple<shared_ptr<vk::raii::AccelerationStructureKHR>, Buffer::View<byte>> buildA
 	} else
 		buildSizes.accelerationStructureSize = buildSizes.buildScratchSize = 4;
 
-	Buffer::View<byte> buffer = make_shared<Buffer>(commandBuffer.mDevice, name, buildSizes.accelerationStructureSize, vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress);
-	Buffer::View<byte> scratchData = make_shared<Buffer>(commandBuffer.mDevice, name + "/scratchData", buildSizes.buildScratchSize, vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eStorageBuffer);
+	Buffer::View<byte> buffer      = make_shared<Buffer>(
+		commandBuffer.mDevice,
+		name,
+		buildSizes.accelerationStructureSize,
+		vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress);
+
+	Buffer::View<byte> scratchData = make_shared<Buffer>(
+		commandBuffer.mDevice,
+		name + "/scratchData",
+		buildSizes.buildScratchSize,
+		vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eStorageBuffer);
+
 	shared_ptr<vk::raii::AccelerationStructureKHR> accelerationStructure = make_shared<vk::raii::AccelerationStructureKHR>(*commandBuffer.mDevice, vk::AccelerationStructureCreateInfoKHR({}, **buffer.buffer(), buffer.offset(), buffer.sizeBytes(), type));
 
 	buildGeometry.dstAccelerationStructure = **accelerationStructure;
@@ -84,11 +94,10 @@ Scene::Scene(Node& node): mNode(node) {
 	md.mBindingFlags["gTexcoords"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
 
 	const filesystem::path shaderPath = *mNode.findAncestor<Instance>()->findArgument("shaderKernelPath");
-	mCopyVerticesPipeline                = ComputePipelineCache(shaderPath / "copy_vertices.hlsl", "main", "cs_6_7", {}, md);
-	mConvertAlphaToRoughnessPipeline     = ComputePipelineCache(shaderPath / "roughness_convert.hlsl", "alpha_to_roughness");
-	mConvertShininessToRoughnessPipeline = ComputePipelineCache(shaderPath / "roughness_convert.hlsl", "shininess_to_roughness");
-	mConvertPbrPipeline                  = ComputePipelineCache(shaderPath / "material_convert.hlsl", "from_gltf_pbr");
-	mConvertDiffuseSpecularPipeline      = ComputePipelineCache(shaderPath / "material_convert.hlsl", "from_diffuse_specular");
+	mConvertAlphaToRoughnessPipeline     = ComputePipelineCache(shaderPath / "convert_roughness.slang", "alpha_to_roughness");
+	mConvertShininessToRoughnessPipeline = ComputePipelineCache(shaderPath / "convert_roughness.slang", "shininess_to_roughness");
+	mConvertPbrPipeline                  = ComputePipelineCache(shaderPath / "convert_material.slang", "from_gltf_pbr");
+	mConvertDiffuseSpecularPipeline      = ComputePipelineCache(shaderPath / "convert_material.slang", "from_diffuse_specular");
 
 	for (const string arg : mNode.findAncestor<Instance>()->findArguments("scene"))
 		mToLoad.emplace_back(arg);
@@ -111,8 +120,7 @@ shared_ptr<Node> Scene::loadEnvironmentMap(CommandBuffer& commandBuffer, const f
 	const shared_ptr<Image> img = make_shared<Image>(commandBuffer.mDevice, filepath.filename().string(), md);
 
 	pixels->copyToImage(commandBuffer, img);
-
-	commandBuffer.trackResource(img);
+	commandBuffer.trackResource(pixels);
 
 	const shared_ptr<Node> node = Node::create(filepath.stem().string());
 	node->makeComponent<Environment>(ImageValue<3>{ float3::Ones(), img });
@@ -206,33 +214,33 @@ Material Scene::makeMetallicRoughnessMaterial(CommandBuffer& commandBuffer, cons
 		md.mLevels = Image::maxMipLevels(md.mExtent);
 		md.mFormat = vk::Format::eR8G8B8A8Unorm;
 		md.mUsage = vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage;
-		for (int i = 0; i < DisneyMaterialData::gDataSize; i++) {
-			m.mValues[i].mImage = make_shared<Image>(commandBuffer.mDevice, "material data", md);
+		for (int i = 0; i < DisneyMaterialData::gDataCount; i++) {
+			m.mValues[i].mImage = make_shared<Image>(commandBuffer.mDevice, "DisneyMaterialData[" + to_string(i) + "]", md);
 			descriptors[{ "gOutput", i }] = ImageDescriptor{ m.mValues[i].mImage, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 		}
 		if (baseColor.mImage) {
 			md.mLevels = 1;
 			md.mFormat = vk::Format::eR8Unorm;
 			md.mUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage;
-			m.mAlphaMask = make_shared<Image>(commandBuffer.mDevice, "alpha mask", md);
+			m.mAlphaMask = make_shared<Image>(commandBuffer.mDevice, "mAlphaMask", md);
 		}
-		descriptors[{ "gOutputAlphaMask", 0 }] = ImageDescriptor{ m.mAlphaMask ? m.mAlphaMask : m.mValues[0].mImage, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+		descriptors[{ "gOutputAlphaMask", 0 }] = ImageDescriptor{ m.mAlphaMask ? m.mAlphaMask : d, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 
-		m.mMinAlpha = make_shared<Buffer>(commandBuffer.mDevice, "min_alpha", sizeof(uint32_t), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+		m.mMinAlpha = make_shared<Buffer>(commandBuffer.mDevice, "mMinAlpha", sizeof(uint32_t), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
 		m.mMinAlpha[0] = 0xFFFFFFFF;
 		descriptors[{ "gOutputMinAlpha", 0 }] = m.mMinAlpha;
 
-		descriptors[{ "gDiffuse", 0 }] = ImageDescriptor{ baseColor.mImage ? baseColor.mImage : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-		descriptors[{ "gSpecular", 0 }] = ImageDescriptor{ metallic_roughness.mImage ? metallic_roughness.mImage : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-		descriptors[{ "gTransmittance", 0 }] = ImageDescriptor{ transmission.mImage ? transmission.mImage : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-		descriptors[{ "gRoughness", 0 }] = ImageDescriptor{ d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{ "gDiffuse", 0 }]       = ImageDescriptor{ baseColor.mImage          ? baseColor.mImage          : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{ "gSpecular", 0 }]      = ImageDescriptor{ metallic_roughness.mImage ? metallic_roughness.mImage : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{ "gTransmittance", 0 }] = ImageDescriptor{ transmission.mImage       ? transmission.mImage       : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{ "gRoughness", 0 }]     = ImageDescriptor{ d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
 		Defines defs;
 		if (baseColor.mImage) defs["gUseDiffuse"] = "true";
 		if (metallic_roughness.mImage) defs["gUseSpecular"] = "true";
 		if (transmission.mImage) defs["gUseTransmittance"] = "true";
 		mConvertPbrPipeline.get(commandBuffer.mDevice, defs)->dispatchTiled(commandBuffer, d.extent(), descriptors);
 
-		for (int i = 0; i < DisneyMaterialData::gDataSize; i++)
+		for (int i = 0; i < DisneyMaterialData::gDataCount; i++)
 			m.mValues[i].mImage.image()->generateMipMaps(commandBuffer);
 	}
 	return m;
@@ -268,7 +276,7 @@ Material Scene::makeDiffuseSpecularMaterial(CommandBuffer& commandBuffer, const 
 		md.mLevels = Image::maxMipLevels(md.mExtent);
 		md.mFormat = vk::Format::eR8G8B8A8Unorm;
 		md.mUsage = vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage;
-		for (int i = 0; i < DisneyMaterialData::gDataSize; i++) {
+		for (int i = 0; i < DisneyMaterialData::gDataCount; i++) {
 			m.mValues[i].mImage = make_shared<Image>(commandBuffer.mDevice, "material data", md);
 			descriptors[{"gOutput", i}] = ImageDescriptor{ m.mValues[i].mImage, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 		}
@@ -278,16 +286,16 @@ Material Scene::makeDiffuseSpecularMaterial(CommandBuffer& commandBuffer, const 
 			md.mUsage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage;
 			m.mAlphaMask = make_shared<Image>(commandBuffer.mDevice, "alpha mask", md);
 		}
-		descriptors[{"gOutputAlphaMask", 0}] = ImageDescriptor{ m.mAlphaMask ? m.mAlphaMask : m.mValues[0].mImage, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+		descriptors[{"gOutputAlphaMask", 0}] = ImageDescriptor{ m.mAlphaMask ? m.mAlphaMask : d, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 
 		m.mMinAlpha = make_shared<Buffer>(commandBuffer.mDevice, "min_alpha", sizeof(uint32_t), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
 		m.mMinAlpha[0] = 0xFFFFFFFF;
 		descriptors[{"gOutputMinAlpha", 0}] = m.mMinAlpha;
 
-		descriptors[{"gDiffuse", 0}] = ImageDescriptor{ diffuse.mImage ? diffuse.mImage : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-		descriptors[{"gSpecular", 0}] = ImageDescriptor{ specular.mImage ? specular.mImage : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{"gDiffuse", 0}]       = ImageDescriptor{ diffuse.mImage      ? diffuse.mImage      : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{"gSpecular", 0}]      = ImageDescriptor{ specular.mImage     ? specular.mImage     : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
 		descriptors[{"gTransmittance", 0}] = ImageDescriptor{ transmission.mImage ? transmission.mImage : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-		descriptors[{"gRoughness", 0}] = ImageDescriptor{ roughness.mImage ? roughness.mImage : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{"gRoughness", 0}]     = ImageDescriptor{ roughness.mImage    ? roughness.mImage    : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
 		Defines defs;
 		if (diffuse.mImage)      defs["gUseDiffuse"] = "true";
 		if (specular.mImage)     defs["gUseSpecular"] = "true";
@@ -296,7 +304,7 @@ Material Scene::makeDiffuseSpecularMaterial(CommandBuffer& commandBuffer, const 
 
 		mConvertDiffuseSpecularPipeline.get(commandBuffer.mDevice, defs)->dispatchTiled(commandBuffer, d.extent(), descriptors);
 
-		for (int i = 0; i < DisneyMaterialData::gDataSize; i++)
+		for (int i = 0; i < DisneyMaterialData::gDataCount; i++)
 			m.mValues[i].mImage.image()->generateMipMaps(commandBuffer);
 	}
 	return m;
@@ -362,24 +370,25 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, const shared_ptr<FrameResources>& prevFrame) {
 	// Construct resources used by renderers (mesh/material data buffers, image arrays, etc.)
 
-	uint32_t totalVertexCount = 0;
-	uint32_t totalIndexBufferSize = 0;
-	Descriptors vertexCopyDescriptors;
-	vector<uint4> vertexCopyInfos;
-	vector<Buffer::View<byte>> indexBuffers;
-
 	vector<pair<MeshPrimitive*, uint32_t>> meshInstanceIndices;
 	vector<InstanceData> instanceDatas;
 	vector<TransformData> instanceTransforms;
 	vector<TransformData> instanceInverseTransforms;
 	vector<TransformData> instanceMotionTransforms;
 	vector<uint32_t> lightInstanceMap;
+	vector<uint32_t> instanceIndexMap;
 
-	mInstanceIndexMap = make_shared<Buffer>(commandBuffer.mDevice, "InstanceIndexMap", max<size_t>(1, prevFrame ? prevFrame->mInstances.size() * sizeof(uint32_t) : 0), vk::BufferUsageFlagBits::eStorageBuffer);
-	ranges::fill(mInstanceIndexMap, -1);
+	vector<MeshVertexInfo> meshVertexInfos;
+	mVertexBuffers.clear();
+	unordered_map<Buffer*, uint32_t> vertexBufferMap;
 
 	mMaterialCount = 0;
 	mEmissivePrimitiveCount = 0;
+
+	mMaterialResources.mMaterialData.clear();
+	mMaterialResources.mImage4s.clear();
+	mMaterialResources.mImage1s.clear();
+	mMaterialResources.mVolumeDataMap.clear();
 
 	unordered_map<const void*, uint32_t> materialMap;
 
@@ -388,12 +397,23 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 		instanceTransforms.reserve(prevFrame->mInstances.size());
 		instanceInverseTransforms.reserve(prevFrame->mInstances.size());
 		instanceMotionTransforms.reserve(prevFrame->mInstances.size());
+		instanceIndexMap.reserve(prevFrame->mInstances.size());
+		meshVertexInfos.reserve(prevFrame->mMeshVertexInfo.size());
+		mVertexBuffers.reserve(prevFrame->mVertexBuffers.size());
 		mMaterialResources.mMaterialData.reserve(prevFrame->mMaterialData ? prevFrame->mMaterialData.size() / sizeof(uint32_t) : 1);
 	}
 
 	vector<vk::AccelerationStructureInstanceKHR> instancesAS;
 	vector<vk::BufferMemoryBarrier> blasBarriers;
 
+	auto appendVertexBuffer = [&](const shared_ptr<Buffer>& buf) {
+		if (auto it = vertexBufferMap.find(buf.get()); it != vertexBufferMap.end())
+			return it->second;
+		const uint32_t idx = mVertexBuffers.size();
+		mVertexBuffers.emplace_back(buf);
+		vertexBufferMap.emplace(buf.get(), idx);
+		return idx;
+	};
 
 	// 'material' is either a Material or Medium
 	auto appendMaterialData = [&](const auto* material) {
@@ -411,13 +431,14 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 		const uint32_t instanceIndex = (uint32_t)instanceDatas.size();
 		instanceDatas.emplace_back(instance);
 		mInstanceNodes.emplace_back(node.getPtr());
+		uint32_t& prevInstanceIndex = instanceIndexMap.emplace_back(-1);
 
 		// add light if emissive
 
 		uint32_t lightIndex = INVALID_INSTANCE;
 		if (emissivePower > 0) {
 			lightIndex = (uint32_t)lightInstanceMap.size();
-			BF_SET(instanceDatas[instanceIndex].packed[1], lightIndex, 0, 12);
+			//instanceDatas[instanceIndex].lightIndex(lightIndex);
 			lightInstanceMap.emplace_back(instanceIndex);
 		}
 
@@ -426,8 +447,8 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 		TransformData prevTransform;
 		if (prevFrame) {
 			if (auto it = prevFrame->mInstanceTransformMap.find(primPtr); it != prevFrame->mInstanceTransformMap.end()) {
-				prevTransform = it->second.first;
-				mInstanceIndexMap[it->second.second] = instanceIndex;
+				uint32_t idx;
+				tie(prevTransform, prevInstanceIndex) = it->second;
 			}
 		}
 		mInstanceTransformMap.emplace(primPtr, make_pair(transform, instanceIndex));
@@ -435,11 +456,42 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 		const TransformData invTransform = transform.inverse();
 		instanceTransforms.emplace_back(transform);
 		instanceInverseTransforms.emplace_back(invTransform);
-		instanceMotionTransforms.emplace_back(InstanceData::makeMotionTransform(invTransform, prevTransform));
+		instanceMotionTransforms.emplace_back(makeMotionTransform(invTransform, prevTransform));
 		return instanceIndex;
 	};
 
+	auto getAabbBlas = [&](const float3 mn, const float3 mx, const bool opaque) {
+		const size_t key = hashArgs(mn[0], mn[1], mn[2], mx[0], mx[1], mx[2], opaque);
+		auto aabb_it = scene.mAABBs.find(key);
+		if (aabb_it != scene.mAABBs.end())
+			return aabb_it->second;
 
+		Buffer::View<vk::AabbPositionsKHR> aabb = make_shared<Buffer>(
+			commandBuffer.mDevice,
+			"aabb data",
+			sizeof(vk::AabbPositionsKHR),
+			vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress,
+			vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+		aabb[0].minX = mn[0];
+		aabb[0].minY = mn[1];
+		aabb[0].minZ = mn[2];
+		aabb[0].maxX = mx[0];
+		aabb[0].maxY = mx[1];
+		aabb[0].maxZ = mx[2];
+		vk::AccelerationStructureGeometryAabbsDataKHR aabbs(aabb.deviceAddress(), sizeof(vk::AabbPositionsKHR));
+		vk::AccelerationStructureGeometryKHR aabbGeometry(vk::GeometryTypeKHR::eAabbs, aabbs, opaque ? vk::GeometryFlagBitsKHR::eOpaque : vk::GeometryFlagBitsKHR{});
+		vk::AccelerationStructureBuildRangeInfoKHR range(1);
+		commandBuffer.trackResource(aabb.buffer());
+
+		auto [as, asbuf] = buildAccelerationStructure(commandBuffer, "aabb BLAS", vk::AccelerationStructureTypeKHR::eBottomLevel, aabbGeometry, range);
+
+		blasBarriers.emplace_back(
+			vk::AccessFlagBits::eAccelerationStructureWriteKHR, vk::AccessFlagBits::eAccelerationStructureReadKHR,
+			VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+			**asbuf.buffer(), asbuf.offset(), asbuf.sizeBytes());
+
+		return scene.mAABBs.emplace(key, make_pair(as, asbuf)).first->second;
+	};
 
 	{ // mesh instances
 		ProfilerScope s("Process mesh instances", &commandBuffer);
@@ -455,50 +507,47 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 				return;
 			}
 
-			const uint32_t materialAddress = appendMaterialData(prim->mMaterial.get());
-
-			// write vertexCopyDescriptors
 			auto [positions, positionsDesc] = prim->mMesh->vertices().at(Mesh::VertexAttributeType::ePosition)[0];
-			auto [normals, normalsDesc] = prim->mMesh->vertices().at(Mesh::VertexAttributeType::eNormal)[0];
-			auto [texcoords, texcoordsDesc] = prim->mMesh->vertices().at(Mesh::VertexAttributeType::eTexcoord)[0];
-			const uint32_t index = (uint32_t)vertexCopyInfos.size();
-			vertexCopyDescriptors[{ "gPositions", index }] = Buffer::View(positions, positionsDesc.mOffset);
-			vertexCopyDescriptors[{ "gNormals", index }] = Buffer::View(normals, normalsDesc.mOffset);
-			vertexCopyDescriptors[{ "gTexcoords", index }] = Buffer::View(texcoords, texcoordsDesc.mOffset);
-			const uint32_t vertexCount = (uint32_t)(positions.sizeBytes() / positionsDesc.mStride);
-			vertexCopyInfos.emplace_back(uint4(
-				vertexCount,
-				positionsDesc.mStride,
-				normalsDesc.mStride,
-				texcoordsDesc.mStride));
 
-			// track total vertices/indices
-			const uint32_t firstVertex = totalVertexCount;
-			const uint32_t indexByteOffset = totalIndexBufferSize;
-			totalVertexCount += vertexCount;
-			totalIndexBufferSize += prim->mMesh->indices().sizeBytes();
+			const uint32_t vertexCount = (uint32_t)((positions.sizeBytes() - positionsDesc.mOffset) / positionsDesc.mStride);
+			const uint32_t primitiveCount = prim->mMesh->indices().size() / (prim->mMesh->indices().stride() * 3);
 
 			// get/build BLAS
-			const size_t key = hashArgs(prim->mMesh.get(), prim->mMaterial->alphaTest());
+			const size_t key = hashArgs(positions, positionsDesc, prim->mMaterial->alphaTest());
 			auto it = scene.mMeshAccelerationStructures.find(key);
 			if (it == scene.mMeshAccelerationStructures.end()) {
 				vk::AccelerationStructureGeometryTrianglesDataKHR triangles;
 				triangles.vertexFormat = positionsDesc.mFormat;
-				triangles.vertexData = positions.deviceAddress();
+				triangles.vertexData   = positions.deviceAddress();
 				triangles.vertexStride = positionsDesc.mStride;
 				triangles.maxVertex = vertexCount;
 				triangles.indexType = prim->mMesh->indexType();
 				triangles.indexData = prim->mMesh->indices().deviceAddress();
 				vk::AccelerationStructureGeometryKHR triangleGeometry(vk::GeometryTypeKHR::eTriangles, triangles, prim->mMaterial->alphaTest() ? vk::GeometryFlagBitsKHR{} : vk::GeometryFlagBitsKHR::eOpaque);
-				vk::AccelerationStructureBuildRangeInfoKHR range(prim->mMesh->indices().size() / (prim->mMesh->indices().stride() * 3));
+				vk::AccelerationStructureBuildRangeInfoKHR range(primitiveCount);
 
 				auto [as, asbuf] = buildAccelerationStructure(commandBuffer, primNode.name() + "/BLAS", vk::AccelerationStructureTypeKHR::eBottomLevel, triangleGeometry, range);
+
 				blasBarriers.emplace_back(
 					vk::AccessFlagBits::eAccelerationStructureWriteKHR, vk::AccessFlagBits::eAccelerationStructureReadKHR,
 					VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
 					**asbuf.buffer(), asbuf.offset(), asbuf.sizeBytes());
+
 				it = scene.mMeshAccelerationStructures.emplace(key, make_pair(as, asbuf)).first;
 			}
+
+			auto [normals, normalsDesc]     = prim->mMesh->vertices().at(Mesh::VertexAttributeType::eNormal)[0];
+			auto [texcoords, texcoordsDesc] = prim->mMesh->vertices().at(Mesh::VertexAttributeType::eTexcoord)[0];
+
+			const uint32_t vertexInfoIndex = (uint32_t)meshVertexInfos.size();
+
+			meshVertexInfos.emplace_back(
+				appendVertexBuffer(prim->mMesh->indices().buffer()), (uint32_t)prim->mMesh->indices().offset(), (uint32_t)prim->mMesh->indices().stride(),
+				appendVertexBuffer(positions.buffer()), (uint32_t)positions.offset() + positionsDesc.mOffset, positionsDesc.mStride,
+				appendVertexBuffer(normals.buffer())  , (uint32_t)normals.offset()   + normalsDesc.mOffset  , normalsDesc.mStride,
+				appendVertexBuffer(texcoords.buffer()), (uint32_t)texcoords.offset() + texcoordsDesc.mOffset, texcoordsDesc.mStride );
+
+			const uint32_t materialAddress = appendMaterialData(prim->mMaterial.get());
 
 			const uint32_t triCount = prim->mMesh->indices().sizeBytes() / (prim->mMesh->indices().stride() * 3);
 			const TransformData transform = nodeToWorld(primNode);
@@ -509,7 +558,7 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 
 			vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
 			float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
-			instance.instanceCustomIndex = appendInstanceData(primNode, prim.get(), TrianglesInstanceData(materialAddress, triCount, firstVertex, indexByteOffset, prim->mMesh->indices().stride()), transform, prim->mMaterial->emission() * area);
+			instance.instanceCustomIndex = appendInstanceData(primNode, prim.get(), MeshInstanceData(materialAddress, vertexInfoIndex, primitiveCount), transform, prim->mMaterial->emission() * area);
 			instance.mask = BVH_FLAG_TRIANGLES;
 			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**it->second.first);
 
@@ -529,40 +578,16 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 			// remove scale/rotation from transform
 			transform = TransformData(transform.m.col(3).head<3>(), quatf::identity(), float3::Ones());
 
-			// get/build BLAS
-			const float3 mn = -float3::Constant(radius);
-			const float3 mx = float3::Constant(radius);
-			const size_t key = hashArgs(mn[0], mn[1], mn[2], mx[0], mx[1], mx[2], prim->mMaterial->alphaTest());
-			auto aabb_it = scene.mAABBs.find(key);
-			if (aabb_it == scene.mAABBs.end()) {
-				Buffer::View<vk::AabbPositionsKHR> aabb = make_shared<Buffer>(commandBuffer.mDevice, "aabb data", sizeof(vk::AabbPositionsKHR), vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-				aabb[0].minX = mn[0];
-				aabb[0].minY = mn[1];
-				aabb[0].minZ = mn[2];
-				aabb[0].maxX = mx[0];
-				aabb[0].maxY = mx[1];
-				aabb[0].maxZ = mx[2];
-				vk::AccelerationStructureGeometryAabbsDataKHR aabbs(aabb.deviceAddress(), sizeof(vk::AabbPositionsKHR));
-				vk::AccelerationStructureGeometryKHR aabbGeometry(vk::GeometryTypeKHR::eAabbs, aabbs, prim->mMaterial->alphaTest() ? vk::GeometryFlagBitsKHR{} : vk::GeometryFlagBitsKHR::eOpaque);
-				vk::AccelerationStructureBuildRangeInfoKHR range(1);
-
-				commandBuffer.trackResource(aabb.buffer());
-				auto [as, asbuf] = buildAccelerationStructure(commandBuffer, "aabb BLAS", vk::AccelerationStructureTypeKHR::eBottomLevel, aabbGeometry, range);
-				blasBarriers.emplace_back(
-					vk::AccessFlagBits::eAccelerationStructureWriteKHR, vk::AccessFlagBits::eAccelerationStructureReadKHR,
-					VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-					**asbuf.buffer(), asbuf.offset(), asbuf.sizeBytes());
-				aabb_it = scene.mAABBs.emplace(key, make_pair(as, asbuf)).first;
-			}
-
 			if (prim->mMaterial->emission() > 0)
 				mEmissivePrimitiveCount++;
+
+			const auto&[as, asbuf] = getAabbBlas(-float3::Constant(radius), float3::Constant(radius), !prim->mMaterial->alphaTest());
 
 			vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
 			float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
 			instance.instanceCustomIndex = appendInstanceData(primNode, prim.get(), SphereInstanceData(materialAddress, radius), transform, prim->mMaterial->emission() * (4 * M_PI * radius * radius));
 			instance.mask = BVH_FLAG_SPHERES;
-			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**aabb_it->second.first);
+			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**as);
 		});
 	}
 
@@ -581,7 +606,12 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 			const size_t key = hashArgs((float)mn[0], (float)mn[1], (float)mn[2], (float)mx[0], (float)mx[1], (float)mx[2]);
 			auto aabb_it = scene.mAABBs.find(key);
 			if (aabb_it == scene.mAABBs.end()) {
-				Buffer::View<vk::AabbPositionsKHR> aabb = make_shared<Buffer>(commandBuffer.mDevice, "aabb data", sizeof(vk::AabbPositionsKHR), vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+				Buffer::View<vk::AabbPositionsKHR> aabb = make_shared<Buffer>(
+					commandBuffer.mDevice,
+					"aabb data",
+					sizeof(vk::AabbPositionsKHR),
+					vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress,
+					vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
 				aabb[0].minX = (float)mn[0];
 				aabb[0].minY = (float)mn[1];
 				aabb[0].minZ = (float)mn[2];
@@ -591,13 +621,15 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 				vk::AccelerationStructureGeometryAabbsDataKHR aabbs(aabb.deviceAddress(), sizeof(vk::AabbPositionsKHR));
 				vk::AccelerationStructureGeometryKHR aabbGeometry(vk::GeometryTypeKHR::eAabbs, aabbs, vk::GeometryFlagBitsKHR::eOpaque);
 				vk::AccelerationStructureBuildRangeInfoKHR range(1);
+				commandBuffer.trackResource(aabb.buffer());
+
 				auto [as, asbuf] = buildAccelerationStructure(commandBuffer, "aabb BLAS", vk::AccelerationStructureTypeKHR::eBottomLevel, aabbGeometry, range);
 
-				commandBuffer.trackResource(aabb.buffer());
 				blasBarriers.emplace_back(
 					vk::AccessFlagBits::eAccelerationStructureWriteKHR, vk::AccessFlagBits::eAccelerationStructureReadKHR,
 					VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
 					**asbuf.buffer(), asbuf.offset(), asbuf.sizeBytes());
+
 				aabb_it = scene.mAABBs.emplace(key, make_pair(as, asbuf)).first;
 			}
 
@@ -643,74 +675,34 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 			geom.geometry.instances.data = buf->deviceAddress() + offset;
 			commandBuffer.trackResource(buf);
 		}
+
 		tie(mAccelerationStructure, mAccelerationStructureBuffer) = buildAccelerationStructure(commandBuffer, scene.mNode.name() + "/TLAS", vk::AccelerationStructureTypeKHR::eTopLevel, geom, range);
+
 		mAccelerationStructureBuffer.barrier(commandBuffer,
 			vk::PipelineStageFlagBits::eAccelerationStructureBuildKHR, vk::PipelineStageFlagBits::eComputeShader,
 			vk::AccessFlagBits::eAccelerationStructureWriteKHR, vk::AccessFlagBits::eAccelerationStructureReadKHR);
 	}
 
-	// pack mesh data
-	{
-		ProfilerScope s("Pack mesh vertices/indices", &commandBuffer);
-
-		if (!mVertices || mVertices.size() < totalVertexCount)
-			mVertices = make_shared<Buffer>(commandBuffer.mDevice, "gVertices", max(totalVertexCount, 1u) * sizeof(PackedVertexData), vk::BufferUsageFlagBits::eStorageBuffer);
-		if (!mIndices || mIndices.size() < totalIndexBufferSize)
-			mIndices = make_shared<Buffer>(commandBuffer.mDevice, "gIndices", max(totalIndexBufferSize, 4u), vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer);
-
-		if (!vertexCopyInfos.empty()) {
-			Buffer::View<uint4> infos = make_shared<Buffer>(commandBuffer.mDevice, "gInfos", vertexCopyInfos.size() * sizeof(uint4), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-			ranges::copy(vertexCopyInfos, infos.begin());
-			vertexCopyDescriptors[{ "gInfos", 0 }] = infos;
-			vertexCopyDescriptors[{ "gVertices", 0 }] = mVertices;
-
-			// pack vertices
-
-			auto copyPipeline = scene.mCopyVerticesPipeline.get(commandBuffer.mDevice);
-			commandBuffer->bindPipeline(vk::PipelineBindPoint::eCompute, ***copyPipeline);
-			copyPipeline->getDescriptorSets(vertexCopyDescriptors)->bind(commandBuffer, {});
-			for (uint32_t i = 0; i < vertexCopyInfos.size(); i++) {
-				copyPipeline->pushConstants(commandBuffer, PushConstants{ { "gBufferIndex", PushConstantValue(i) } });
-				const vk::Extent3D dim = copyPipeline->calculateDispatchDim(vk::Extent3D(vertexCopyInfos[i][0], 1, 1));
-				commandBuffer->dispatch(dim.width, dim.height, dim.depth);
-			}
-		}
-
-		// copy indices
-
-		for (const auto& [prim, instanceIndex] : meshInstanceIndices) {
-			const TrianglesInstanceData& instance = *(TrianglesInstanceData*)&instanceDatas[instanceIndex];
-			commandBuffer->copyBuffer(
-				**prim->mMesh->indices().buffer(),
-				**mIndices.buffer(),
-				vk::BufferCopy(prim->mMesh->indices().offset(), instance.indicesByteOffset(), prim->mMesh->indices().sizeBytes()));
-		}
-		mIndices.barrier(commandBuffer, vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead);
-	}
-
-	{ // upload instance/material data
+	{ // upload data
 		ProfilerScope s("Upload scene data buffers");
-		if (!mInstances || mInstances.size() < instanceDatas.size()) {
-			mInstances = make_shared<Buffer>(commandBuffer.mDevice, "mInstances", max(1ull, instanceDatas.size() * sizeof(InstanceData)), vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst);
-			mInstanceTransforms = make_shared<Buffer>(commandBuffer.mDevice, "mInstanceTransforms", max(1ull, instanceTransforms.size() * sizeof(TransformData)), vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst);
-			mInstanceInverseTransforms = make_shared<Buffer>(commandBuffer.mDevice, "mInstanceInverseTransforms", max(1ull, instanceInverseTransforms.size() * sizeof(TransformData)), vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst);
-			mInstanceMotionTransforms = make_shared<Buffer>(commandBuffer.mDevice, "mInstanceMotionTransforms", max(1ull, instanceMotionTransforms.size() * sizeof(TransformData)), vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst);
-		}
-		if (!mMaterialData || mMaterialData.size() < mMaterialResources.mMaterialData.sizeBytes())
-			mMaterialData = make_shared<Buffer>(commandBuffer.mDevice, "mMaterialData", max(1ull, mMaterialResources.mMaterialData.sizeBytes()), vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst);
-		if (!mLightInstanceMap || mLightInstanceMap.size() < lightInstanceMap.size())
-			mLightInstanceMap = make_shared<Buffer>(commandBuffer.mDevice, "mLightInstanceMap", max(1ull, lightInstanceMap.size() * sizeof(uint32_t)), vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst);
 
-		if (!instanceDatas.empty()) {
-			ranges::copy(instanceDatas, mInstances.begin());
-			ranges::copy(instanceTransforms, mInstanceTransforms.begin());
-			ranges::copy(instanceInverseTransforms, mInstanceInverseTransforms.begin());
-			ranges::copy(instanceMotionTransforms, mInstanceMotionTransforms.begin());
-		}
-		if (!mMaterialResources.mMaterialData.empty())
-			ranges::copy(mMaterialResources.mMaterialData, mMaterialData.begin());
-		if (!lightInstanceMap.empty())
-			ranges::copy(lightInstanceMap, mLightInstanceMap.begin());
+		auto uploadBuffer = [&]<typename T>(const string& name, Buffer::View<T>& dst, const vector<T>& src) {
+			if (!dst || dst.size() < src.size())
+				dst = make_shared<Buffer>(commandBuffer.mDevice, name, sizeof(T)*max(src.size(), size_t(1)), vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst);
+			if (src.empty()) return;
+			Buffer::View<T> staging = make_shared<Buffer>(commandBuffer.mDevice, dst.buffer()->resourceName()+"/Staging", sizeof(T)*src.size(), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+			ranges::copy(src, staging.begin());
+			Buffer::copy(commandBuffer, staging, dst);
+		};
+
+		uploadBuffer("mInstances", mInstances, instanceDatas);
+		uploadBuffer("mInstanceTransforms", mInstanceTransforms, instanceTransforms);
+		uploadBuffer("mInstanceInverseTransforms", mInstanceInverseTransforms, instanceInverseTransforms);
+		uploadBuffer("mInstanceMotionTransforms", mInstanceMotionTransforms, instanceMotionTransforms);
+		uploadBuffer("mMaterialData", mMaterialData, mMaterialResources.mMaterialData);
+		uploadBuffer("mInstanceIndexMap", mInstanceIndexMap, instanceIndexMap);
+		uploadBuffer("mLightInstanceMap", mLightInstanceMap, lightInstanceMap);
+		uploadBuffer("mMeshVertexInfo", mMeshVertexInfo, meshVertexInfos);
 	}
 }
 
@@ -718,8 +710,9 @@ Descriptors Scene::FrameResources::getDescriptors() const {
 	Descriptors descriptors;
 	descriptors[{ "mAccelerationStructure", 0u }]     = mAccelerationStructure;
 	descriptors[{ "mMaterialData", 0u }]              = mMaterialData;
-	descriptors[{ "mVertices", 0u }]                  = mVertices;
-	descriptors[{ "mIndices", 0u }]                   = mIndices;
+	for (uint32_t i = 0; i < mVertexBuffers.size(); i++)
+		descriptors[{ "mVertexBuffers", i }] = mVertexBuffers[i];
+	descriptors[{ "mMeshVertexInfo", 0u }]            = mMeshVertexInfo;
 	descriptors[{ "mInstances", 0u }]                 = mInstances;
 	descriptors[{ "mInstanceTransforms", 0u }]        = mInstanceTransforms;
 	descriptors[{ "mInstanceInverseTransforms", 0u }] = mInstanceInverseTransforms;
@@ -735,7 +728,7 @@ Descriptors Scene::FrameResources::getDescriptors() const {
 }
 
 
-template<unsigned int N>
+template<int N>
 void ImageValue<N>::drawGui(const string& label) {
 	ImGui::DragScalarN(label.c_str(), ImGuiDataType_Float, mValue.data(), N, .01f);
 
@@ -765,6 +758,30 @@ void Scene::drawGui() {
 			mToLoad.emplace_back(filepath);
 	}
 	ImGui::Checkbox("Always update", &mAlwaysUpdate);
+
+	if (mResources) {
+		const uint32_t w = ImGui::GetWindowSize().x;
+		if (ImGui::CollapsingHeader("Image4s")) {
+			vector<Image::View> images(mResources->mMaterialResources.mImage4s.size());
+			for (const auto&[img,idx] : mResources->mMaterialResources.mImage4s)
+				images[idx] = img;
+			for (uint32_t i = 0; i < images.size(); i++) {
+				const string label = "" + to_string(i) + ": " + images[i].image()->resourceName();
+				if (ImGui::CollapsingHeader(label.c_str()))
+					ImGui::Image(Gui::getTextureID(images[i]), ImVec2(w, w*(float)images[i].extent().height/(float)images[i].extent().width));
+			}
+		}
+		if (ImGui::CollapsingHeader("Image1s")) {
+			vector<Image::View> images(mResources->mMaterialResources.mImage1s.size());
+			for (const auto&[img,idx] : mResources->mMaterialResources.mImage1s)
+				images[idx] = img;
+			for (uint32_t i = 0; i < images.size(); i++) {
+				const string label = "" + to_string(i) + ": " + images[i].image()->resourceName();
+				if (ImGui::CollapsingHeader(label.c_str()))
+					ImGui::Image(Gui::getTextureID(images[i]), ImVec2(w, w*(float)images[i].extent().height/(float)images[i].extent().width));
+			}
+		}
+	}
 }
 
 void TransformData::drawGui(Node& node) {
@@ -886,7 +903,7 @@ void Material::drawGui(Node& node) {
 	ImGui::PopItemWidth();
 
 	const float w = ImGui::CalcItemWidth() - 4;
-	for (uint i = 0; i < DisneyMaterialData::gDataSize; i++)
+	for (uint i = 0; i < DisneyMaterialData::gDataCount; i++)
 		if (mValues[i].mImage) {
 			ImGui::Text(mValues[i].mImage.image()->resourceName().c_str());
 			ImGui::Image(Gui::getTextureID(mValues[i].mImage), ImVec2(w, w * mValues[i].mImage.extent().height / (float)mValues[i].mImage.extent().width));

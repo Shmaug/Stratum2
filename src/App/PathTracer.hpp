@@ -7,11 +7,11 @@
 
 namespace stm2 {
 
-class TinyPT {
+class PathTracer {
 public:
 	Node& mNode;
 
-	TinyPT(Node& node);
+	PathTracer(Node& node);
 
 	void createPipelines(Device& device);
 
@@ -32,8 +32,8 @@ private:
 	bool mDenoise = true;
 	bool mTonemap = true;
 
-	bool mShowAlbedo = false;
-	bool mPerformanceCounters = false;
+	TinyPTDebugMode mDebugMode = TinyPTDebugMode::eNone;
+	uint32_t mFeatureFlags = BIT((uint32_t)TinyPTFeatureFlagBits::ePerformanceCounters);
 
 	Buffer::View<uint32_t> mRayCount;
 	vector<uint32_t> mPrevRayCount;
@@ -42,7 +42,7 @@ private:
 
 	class FrameResources : public Device::Resource {
 	public:
-		inline FrameResources(Device& device) : Device::Resource(device, "TinyPT::FrameResources") {}
+		inline FrameResources(Device& device) : Device::Resource(device, "PathTracer::FrameResources") {}
 
 		chrono::high_resolution_clock::time_point mTime;
 

@@ -21,8 +21,8 @@ interface BSDF {
 	float3 emission();
 	float3 albedo();
 
-	MaterialEvalRecord evaluate(const float3 dirIn, const float3 dirOut, const bool adjoint);
-	MaterialSampleRecord sample(const float3 rnd, const float3 dirIn, const bool adjoint);
+	MaterialEvalRecord evaluate<let Adjoint : bool>(const float3 dirIn, const float3 dirOut);
+	MaterialSampleRecord sample<let Adjoint : bool>(const float3 rnd, const float3 dirIn);
 };
 
 #endif

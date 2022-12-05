@@ -19,7 +19,7 @@ inline uint4 channelMappingSwizzle(vk::ComponentMapping m) {
 	return c;
 }
 
-template<unsigned int N>
+template<int N>
 struct ImageValue {
 	VectorType<float,N> mValue;
 	Image::View mImage;
@@ -40,74 +40,7 @@ using ImageValue4 = ImageValue<4>;
 #endif
 
 #ifdef __HLSL__
-
-struct ImageValue1 {
-	float mValue;
-	uint mImage;
-
-	__init(inout uint address) {
-		mValue = gScene.mMaterialData.Load<float>(address); address += 4;
-		mImage = gScene.mMaterialData.Load<uint>(address); address += 4;
-	}
-
-	bool hasImage() { return mImage < gImageCount; }
-	Texture2D<float> image() { return gScene.mImage1s[NonUniformResourceIndex(mImage)]; }
-	float eval(const float2 uv, const float uvScreenSize) {
-		if (!hasImage()) return mValue;
-		return mValue * sampleImage(image(), uv, uvScreenSize);
-	}
-};
-
-struct ImageValue2 {
-	float2 mValue;
-	uint mImage;
-
-	__init(inout uint address) {
-		mValue = gScene.mMaterialData.Load<float2>(address); address += 8;
-		mImage = gScene.mMaterialData.Load<uint>(address); address += 4;
-	}
-
-	bool hasImage() { return mImage < gImageCount; }
-	Texture2D<float4> image() { return gScene.mImages[NonUniformResourceIndex(mImage)]; }
-	float2 eval(const float2 uv, const float uvScreenSize) {
-		if (!hasImage()) return mValue;
-		return mValue * sampleImage(image(), uv, uvScreenSize).rg;
-	}
-};
-
-struct ImageValue3 {
-	float3 mValue;
-	uint mImage;
-
-	__init(inout uint address) {
-		mValue = gScene.mMaterialData.Load<float3>(address); address += 12;
-		mImage = gScene.mMaterialData.Load<uint>(address); address += 4;
-	}
-
-	bool hasImage() { return mImage < gImageCount; }
-	Texture2D<float4> image() { return gScene.mImages[NonUniformResourceIndex(mImage)]; }
-	float3 eval(const float2 uv, const float uvScreenSize) {
-		if (!hasImage()) return mValue;
-		return mValue * sampleImage(image(), uv, uvScreenSize).rgb;
-	}
-};
-
-struct ImageValue4 {
-	float4 mValue;
-	uint mImage;
-
-	__init(inout uint address) {
-		mValue = gScene.mMaterialData.Load<float4>(address); address += 16;
-		mImage = gScene.mMaterialData.Load<uint>(address); address += 4;
-	}
-
-	bool hasImage() { return mImage < gImageCount; }
-	Texture2D<float4> image() { return gScene.mImages[NonUniformResourceIndex(mImage)]; }
-	float4 eval(const float2 uv, const float uvScreenSize) {
-		if (!hasImage()) return mValue;
-		return mValue * sampleImage(image(), uv, uvScreenSize);
-	}
-};
+#include "common/image_value.hlsli"
 #endif
 
 STM_NAMESPACE_END

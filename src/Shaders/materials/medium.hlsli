@@ -3,6 +3,8 @@
 
 #include "bsdf.hlsli"
 
+#include "compat/scene.h"
+
 #ifdef __HLSL__
 #define PNANOVDB_HLSL
 #include "nanovdb/PNanoVDB.h"
@@ -16,13 +18,13 @@ struct Medium : BSDF {
 	uint mDensityVolumeIndex;
 	uint mAlbedoVolumeIndex;
 
-	__init(const SceneParameters scene, uint address) {
-		mDensityScale		= scene.mMaterialData.Load<float3>(address); address += 12;
-		mAnisotropy       	= scene.mMaterialData.Load<float>(address); address += 4;
-		mAlbedoScale        = scene.mMaterialData.Load<float3>(address); address += 12;
-		mAttenuationUnit 	= scene.mMaterialData.Load<float>(address); address += 4;
-		mDensityVolumeIndex = scene.mMaterialData.Load(address); address += 4;
-		mAlbedoVolumeIndex  = scene.mMaterialData.Load(address); address += 4;
+	__init(uint address) {
+		mDensityScale		= gScene.mMaterialData.Load<float3>(address); address += 12;
+		mAnisotropy       	= gScene.mMaterialData.Load<float>(address); address += 4;
+		mAlbedoScale        = gScene.mMaterialData.Load<float3>(address); address += 12;
+		mAttenuationUnit 	= gScene.mMaterialData.Load<float>(address); address += 4;
+		mDensityVolumeIndex = gScene.mMaterialData.Load(address); address += 4;
+		mAlbedoVolumeIndex  = gScene.mMaterialData.Load(address); address += 4;
 	}
 
 	float3 emission() { return 0; }
@@ -30,7 +32,7 @@ struct Medium : BSDF {
 	bool canEvaluate() { return any(mDensityScale > 0); }
 	bool isSingular() { return abs(mAnisotropy) > 0.999; }
 
-	MaterialEvalRecord evaluate(const float3 dirIn, const float3 dirOut, const bool adjoint = false) {
+	MaterialEvalRecord evaluate<let Adjoint : bool>(const float3 dirIn, const float3 dirOut) {
 		const float v = 1/(4*M_PI) * (1 - mAnisotropy * mAnisotropy) / pow(1 + mAnisotropy * mAnisotropy + 2 * mAnisotropy * dot(dirIn, dirOut), 1.5);
 		MaterialEvalRecord r;
 		r.mReflectance = v;
@@ -38,7 +40,7 @@ struct Medium : BSDF {
 		r.mRevPdfW = v;
 		return r;
 	}
-	MaterialSampleRecord sample(const float3 rnd, const float3 dirIn, const bool adjoint = false) {
+	MaterialSampleRecord sample<let Adjoint : bool>(const float3 rnd, const float3 dirIn) {
 		MaterialSampleRecord r;
 		if (abs(mAnisotropy) < 1e-3) {
 			const float z = 1 - 2 * rnd.x;

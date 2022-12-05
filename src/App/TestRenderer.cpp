@@ -50,7 +50,7 @@ void TestRenderer::drawGui() {
 }
 
 void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
-	ProfilerScope ps("TinyPT::render", &commandBuffer);
+	ProfilerScope ps("PathTracer::render", &commandBuffer);
 
 	auto frame = mFrameResourcePool.get();
 	if (!frame)

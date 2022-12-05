@@ -35,24 +35,29 @@ uint4 pcg4d(uint4 v) {
 	return v;
 }
 
-class RandomSampler {
+#define unorm32ToFloat(x) (asfloat(0x3f800000 | ((x) >> 9)) - 1)
+
+struct RandomSampler {
 	uint4 mState;
 
 	__init(const uint seed, const uint2 index, const uint offset = 0) {
 		mState = uint4(index, seed, offset);
 	}
 
+	[mutating]
 	void skipNext() {
 		mState.w++;
 	}
 
+	[mutating]
 	uint next() {
 		mState.w++;
 		return pcg4d(mState).x;
 	}
 
-	float nextFloat() {
-		return asfloat(0x3f800000 | (next() >> 9)) - 1;
+	[mutating]
+    float nextFloat() {
+        return unorm32ToFloat(next());
 	}
 };
 

@@ -9,7 +9,7 @@
 
 namespace stm2 {
 
-Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) : mInstance(instance), mPhysicalDevice(physicalDevice), mDevice(nullptr), mPipelineCache(nullptr), mDescriptorPool(nullptr), mFrameIndex(0), mLastFrameDone(0) {
+Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) : mInstance(instance), mPhysicalDevice(physicalDevice), mDevice(nullptr), mPipelineCache(nullptr), mDescriptorPool(nullptr) {
 	unordered_set<string> deviceExtensions;
 	for (const string& s : mInstance.findArguments("deviceExtension"))
 		deviceExtensions.emplace(s);
@@ -115,8 +115,6 @@ Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) : mI
 	vmaCreateAllocator(&allocatorInfo, &mAllocator);
 }
 Device::~Device() {
-	mCommandBufferPool.clear();
-	mCommandBuffersInFlight.clear();
 	vmaDestroyAllocator(mAllocator);
 }
 
@@ -144,20 +142,6 @@ vk::raii::DescriptorPool& Device::descriptorPool() {
 	return mDescriptorPool;
 }
 
-shared_ptr<CommandBuffer> Device::getCommandBuffer(const uint32_t queueFamily) {
-	ProfilerScope ps("Device::getCommandBuffer");
-	auto& pool = mCommandBufferPool[queueFamily];
-	shared_ptr<CommandBuffer> cb;
-	if (pool.empty())
-		cb = make_shared<CommandBuffer>(*this, "CommandBuffer", queueFamily);
-	else {
-		cb = pool.top();
-		pool.pop();
-		cb->mResources.clear();
-	}
-	return cb;
-}
-
 void Device::submit(const vk::raii::Queue queue, const vk::ArrayProxy<const shared_ptr<CommandBuffer>>& commandBuffers, const vk::ArrayProxy<pair<shared_ptr<vk::raii::Semaphore>, vk::PipelineStageFlags>>& waitSemaphores, const vk::ArrayProxy<shared_ptr<vk::raii::Semaphore>>& signalSemaphores) {
 	// create or reuse fence
 	shared_ptr<vk::raii::Fence> fence;
@@ -170,13 +154,11 @@ void Device::submit(const vk::raii::Queue queue, const vk::ArrayProxy<const shar
 	if (!fence)
 		fence = make_shared<vk::raii::Fence>(mDevice, vk::FenceCreateInfo());
 
-	// assign fence, track in-flight commandbuffers
+	// assign fence, get vkbufs
 	vector<vk::CommandBuffer> vkbufs;
 	for (const shared_ptr<CommandBuffer>& cb : commandBuffers) {
 		cb->mFence = fence;
 		vkbufs.emplace_back(***cb);
-		mCommandBuffersInFlight[cb->queueFamily()].emplace_back(cb);
-		cb->markUsed();
 	}
 
 	vector<vk::Semaphore> vkWaitSemaphores(waitSemaphores.size());
@@ -186,23 +168,6 @@ void Device::submit(const vk::raii::Queue queue, const vk::ArrayProxy<const shar
 	ranges::transform(waitSemaphores, waitStages.begin(), &pair<shared_ptr<vk::raii::Semaphore>, vk::PipelineStageFlags>::second);
 	ranges::transform(signalSemaphores, vkSignalSemaphores.begin(), [](auto s){ return **s; } );
 	queue.submit(vk::SubmitInfo(vkWaitSemaphores, waitStages, vkbufs, vkSignalSemaphores), **fence);
-}
-
-void Device::updateFrame() {
-	ProfilerScope ps("Device::updateFrame");
-	mFrameIndex++;
-	// move completed commandbuffers to pool, update mLastFrameDone
-	for (auto&[queueFamily, pool] : mCommandBuffersInFlight) {
-		for (auto it = pool.begin(); it != pool.end();) {
-			if ((*it)->fence()->getStatus() == vk::Result::eSuccess) {
-				mLastFrameDone = max((*it)->mLastFrameUsed, mLastFrameDone);
-				(*it)->reset();
-				mCommandBufferPool[queueFamily].push(*it);
-				it = pool.erase(it);
-			} else
-				it++;
-		}
-	}
 }
 
 void Device::drawGui() {

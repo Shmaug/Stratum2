@@ -25,7 +25,7 @@ public:
 		Device& mDevice;
 		inline Resource(Device& device, const string& name) : mDevice(device), mName(name) {}
 		inline string resourceName() const { return mName; }
-		inline bool inFlight() const { return mLastFrameUsed >  mDevice.lastFrameDone(); }
+		inline bool inFlight() const { return mLastFrameUsed > mDevice.lastFrameDone(); }
 		inline void markUsed() { mLastFrameUsed = mDevice.frameIndex(); }
 	private:
 		const string mName;
@@ -65,21 +65,20 @@ public:
 	vk::raii::CommandPool& commandPool(const uint32_t queueFamily);
 	vk::raii::DescriptorPool& descriptorPool();
 
-	inline uint32_t frameIndex() const { return mFrameIndex; }
-	inline uint32_t lastFrameDone() const { return mLastFrameDone; }
-
 	inline uint32_t findQueueFamily(const vk::QueueFlags flags = vk::QueueFlagBits::eGraphics|vk::QueueFlagBits::eCompute|vk::QueueFlagBits::eTransfer) {
 		return stm2::findQueueFamily(mPhysicalDevice, flags);
 	}
 
-	shared_ptr<CommandBuffer> getCommandBuffer(const uint32_t queueFamily);
 	void submit(
 		const vk::raii::Queue queue,
 		const vk::ArrayProxy<const shared_ptr<CommandBuffer>>& commandBuffers,
 		const vk::ArrayProxy<pair<shared_ptr<vk::raii::Semaphore>, vk::PipelineStageFlags>>& waitSemaphores = {},
 		const vk::ArrayProxy<shared_ptr<vk::raii::Semaphore>>& signalSemaphores = {});
 
-	void updateFrame();
+	inline uint32_t frameIndex() const { return mFrameIndex; }
+	inline uint32_t lastFrameDone() const { return mLastFrameDone; }
+	void incrementFrameIndex() { mFrameIndex++; }
+	void updateLastFrameDone(const uint32_t v) { mLastFrameDone = v; }
 
 	void drawGui();
 
@@ -90,8 +89,6 @@ private:
 	unordered_map<uint32_t, vk::raii::CommandPool> mCommandPools;
 	vk::raii::DescriptorPool mDescriptorPool;
 
-	unordered_map<uint32_t, vector<shared_ptr<CommandBuffer>>> mCommandBuffersInFlight;
-	unordered_map<uint32_t, stack<shared_ptr<CommandBuffer>>> mCommandBufferPool;
 	VmaAllocator mAllocator;
 
 	size_t mFrameIndex;

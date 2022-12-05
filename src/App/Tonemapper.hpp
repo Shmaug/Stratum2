@@ -15,7 +15,7 @@ public:
 	void createPipelines(Device& device);
 
 	void drawGui();
-	void render(CommandBuffer& commandBuffer, const Image::View& image, const Image::View& albedo);
+	void render(CommandBuffer& commandBuffer, const Image::View& input, const Image::View& output, const Image::View& albedo);
 
 private:
 	ComputePipelineCache mPipeline;
