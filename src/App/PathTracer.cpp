@@ -42,7 +42,7 @@ void PathTracer::createPipelines(Device& device) {
 
 	const filesystem::path shaderPath = *device.mInstance.findArgument("shaderKernelPath");
 	const vector<string>& args = { "-matrix-layout-row-major", "-capability", "spirv_1_5", "-Wno-30081", "-capability", "GL_EXT_ray_tracing" };
-	const filesystem::path kernelPath = shaderPath / "tinypt.slang";
+	const filesystem::path kernelPath = shaderPath / "path_tracer.slang";
 	mRenderPipelines[RenderPipelineIndex::eTraceViewPaths] = ComputePipelineCache(kernelPath, "sampleViewPaths", "sm_6_6", args, md);
 
 	mRayCount = make_shared<Buffer>(device, "gCounters", 4*sizeof(uint32_t), vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
