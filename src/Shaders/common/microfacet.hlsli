@@ -95,9 +95,7 @@ inline float3 sample_visible_normals(float3 local_dir_in, const float alpha_x, c
     const float3 disk_N = float3(t1, t2, sqrt(max(float(0), 1 - t1*t1 - t2*t2)));
 
     // Reprojection onto hemisphere -- we get our sampled normal in hemisphere space.
-    float3 T1,T2;
-    make_orthonormal(hemi_dir_in, T1, T2);
-    const float3 hemi_N = disk_N[0]*T1 + disk_N[1]*T2 + disk_N[2]*hemi_dir_in;
+    const float3 hemi_N = mul(makeOrthonormal(hemi_dir_in), disk_N);
 
     // Transforming the normal back to the ellipsoid configuration
     float3 N = normalize(float3(alpha_x * hemi_N[0], alpha_y * hemi_N[1], max(0.f, hemi_N[2])));

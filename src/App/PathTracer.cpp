@@ -198,38 +198,45 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 	bool has_volumes = false;
 
 	// copy camera/view data to GPU, compute gViewMediumInstances
-	vector<pair<ViewData,TransformData>> views;
 	{
 		ProfilerScope ps("Upload views", &commandBuffer);
 
+		frame->mViews.clear();
 		mNode.root()->forEachDescendant<Camera>([&](Node& node, const shared_ptr<Camera>& camera) {
-			views.emplace_back(pair{ camera->view(), nodeToWorld(node) });
+			frame->mViews.emplace_back(pair{ camera->view(), nodeToWorld(node) });
 		});
-		mPushConstants.mViewCount = (uint32_t)views.size();
+		mPushConstants.mViewCount = (uint32_t)frame->mViews.size();
 
-		if (views.empty()) {
+		if (frame->mViews.empty()) {
 			renderTarget.clearColor(commandBuffer, vk::ClearColorValue(array<uint32_t, 4>{ 0, 0, 0, 0 }));
 			cout << "Warning: No views" << endl;
 			return;
 		}
 
 		// upload viewdata
-		auto viewsBuffer                 = frame->getBuffer<ViewData>     ("mViews"                , views.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
-		auto viewTransformsBuffer        = frame->getBuffer<TransformData>("mViewTransforms"       , views.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
-		//auto viewInverseTransformsBuffer = frame->getBuffer<TransformData>("mViewInverseTransforms", views.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
-		for (uint32_t i = 0; i < views.size(); i++) {
-			viewsBuffer[i] = views[i].first;
-			viewTransformsBuffer[i] = views[i].second;
-			//viewInverseTransformsBuffer[i] = views[i].second.inverse();
+		auto viewsBuffer                 = frame->getBuffer<ViewData>     ("mViews"         , frame->mViews.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+		auto viewTransformsBuffer        = frame->getBuffer<TransformData>("mViewTransforms", frame->mViews.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+		for (uint32_t i = 0; i < frame->mViews.size(); i++) {
+			viewsBuffer[i] = frame->mViews[i].first;
+			viewTransformsBuffer[i] = frame->mViews[i].second;
+		}
+
+		auto prevViews                 = frame->getBuffer<ViewData>     ("mPrevViews"                , frame->mViews.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+		auto prevInverseViewTransforms = frame->getBuffer<TransformData>("mPrevInverseViewTransforms", frame->mViews.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+		if (mPrevFrame) {
+			for (uint32_t i = 0; i < mPrevFrame->mViews.size(); i++) {
+				prevViews[i] = mPrevFrame->mViews[i].first;
+				prevInverseViewTransforms[i] = mPrevFrame->mViews[i].second.inverse();
+			}
 		}
 
 		// find if views are inside a volume
-		auto viewMediumIndicesBuffer = frame->getBuffer<uint32_t>("mViewMediumInstances", views.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+		auto viewMediumIndicesBuffer = frame->getBuffer<uint32_t>("mViewMediumInstances", frame->mViews.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
 		ranges::fill(viewMediumIndicesBuffer, INVALID_INSTANCE);
 		mNode.forEachDescendant<Medium>([&](Node& node, const shared_ptr<Medium>& vol) {
 			has_volumes = true;
-			for (uint32_t i = 0; i < views.size(); i++) {
-				const float3 localViewPos = nodeToWorld(node).inverse().transformPoint( views[i].second.transformPoint(float3::Zero()) );
+			for (uint32_t i = 0; i < frame->mViews.size(); i++) {
+				const float3 localViewPos = nodeToWorld(node).inverse().transformPoint( frame->mViews[i].second.transformPoint(float3::Zero()) );
 				if (vol->mDensityGrid->grid<float>()->worldBBox().isInside(nanovdb::Vec3R(localViewPos[0], localViewPos[1], localViewPos[2])))
 					viewMediumIndicesBuffer[i] = frame->mSceneData->mInstanceTransformMap.at(vol.get()).second;
 			}
@@ -336,7 +343,7 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 
 		const ImVec2 c = ImGui::GetCursorPos();
 		const int2 ci(c.x, c.y);
-		for (const auto&[view, transform] : views)
+		for (const auto&[view, transform] : frame->mViews)
 			if (view.isInside(ci)) {
 				frame->mSelectionData.copyFromImage(commandBuffer, v.image(), v.subresourceLayer(), vk::Offset3D{ci[0], ci[1], 0}, vk::Extent3D{1,1,1});
 				frame->mSelectionDataValid = true;

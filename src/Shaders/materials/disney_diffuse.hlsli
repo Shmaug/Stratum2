@@ -24,16 +24,16 @@ MaterialEvalRecord disneydiffuse_eval(const DisneyMaterialData bsdf, const float
 		return r; // No light through the surface
 	}
 	r.mReflectance = disneydiffuse_eval(bsdf, dirIn, dirOut);
-	r.mFwdPdfW = cosine_hemisphere_pdfW(abs(dirOut.z));
-	r.mRevPdfW = cosine_hemisphere_pdfW(abs(dirIn.z));
+	r.mFwdPdfW = cosHemispherePdfW(abs(dirOut.z));
+	r.mRevPdfW = cosHemispherePdfW(abs(dirIn.z));
 	return r;
 }
 MaterialSampleRecord disneydiffuse_sample(const DisneyMaterialData bsdf, const float3 rnd, const float3 dirIn, const bool adjoint) {
 	MaterialSampleRecord r;
-	r.mDirection = sample_cos_hemisphere(rnd.x, rnd.y);
+	r.mDirection = sampleCosHemisphere(rnd.x, rnd.y);
 	if (dirIn.z < 0) r.mDirection = -r.mDirection;
-	r.mFwdPdfW = cosine_hemisphere_pdfW(abs(r.mDirection.z));
-	r.mRevPdfW = cosine_hemisphere_pdfW(abs(dirIn.z));
+	r.mFwdPdfW = cosHemispherePdfW(abs(r.mDirection.z));
+	r.mRevPdfW = cosHemispherePdfW(abs(dirIn.z));
 	r.mEta = 0;
 	r.mRoughness = 1;
 	return r;

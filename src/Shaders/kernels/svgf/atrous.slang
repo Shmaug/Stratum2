@@ -84,7 +84,7 @@ void subsampled(inout TapData t) {
 	| | |x| | |
 	*/
 
-	if ((gPushConstants.gIteration & 1) == 0) {
+	if ((gPushConstants.mIteration & 1) == 0) {
 		/*
 		| | | | | |
 		| |x| |x| |
@@ -164,10 +164,14 @@ void atrous(inout TapData t) {
 }
 
 [shader("compute")]
-[numthreads(8,8,1)]
-void main(uint3 index : SV_DispatchThreadId) {
+[numthreads(8, 8, 1)]
+void main(uint3 index: SV_DispatchThreadId) {
+    uint2 extent;
+    gParams.mVisibility.GetDimensions(extent.x, extent.y);
+    if (any(index.xy >= extent)) return;
+
 	TapData t;
-	t.view_index = gParams.getViewIndex(index.xy);
+    t.view_index = getViewIndex(index.xy, extent, gPushConstants.mViewCount);
 	if (t.view_index == -1) return;
 
 	const VisibilityData vis = reinterpret<VisibilityData>(gParams.mVisibility[index.xy]);
@@ -183,11 +187,11 @@ void main(uint3 index : SV_DispatchThreadId) {
 	t.compute_sigma_luminance();
 
 	if (!isinf(t.z_center)) { // only filter foreground pixels
-		switch ((FilterKernelType)gFilterKernelType) {
-		default:
+		switch (gFilterKernelType) {
 		case FilterKernelType::eAtrous:
 			atrous(t);
 			break;
+		default:
 		case FilterKernelType::eBox3:
 			box3(t);
 			break;

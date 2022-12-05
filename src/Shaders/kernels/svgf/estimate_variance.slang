@@ -1,7 +1,7 @@
 struct PushConstants {
-	uint gViewCount;
-	float gHistoryLimit;
-	float gVarianceBoostLength;
+	uint mViewCount;
+	float mHistoryLimit;
+	float mVarianceBoostLength;
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> gPushConstants;
 
@@ -14,13 +14,13 @@ ParameterBlock<DenoiserParameters> gParams;
 #endif
 
 [shader("compute")]
-[numthreads(8,8,1)]
-void main(uint3 index : SV_DispatchThreadId, uint3 group_index : SV_GroupThreadID) {
-	const uint view_index = gParams.getViewIndex(index.xy);
-	if (view_index == -1) return;
+[numthreads(8, 8, 1)]
+void main(uint3 index: SV_DispatchThreadId, uint3 group_index: SV_GroupThreadID) {
+    uint2 extent;
+    gParams.mVisibility.GetDimensions(extent.x, extent.y);
+    if (any(index.xy >= extent)) return;
 
-	uint2 extent;
-	gParams.mFilterImages[0].GetDimensions(extent.x, extent.y);
+	const uint view_index = getViewIndex(index.xy, extent, gPushConstants.mViewCount);
 
 	float4 c = gParams.mAccumColor[index.xy];
 	float2 m = gParams.mAccumMoments[index.xy];
@@ -28,7 +28,7 @@ void main(uint3 index : SV_DispatchThreadId, uint3 group_index : SV_GroupThreadI
 	const VisibilityData vis = reinterpret<VisibilityData>(gParams.mVisibility[index.xy]);
 
 	const float histlen = c.a;
-	if (vis.instanceIndex() == INVALID_INSTANCE || histlen >= gPushConstants.gHistoryLimit) {
+	if (vis.instanceIndex() == INVALID_INSTANCE || histlen >= gPushConstants.mHistoryLimit) {
 		gParams.mFilterImages[0][index.xy] = float4(c.rgb, abs(m.y - pow2(m.x)));
 		return;
 	}
@@ -63,7 +63,7 @@ void main(uint3 index : SV_DispatchThreadId, uint3 group_index : SV_GroupThreadI
 	c.rgb *= sum_w;
 
 	float v = abs(m.y - pow2(m.x));
-	if (gPushConstants.gVarianceBoostLength > 0)
-		v *= max(1, gPushConstants.gVarianceBoostLength/(1+c.a));
+	if (gPushConstants.mVarianceBoostLength > 0)
+		v *= max(1, gPushConstants.mVarianceBoostLength/(1+c.a));
 	gParams.mFilterImages[0][index.xy] = float4(c.rgb, v);
 }

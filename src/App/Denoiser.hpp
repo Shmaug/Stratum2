@@ -47,7 +47,9 @@ private:
 	DenoiserDebugMode mDebugMode = DenoiserDebugMode::eNone;
 	bool mResetAccumulation = false;
 
-	PushConstants mPushConstants;
+	uint32_t mHistoryLimit = 0;
+	uint32_t mVarianceBoostLength = 4;
+	float mSigmaLuminanceBoost = 3;
 
 	ComputePipelineCache mTemporalAccumulationPipeline;
 	ComputePipelineCache mEstimateVariancePipeline;
@@ -67,7 +69,6 @@ private:
 		Image::View mAccumColor;
 		Image::View mAccumMoments;
 		array<Image::View, 2> mTemp;
-		shared_ptr<DescriptorSets> mDescriptors;
 	};
 
 	DeviceResourcePool<FrameResources> mFrameResources;

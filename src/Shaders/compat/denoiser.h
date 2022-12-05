@@ -52,13 +52,6 @@ struct DenoiserParameters {
 	Texture2D<float2> mPrevAccumMoments;
 
 	SamplerState mStaticSampler;
-
-	uint getViewIndex(const uint2 index) {
-		for (uint i = 0; i < gPushConstants.mViewCount; i++)
-			if (all(index >= mViews[i].mImageMin) && all(index < mViews[i].mImageMax))
-				return i;
-		return -1;
-	}
 };
 
 #endif

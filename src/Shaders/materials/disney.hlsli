@@ -43,38 +43,36 @@ float Gc(const float3 w_l) {
 #include "compat/image_value.h"
 
 struct DisneyMaterial : BSDF {
-	DisneyMaterialData bsdf;
+    DisneyMaterialData bsdf;
 
-	SLANG_MUTATING
-	void load(uint address, const float2 uv, const float uvScreenSize, inout uint packedShadingNormal, inout uint packedTangent, const bool flipBitangent) {
-		for (int i = 0; i < DisneyMaterialData::gDataCount; i++)
-			bsdf.data[i] = ImageValue4(address).eval(uv, uvScreenSize);
+    [mutating]
+    void load(const uint address, const float2 uv, const float uvScreenSize, inout uint packedShadingNormal, inout uint packedTangent, const bool flipBitangent) {
+        for (int i = 0; i < DisneyMaterialData::gDataCount; i++)
+            bsdf.data[i] = ImageValue4(gScene.mMaterialData, address + i * ImageValue4::PackedSize).eval(uv, uvScreenSize);
 
-		address += 4; // skip alpha mask
+        // normal map
+        if (CHECK_FEATURE(NormalMaps)) {
+            const uint2 p = gScene.mMaterialData.Load<uint2>(address + (ImageValue4::PackedSize * DisneyMaterialData::gDataCount) + 4);
+            ImageValue3 bump_img = { 1, p.x };
+            if (bump_img.hasImage() && asfloat(p.y) > 0) {
+                float3 bump = bump_img.eval(uv, uvScreenSize) * 2 - 1;
+                bump = normalize(float3(bump.xy * asfloat(p.y), bump.z > 0 ? bump.z : 1));
 
-		// normal map
-		if (gUseNormalMaps) {
-			const uint2 p = gScene.mMaterialData.Load<uint2>(address);
-			ImageValue3 bump_img = { 1, p.x };
-			if (bump_img.hasImage() && asfloat(p.y) > 0) {
-				float3 bump = bump_img.eval(uv, uvScreenSize)*2-1;
-				bump = normalize(float3(bump.xy * asfloat(p.y), bump.z > 0 ? bump.z : 1));
+                float3 n = unpackNormal(packedShadingNormal);
+                float3 t = unpackNormal(packedTangent);
 
-				float3 n = unpackNormal(packedShadingNormal);
-				float3 t = unpackNormal(packedTangent);
+                n = normalize(t * bump.x + cross(n, t) * (flipBitangent ? -1 : 1) * bump.y + n * bump.z);
+                t = normalize(t - n * dot(n, t));
 
-				n = normalize(t*bump.x + cross(n, t)*(flipBitangent ? -1 : 1)*bump.y + n*bump.z);
-				t = normalize(t - n*dot(n, t));
+                packedShadingNormal = packNormal(n);
+                packedTangent = packNormal(t);
+            }
+        }
+    }
 
-				packedShadingNormal = packNormal(n);
-				packedTangent        = packNormal(t);
-			}
-		}
-	}
-
-	SLANG_MUTATING
-	void load(inout ShadingData sd) {
-		load(sd.materialAddress, sd.mTexcoord, sd.mTexcoordScreenSize, sd.mPackedShadingNormal, sd.mPackedTangent, sd.isBitangentFlipped());
+	[mutating]
+    void load(inout ShadingData sd) {
+        load(sd.materialAddress, sd.mTexcoord, sd.mTexcoordScreenSize, sd.mPackedShadingNormal, sd.mPackedTangent, sd.isBitangentFlipped);
 	}
 
 	__init(uint address, const float2 uv, const float uvScreenSize, inout uint packedShadingNormal, inout uint packedTangent, const bool flipBitangent) {
@@ -92,7 +90,7 @@ struct DisneyMaterial : BSDF {
 
 	bool isSingular() { return (bsdf.metallic() > 0.999 || bsdf.transmission() > 0.999) && bsdf.roughness() <= 1e-2; }
 
-	MaterialEvalRecord evaluate(const float3 dirIn, const float3 dirOut, const bool adjoint) {
+    MaterialEvalRecord evaluate<let Adjoint : bool>(const float3 dirIn, const float3 dirOut) {
 		MaterialEvalRecord r;
 		if (bsdf.emission() > 0) {
 			r.mReflectance = 0;
@@ -125,7 +123,7 @@ struct DisneyMaterial : BSDF {
 		r.mRevPdfW = 0;
 		if (transmit) {
 			if (w_glass > 0) {
-				r.mReflectance = w_glass * disneyglass_eval_refract(bsdf.baseColor(), F, D, G_in * G_out, dirIn.z, h_dot_in, h_dot_out, local_eta, adjoint);
+				r.mReflectance = w_glass * disneyglass_eval_refract(bsdf.baseColor(), F, D, G_in * G_out, dirIn.z, h_dot_in, h_dot_out, local_eta, Adjoint);
 				r.mFwdPdfW     = w_glass * disneyglass_refract_pdf(F, D, G_in, dirIn.z, h_dot_in, h_dot_out, local_eta);
 				r.mRevPdfW     = w_glass * disneyglass_refract_pdf(fresnel_dielectric(h_dot_out, 1/local_eta), D, G_out, dirOut.z, h_dot_out, h_dot_in, 1/local_eta);
 			}
@@ -148,14 +146,14 @@ struct DisneyMaterial : BSDF {
 			}
 			if (w_diffuse > 0) {
 				r.mReflectance += w_diffuse * disneydiffuse_eval(bsdf, dirIn, dirOut);
-				r.mFwdPdfW     += w_diffuse * cosine_hemisphere_pdfW(abs(dirOut.z));
-				r.mRevPdfW     += w_diffuse * cosine_hemisphere_pdfW(abs(dirIn.z));
+				r.mFwdPdfW     += w_diffuse * cosHemispherePdfW(abs(dirOut.z));
+				r.mRevPdfW     += w_diffuse * cosHemispherePdfW(abs(dirIn.z));
 			}
 		}
 		return r;
 	}
 
-	MaterialSampleRecord sample(const float3 rnd, const float3 dirIn, const bool adjoint) {
+    MaterialSampleRecord sample<let Adjoint : bool>(const float3 rnd, const float3 dirIn) {
 		MaterialSampleRecord r;
 		if (bsdf.emission() > 0) {
 			r.mFwdPdfW = r.mRevPdfW = 0;
@@ -226,7 +224,7 @@ struct DisneyMaterial : BSDF {
 				r.mRoughness = alpha_c;
 			} else {
 				// diffuse
-				r.mDirection = sample_cos_hemisphere(rnd.x, rnd.y);
+				r.mDirection = sampleCosHemisphere(rnd.x, rnd.y);
 				if (dirIn.z < 0) r.mDirection = -r.mDirection;
 				r.mRoughness = 1;
 				h = normalize(dirIn + r.mDirection);
@@ -261,8 +259,8 @@ struct DisneyMaterial : BSDF {
 		}
 
 		if (w_diffuse > 0) {
-			r.mFwdPdfW += w_diffuse * cosine_hemisphere_pdfW(abs(r.mDirection.z));
-			r.mRevPdfW += w_diffuse * cosine_hemisphere_pdfW(abs(dirIn.z));
+			r.mFwdPdfW += w_diffuse * cosHemispherePdfW(abs(r.mDirection.z));
+			r.mRevPdfW += w_diffuse * cosHemispherePdfW(abs(dirIn.z));
 		}
 
 		return r;

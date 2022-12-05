@@ -22,7 +22,8 @@ MaterialEvalRecord disneymetal_eval(const DisneyMaterialData bsdf, const float3 
 	const float G_out = G1(alpha.x, alpha.y, dirOut);
 	r.mReflectance = disneymetal_eval(bsdf.baseColor(), D, G_in * G_out, dirIn, dot(h, dirOut));
 	r.mFwdPdfW = disneymetal_eval_pdf(D, G_in, dirIn.z);
-	r.mRevPdfW = disneymetal_eval_pdf(D, G_out, dirOut.z);
+    r.mRevPdfW = disneymetal_eval_pdf(D, G_out, dirOut.z);
+    return r;
 }
 
 MaterialSampleRecord disneymetal_sample(const DisneyMaterialData bsdf, const float3 rnd, const float3 dirIn, const bool adjoint) {

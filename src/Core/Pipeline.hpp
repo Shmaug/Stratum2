@@ -75,14 +75,14 @@ public:
 		unordered_map<string, vk::DescriptorBindingFlags> mBindingFlags;
 	};
 
-	ComputePipeline(const string& name, const shared_ptr<Shader>& shader, const Metadata& metadata = {});
+	ComputePipeline(const string& name, const shared_ptr<Shader>& shader, const Metadata& metadata = {}, const vector<std::shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts = {});
 
 	DECLARE_DEREFERENCE_OPERATORS(vk::raii::Pipeline, mPipeline)
 
 	inline const shared_ptr<Shader>& shader() const { return mShader; }
 	inline const shared_ptr<vk::raii::PipelineLayout>& layout() const { return mLayout; }
 	inline const vector<shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts() const { return mDescriptorSetLayouts; }
-	inline const Metadata& metadata() const { return mMetadata; }
+	inline const Metadata& metedata() const { return mMetadata; }
 
 	void pushConstants(CommandBuffer& commandBuffer, const PushConstants& constants) const;
 
@@ -124,7 +124,7 @@ class ComputePipelineCache {
 public:
 	ComputePipelineCache(const filesystem::path& sourceFile,
 		const string& entryPoint = "main",
-		const string& profile = "sm_6_7",
+		const string& profile = "sm_6_6",
 		const vector<string>& compileArgs = {},
 		const ComputePipeline::Metadata& pipelineMetadata = {}) :
 		mSourceFile(sourceFile),
@@ -138,7 +138,7 @@ public:
 	ComputePipelineCache& operator=(const ComputePipelineCache&) = default;
 	ComputePipelineCache& operator=(ComputePipelineCache&&) = default;
 
-	[[nodiscard]] shared_ptr<ComputePipeline> get(Device& device, const Defines& defines = {});
+	[[nodiscard]] shared_ptr<ComputePipeline> get(Device& device, const Defines& defines = {}, const vector<shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts = {});
 
 private:
 	filesystem::path mSourceFile;

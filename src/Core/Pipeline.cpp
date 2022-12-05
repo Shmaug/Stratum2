@@ -16,9 +16,10 @@ DescriptorSets::DescriptorSets(ComputePipeline& pipeline, const string& name) :
 	vk::raii::DescriptorSets sets(*mPipeline.mDevice, vk::DescriptorSetAllocateInfo(*mPipeline.mDevice.descriptorPool(), layouts));
 
 	mDescriptorSets.resize(sets.size());
-	ranges::transform(sets, mDescriptorSets.begin(), [](vk::raii::DescriptorSet& ds) {
-		return make_shared<vk::raii::DescriptorSet>(move(ds));
-	});
+	for (uint32_t i = 0; i < sets.size(); i++) {
+		mDescriptorSets[i] = make_shared<vk::raii::DescriptorSet>(move(sets[i]));
+		pipeline.mDevice.setDebugName(**mDescriptorSets[i], resourceName() + "[" + to_string(i) + "]");
+	}
 }
 
 void DescriptorSets::write(const Descriptors& descriptors) {
@@ -147,34 +148,18 @@ void DescriptorSets::bind(CommandBuffer& commandBuffer, const unordered_map<stri
 	vector<vk::DescriptorSet> descriptorSets(mDescriptorSets.size());
 	ranges::transform(mDescriptorSets, descriptorSets.begin(), [](const auto& ds) { return **ds; });
 	commandBuffer->bindDescriptorSets(vk::PipelineBindPoint::eCompute, **mPipeline.layout(), 0, descriptorSets, dynamicOffsetValues);
-
-	// warn if unbound descriptors
-	/*
-	for (const auto&[id, binding] : mPipeline.shader()->descriptorMap()) {
-		if (mPipeline.metadata().mImmutableSamplers.find(id) != mPipeline.metadata().mImmutableSamplers.end())
-			continue;
-		if (auto flag_it = mPipeline.metadata().mBindingFlags.find(id); flag_it != mPipeline.metadata().mBindingFlags.end())
-			if (flag_it->second & vk::DescriptorBindingFlagBits::ePartiallyBound)
-				continue;
-		uint32_t total = 1;
-		for (uint32_t s : binding.mArraySize)
-			total *= s;
-		for (uint32_t i = 0; i < total; i++)
-			if (mDescriptors.find({ id, i }) == mDescriptors.end())
-				cout << "Warning: Unbound descriptor " << id << " (" << binding.mSet << "." << binding.mBinding << "[" << i << "]) while binding DescriptorSets " << resourceName() << endl;
-	}*/
 }
 
 
 
-ComputePipeline::ComputePipeline(const string& name, const shared_ptr<Shader>& shader, const Metadata& metadata)
-	: Device::Resource(shader->mDevice, name), mShader(shader), mPipeline(nullptr), mMetadata(metadata) {
+ComputePipeline::ComputePipeline(const string& name, const shared_ptr<Shader>& shader, const Metadata& metadata, const vector<std::shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts)
+	: Device::Resource(shader->mDevice, name), mShader(shader), mPipeline(nullptr), mMetadata(metadata), mDescriptorSetLayouts(descriptorSetLayouts) {
 
 	// gather descriptorset bindings
 
 	vector<map<uint32_t, tuple<vk::DescriptorSetLayoutBinding, optional<vk::DescriptorBindingFlags>, vector<vk::Sampler>>>> bindings;
 
-    for (const auto&[id, binding] : shader->descriptorMap()) {
+	for (const auto&[id, binding] : shader->descriptorMap()) {
 		// compute total array size
 		uint32_t descriptorCount = 1;
 		for (const uint32_t v : binding.mArraySize)
@@ -223,12 +208,13 @@ ComputePipeline::ComputePipeline(const string& name, const shared_ptr<Shader>& s
 
 			setLayoutBinding.stageFlags |= shader->stage();
 		}
-    }
+	}
 
 	// create DescriptorSetLayouts
 
 	mDescriptorSetLayouts.resize(bindings.size());
 	for (uint32_t i = 0; i < bindings.size(); i++) {
+		if (mDescriptorSetLayouts[i]) continue;
 		vector<vk::DescriptorSetLayoutBinding> layoutBindings;
 		vector<vk::DescriptorBindingFlags> bindingFlags;
 		bool hasFlags = false;
@@ -244,7 +230,9 @@ ComputePipeline::ComputePipeline(const string& name, const shared_ptr<Shader>& s
 
 		vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo(bindingFlags);
 		mDescriptorSetLayouts[i] = make_shared<vk::raii::DescriptorSetLayout>(*mDevice, vk::DescriptorSetLayoutCreateInfo(mMetadata.mDescriptorSetLayoutFlags, layoutBindings, hasFlags ? &bindingFlagsInfo : nullptr));
+		mDevice.setDebugName(**mDescriptorSetLayouts[i], resourceName() + "/DescriptorSetLayout[" + to_string(i) + "]");
 	}
+
 
     // populate pushConstantRanges
 
@@ -266,6 +254,7 @@ ComputePipeline::ComputePipeline(const string& name, const shared_ptr<Shader>& s
 	vector<vk::DescriptorSetLayout> vklayouts(mDescriptorSetLayouts.size());
 	ranges::transform(mDescriptorSetLayouts, vklayouts.begin(), [](auto ds) { return **ds; });
 	mLayout = make_shared<vk::raii::PipelineLayout>(*mDevice, vk::PipelineLayoutCreateInfo(mMetadata.mLayoutFlags, vklayouts, pushConstantRanges));
+	mDevice.setDebugName(**mLayout, resourceName() + "/Layout");
 
 	// create pipeline
 
@@ -273,7 +262,9 @@ ComputePipeline::ComputePipeline(const string& name, const shared_ptr<Shader>& s
 		mMetadata.mFlags,
 		vk::PipelineShaderStageCreateInfo(mMetadata.mStageLayoutFlags, vk::ShaderStageFlagBits::eCompute, ***shader, "main"),
 		**mLayout));
+	mDevice.setDebugName(*mPipeline, resourceName());
 }
+
 
 void ComputePipeline::pushConstants(CommandBuffer& commandBuffer, const PushConstants& constants) const {
 	for (const auto[name, pushConstant] : constants) {
@@ -318,18 +309,18 @@ void ComputePipeline::dispatch(CommandBuffer& commandBuffer, const vk::Extent3D&
 }
 
 
-shared_ptr<ComputePipeline> ComputePipelineCache::get(Device& device, const Defines& defines) {
+shared_ptr<ComputePipeline> ComputePipelineCache::get(Device& device, const Defines& defines, const vector<shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts) {
 	size_t key = 0;
-	for (auto[d,v] : defines)
-		key = hashArgs(key, d, v);
+	for (const auto& d : defines)
+		key = hashArgs(key, d);
+	for (const auto& l : descriptorSetLayouts)
+		key = hashArgs(key, l);
 
 	if (auto it = mPipelines.find(key); it != mPipelines.end())
 		return it->second;
 
-	auto pipeline = make_shared<ComputePipeline>(
-		mSourceFile.stem().string() + "_" + mEntryPoint,
-		make_shared<Shader>(device, mSourceFile, mEntryPoint, mProfile, mCompileArgs, defines),
-		mPipelineMetadata );
+	const shared_ptr<Shader> shader = make_shared<Shader>(device, mSourceFile, mEntryPoint, mProfile, mCompileArgs, defines);
+	const shared_ptr<ComputePipeline> pipeline = make_shared<ComputePipeline>(mSourceFile.stem().string() + "_" + mEntryPoint, shader, mPipelineMetadata, descriptorSetLayouts);
 	return mPipelines.emplace(key, pipeline).first->second;
 }
 

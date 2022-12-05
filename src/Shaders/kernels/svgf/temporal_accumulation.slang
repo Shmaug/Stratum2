@@ -19,10 +19,13 @@ struct PushConstants {
 ParameterBlock<DenoiserParameters> gParams;
 
 [shader("compute")]
-[numthreads(8,8,1)]
-void main(uint3 index : SV_DispatchThreadId) {
-	const uint view_index = gParams.getViewIndex(index.xy);
-	if (view_index == -1) return;
+[numthreads(8, 8, 1)]
+void main(uint3 index: SV_DispatchThreadId) {
+    uint2 extent;
+    gParams.mVisibility.GetDimensions(extent.x, extent.y);
+    if (any(index.xy >= extent)) return;
+
+    const uint view_index = getViewIndex(index.xy, extent, gPushConstants.mViewCount);
 
 	const uint2 ipos = index.xy;
 

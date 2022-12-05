@@ -46,6 +46,8 @@ private:
 
 		chrono::high_resolution_clock::time_point mTime;
 
+		vector<pair<ViewData,TransformData>> mViews;
+
 		shared_ptr<Scene::FrameResources> mSceneData;
 		Buffer::View<VisibilityData> mSelectionData;
 		bool mSelectionDataValid;

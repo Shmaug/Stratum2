@@ -42,19 +42,19 @@ struct ShadingData {
 };
 
 struct IntersectionResult {
-	float t;
-	uint instancePrimitiveIndex;
+	float mDistance;
+	uint mInstancePrimitiveIndex;
 	property uint instanceIndex {
-		get { return BF_GET(instancePrimitiveIndex, 0, 16); }
-		set { BF_SET(instancePrimitiveIndex, newValue, 0, 16); }
+        get { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
+        set { BF_SET(mInstancePrimitiveIndex, newValue, 0, 16); }
 	}
 	property uint primitiveIndex {
-		get { return BF_GET(instancePrimitiveIndex, 16, 16); }
-		set { BF_SET(instancePrimitiveIndex, newValue, 16, 16); }
+		get { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
+		set { BF_SET(mInstancePrimitiveIndex, newValue, 16, 16); }
 	}
 	property InstanceData instance { get { return gScene.mInstances[instanceIndex]; } }
 	property TransformData transform { get { return gScene.mInstanceTransforms[instanceIndex]; } }
-	float shapePdfA;
+	float mShapePdfA;
 };
 
 float3 rayOffset(const float3 P, const float3 Ng) {
@@ -304,27 +304,27 @@ extension SceneParameters {
 		if (rayQuery.CommittedStatus() == COMMITTED_NOTHING)
 			return false;
 
-		isect.t = rayQuery.CommittedRayT();
+		isect.mDistance = rayQuery.CommittedRayT();
 		isect.instanceIndex = rayQuery.CommittedInstanceID();
 
 		if (rayQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
 			MeshInstanceData meshInstance = reinterpret<MeshInstanceData>(isect.instance);
 			isect.primitiveIndex = rayQuery.CommittedPrimitiveIndex();
 			shadingData = makeTriangleShadingData(meshInstance, isect.transform, rayQuery.CommittedPrimitiveIndex(), rayQuery.CommittedTriangleBarycentrics());
-			isect.shapePdfA = 1 / (shadingData.mShapeArea * meshInstance.primitiveCount());
+			isect.mShapePdfA = 1 / (shadingData.mShapeArea * meshInstance.primitiveCount());
 		} else if (rayQuery.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT) {
 			isect.primitiveIndex = INVALID_PRIMITIVE;
 			const float3 localPosition = rayQuery.CommittedObjectRayOrigin() + rayQuery.CommittedObjectRayDirection()*rayQuery.CommittedRayT();
 			switch (isect.instance.type()) {
 				case INSTANCE_TYPE_SPHERE:
 					shadingData = makeSphereShadingData(reinterpret<SphereInstanceData>(isect.instance), isect.transform, localPosition);
-					isect.shapePdfA = 1/shadingData.mShapeArea;
+					isect.mShapePdfA = 1/shadingData.mShapeArea;
 					break;
 				case INSTANCE_TYPE_VOLUME:
 					// shadingData.mPackedGeometryNormal set in the rayQuery loop above
 					const uint n = shadingData.mPackedGeometryNormal;
 					shadingData = makeVolumeShadingData(reinterpret<VolumeInstanceData>(isect.instance), isect.transform, localPosition);
-					isect.shapePdfA = 1;
+					isect.mShapePdfA = 1;
 					shadingData.mPackedGeometryNormal = n;
 					break;
 			}
@@ -358,7 +358,7 @@ extension SceneParameters {
 					rng,
 					invTransform.transformPoint(ray.Origin + ray.Direction*ray.TMin),
 					invTransform.transformVector(ray.Direction),
-					isect.t - ray.TMin,
+					isect.mDistance - ray.TMin,
 					/*inout*/ beta,
 					/*out*/ _dirPdf,
 					/*out*/ _neePdf,
@@ -373,7 +373,7 @@ extension SceneParameters {
 					isect.primitiveIndex = INVALID_PRIMITIVE;
 					shadingData.mPosition = p;
 					shadingData.mShapeArea = 0;
-					isect.t = length(p - ray.Origin);
+					isect.mDistance = length(p - ray.Origin);
 					return true;
 				}
 			}
@@ -395,7 +395,7 @@ extension SceneParameters {
 				ray.Origin = rayOffset(shadingData.mPosition, ng);
 			}
 			// TODO: ray.Origin shouldn't be modified, instead offset ray.TMin somehow
-			ray.TMin += isect.t;
+			ray.TMin += isect.mDistance;
 		}
 	}
 
@@ -442,7 +442,7 @@ extension SceneParameters {
 					rng,
 					invTransform.transformPoint(ray.Origin + ray.Direction*ray.TMin),
 					invTransform.transformVector(ray.Direction),
-					isect.t - ray.TMin,
+					isect.mDistance - ray.TMin,
 					/*inout*/ beta,
 					/*out*/ _dirPdf,
 					/*out*/ _neePdf,
@@ -467,7 +467,7 @@ extension SceneParameters {
 				ray.Origin = rayOffset(shadingData.mPosition, ng);
 			}
 			ray.TMin = 0;
-			ray.TMax -= isect.t;
+			ray.TMax -= isect.mDistance;
 		}
 	}
 };

@@ -36,9 +36,6 @@ void Denoiser::createPipelines(Device& device) {
 	mEstimateVariancePipeline     = ComputePipelineCache(shaderPath / "estimate_variance.slang"    , "main"    , "cs_6_6", {}, md);
 	mAtrousPipeline               = ComputePipelineCache(shaderPath / "atrous.slang"               , "main"    , "cs_6_6", {}, md);
 	mCopyRGBPipeline              = ComputePipelineCache(shaderPath / "atrous.slang"               , "copy_rgb", "cs_6_6", {}, md);
-
-	mPushConstants["mHistoryLimit"] = 0.f;
-	mPushConstants["mSigmaLuminanceBoost"] = 3.f;
 }
 
 void Denoiser::drawGui() {
@@ -48,32 +45,32 @@ void Denoiser::drawGui() {
 		device->waitIdle();
 		createPipelines(device);
 	}
-	ImGui::PopID();
 
 	ImGui::SetNextItemWidth(200);
-	Gui::enumDropdown<DenoiserDebugMode>("Denoiser Debug Mode", mDebugMode, (uint32_t)DenoiserDebugMode::eDebugModeCount);
+	Gui::enumDropdown<DenoiserDebugMode>("Debug Mode", mDebugMode, (uint32_t)DenoiserDebugMode::eDebugModeCount);
+	ImGui::PopID();
 
 	ImGui::Text("%u frames accumulated", mAccumulatedFrames);
 	ImGui::SameLine();
-	if (ImGui::Button("Reset Accumulation"))
+	if (ImGui::Button("Reset accumulation"))
 		resetAccumulation();
 
 	ImGui::Checkbox("Reprojection", &mReprojection);
-	if (ImGui::Checkbox("Demodulate Albedo", &mDemodulateAlbedo))
+	if (ImGui::Checkbox("Demodulate albedo", &mDemodulateAlbedo))
 		resetAccumulation();
 
 	ImGui::PushItemWidth(40);
-	ImGui::DragFloat("Target Sample Count", &mPushConstants["mHistoryLimit"].get<float>());
-	ImGui::DragScalar("Filter Iterations", ImGuiDataType_U32, &mAtrousIterations, 0.1f);
+	ImGui::DragScalar("Target sample count", ImGuiDataType_U32, &mHistoryLimit);
+	ImGui::DragScalar("Filter iterations", ImGuiDataType_U32, &mAtrousIterations, 0.1f);
 
 	if (mAtrousIterations > 0) {
 		ImGui::Indent();
-		ImGui::DragFloat("Variance Boost Frames", &mPushConstants["mVarianceBoostLength"].get<float>());
-		ImGui::DragFloat("Sigma Luminance Boost", &mPushConstants["mSigmaLuminanceBoost"].get<float>(), .1f, 0, 0, "%.2f");
+		ImGui::DragScalar("Variance boost frames", ImGuiDataType_U32, &mVarianceBoostLength);
+		ImGui::DragFloat("Sigma luminance boost", &mSigmaLuminanceBoost, .1f, 0, 0, "%.2f");
 		ImGui::PopItemWidth();
 		Gui::enumDropdown<FilterKernelType>("Filter", mFilterType, (uint32_t)FilterKernelType::eFilterKernelTypeCount);
 		ImGui::PushItemWidth(40);
-		ImGui::DragScalar("History Tap Iteration", ImGuiDataType_U32, &mHistoryTap, 0.1f);
+		ImGui::DragScalar("History tap iteration", ImGuiDataType_U32, &mHistoryTap, 0.1f);
 		ImGui::Unindent();
 	}
 	ImGui::PopItemWidth();
@@ -130,13 +127,11 @@ Image::View Denoiser::denoise(
 
 	Image::View output = radiance;
 
-	PushConstants pushConstants = mPushConstants;
-	pushConstants["mViewCount"] = (uint32_t)views.size();
-
 	Defines defines {
 		{"gReprojection", to_string(mReprojection) },
 		{"gDemodulateAlbedo", to_string(mDemodulateAlbedo) },
-		{"gDebugMode", "(DenoiserDebugMode)" + to_string((uint32_t)mDebugMode) }
+		{"gDebugMode", "(DenoiserDebugMode)" + to_string((uint32_t)mDebugMode) },
+		{"gFilterKernelType", to_string((uint32_t)mFilterType) }
 	};
 
 	if (!mResetAccumulation && mPrevFrame && mPrevFrame->mRadiance && mPrevFrame->mRadiance.extent() == mCurFrame->mRadiance.extent()) {
@@ -157,13 +152,18 @@ Image::View Denoiser::denoise(
 		descriptors[{"gParams.mPrevAccumColor",0}]   = ImageDescriptor{ mPrevFrame->mAccumColor  , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
 		descriptors[{"gParams.mPrevAccumMoments",0}] = ImageDescriptor{ mPrevFrame->mAccumMoments, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
 
-		auto temporalAccumulation = mTemporalAccumulationPipeline.get(commandBuffer.mDevice, defines);
-		mCurFrame->mDescriptors = temporalAccumulation->getDescriptorSets(descriptors);
+
+		//mCurFrame->mDescriptors = temporalAccumulation->getDescriptorSets(descriptors);
+
 		output = mCurFrame->mAccumColor;
 
 		{ // temporal accumulation
 			ProfilerScope ps("Temporal accumulation", &commandBuffer);
-			temporalAccumulation->dispatchTiled(commandBuffer, extent, mCurFrame->mDescriptors, {}, pushConstants);
+			auto temporalAccumulation = mTemporalAccumulationPipeline.get(commandBuffer.mDevice, defines);
+			temporalAccumulation->dispatchTiled(commandBuffer, extent, descriptors, {}, {
+				{ "mViewCount", PushConstantValue((uint32_t)views.size()) },
+				{ "mHistoryLimit", PushConstantValue(mHistoryLimit) },
+			});
 		}
 
 		if (mAtrousIterations > 0) {
@@ -173,25 +173,35 @@ Image::View Denoiser::denoise(
 				mCurFrame->mAccumMoments.barrier(commandBuffer, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 
 				ProfilerScope ps("Estimate variance", &commandBuffer);
-				mEstimateVariancePipeline.get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, extent, mCurFrame->mDescriptors, {}, pushConstants);
+				auto estimateVariance = mEstimateVariancePipeline.get(commandBuffer.mDevice, defines);
+				estimateVariance->dispatchTiled(commandBuffer, extent, descriptors, {}, {
+					{ "mViewCount", PushConstantValue((uint32_t)views.size()) },
+					{ "mHistoryLimit", PushConstantValue(mHistoryLimit) },
+					{ "mVarianceBoostLength", PushConstantValue(mVarianceBoostLength) },
+				});
 			}
 
 			ProfilerScope ps("Filter image", &commandBuffer);
-			auto atrous = mAtrousPipeline.get(commandBuffer.mDevice, defines);
+			auto atrousPipeline = mAtrousPipeline.get(commandBuffer.mDevice, defines);
+			auto atrousDescriptors = atrousPipeline->getDescriptorSets(descriptors);
 
 			for (uint32_t i = 0; i < mAtrousIterations; i++) {
 				mCurFrame->mTemp[0].barrier(commandBuffer, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 				mCurFrame->mTemp[1].barrier(commandBuffer, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 
-				pushConstants["mIteration"] = i;
-				pushConstants["mStepSize"] = 1 << i;
-				atrous->dispatchTiled(commandBuffer, extent, mCurFrame->mDescriptors, {}, pushConstants);
+				atrousPipeline->dispatchTiled(commandBuffer, extent, atrousDescriptors, {}, {
+					{ "mViewCount", PushConstantValue((uint32_t)views.size()) },
+					{ "mSigmaLuminanceBoost", PushConstantValue(mSigmaLuminanceBoost) },
+					{ "mIteration", PushConstantValue(i) },
+					{ "mStepSize", PushConstantValue(1 << i) },
+				});
 
 				if (i+1 == mHistoryTap) {
 					// copy rgb (keep w) to AccumColor
 					mCurFrame->mTemp[0].barrier(commandBuffer, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 					mCurFrame->mTemp[1].barrier(commandBuffer, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
-					mCopyRGBPipeline.get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, extent, mCurFrame->mDescriptors, {}, {});
+					auto copyRgb = mCopyRGBPipeline.get(commandBuffer.mDevice, defines);
+					copyRgb->dispatchTiled(commandBuffer, extent, descriptors, {}, {});
 				}
 			}
 			output = mCurFrame->mTemp[mAtrousIterations%2];
