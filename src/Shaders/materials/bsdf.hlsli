@@ -1,5 +1,4 @@
-#ifndef BSDF_H
-#define BSDF_H
+#pragma once
 
 struct MaterialEvalRecord {
 	float3 mReflectance;
@@ -24,5 +23,3 @@ interface BSDF {
 	MaterialEvalRecord evaluate<let Adjoint : bool>(const float3 dirIn, const float3 dirOut);
 	MaterialSampleRecord sample<let Adjoint : bool>(const float3 rnd, const float3 dirIn);
 };
-
-#endif

@@ -12,7 +12,7 @@ Texture2D<float4> gImage1;
 Texture2D<float4> gImage2;
 RWStructuredBuffer<uint> gOutput;
 
-SLANG_SHADER("compute")
+[shader("compute")]
 [numthreads(8,8,1)]
 void main(uint3 index : SV_DispatchThreadID) {
 	uint2 resolution;
@@ -23,14 +23,15 @@ void main(uint3 index : SV_DispatchThreadID) {
 	const float3 c2 = gImage2[index.xy].rgb;
 
 	float error = 0;
-	switch (gMode) {
-	case (uint)CompareMetric::eSMAPE:
+    switch (gMode) {
+    case (uint)ImageCompareMode::eSMAPE:
 		error = dot(1, abs(c1 - c2) / (abs(c1) + abs(c2)));
-		break;
-	case (uint)CompareMetric::eMSE:
+        break;
+    case (uint)ImageCompareMode::eMSE:
 		error = dot(1, pow2(c1 - c2));
 		break;
-	case (uint)CompareMetric::eAverage:
+    default:
+    case (uint)ImageCompareMode::eAverage:
 		error = dot(1, c1 - c2);
 		break;
 	}
@@ -41,7 +42,7 @@ void main(uint3 index : SV_DispatchThreadID) {
 	if (WaveIsFirstLane()) {
 		uint prev;
 		const float valf = error*gQuantization;
-		const uint val = valf;
+		const uint val = (uint)valf;
 		InterlockedAdd(gOutput[0], val, prev);
 		if (valf >= 0xFFFFFFFF || 0xFFFFFFFF - val < prev) {
 			gOutput[1] = 1;

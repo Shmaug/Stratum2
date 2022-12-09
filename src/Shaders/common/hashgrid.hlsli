@@ -1,5 +1,4 @@
-#ifndef HASHGRID_H
-#define HASHGRID_H
+#pragma once
 
 float hashgrid_cell_size(const float3 pos) {
 	if (gHashGridBucketPixelRadius < 0)
@@ -86,5 +85,3 @@ struct ReservoirHashGrid<T> {
 		mReservoirSamples[dst_index] = mAppendReservoirSamples[1 + append_index];
 	}
 };
-
-#endif

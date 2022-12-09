@@ -41,46 +41,66 @@ void PathTracer::createPipelines(Device& device) {
 	md.mBindingFlags["gScene.mVolumes"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
 
 	const filesystem::path shaderPath = *device.mInstance.findArgument("shaderKernelPath");
-	const vector<string>& args = { "-matrix-layout-row-major", "-capability", "spirv_1_5", "-Wno-30081", "-capability", "GL_EXT_ray_tracing" };
+	const vector<string>& args = {
+		"-matrix-layout-row-major",
+		"-O3",
+		"-Wno-30081",
+		"-capability", "spirv_1_5",
+		"-capability", "GL_EXT_ray_tracing"
+	};
 	const filesystem::path kernelPath = shaderPath / "path_tracer.slang";
 	mRenderPipelines[RenderPipelineIndex::eTraceViewPaths] = ComputePipelineCache(kernelPath, "sampleViewPaths", "sm_6_6", args, md);
 
-	mRayCount = make_shared<Buffer>(device, "gCounters", 4*sizeof(uint32_t), vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-	mPrevRayCount.resize(mRayCount.size());
-	mRaysPerSecond.resize(mRayCount.size());
-	memset(mRayCount.data(), 0, mRayCount.sizeBytes());
-	memset(mPrevRayCount.data(), 0, mPrevRayCount.size()*sizeof(uint32_t));
-	mRayCountTimer = 0;
+	mPerformanceCounters = make_shared<Buffer>(device, "mPerformanceCounters", 4*sizeof(uint32_t), vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+	mPrevPerformanceCounters.resize(mPerformanceCounters.size());
+	mPerformanceCounterPerSecond.resize(mPerformanceCounters.size());
+	ranges::fill(mPerformanceCounters, 0);
+	ranges::fill(mPrevPerformanceCounters, 0);
+	mPerformanceCounterTimer = 0;
 
 	mPushConstants.mMinBounces = 1;
 	mPushConstants.mMaxBounces = 3;
 	mPushConstants.mMaxDiffuseBounces = 2;
+	mPushConstants.mEnvironmentSampleProbability = 0.5f;
+
+	mPushConstants.mDebugViewVertices = 2;
+	mPushConstants.mDebugLightVertices = 1;
 }
 
 void PathTracer::drawGui() {
+	bool changed = false;
+
 	ImGui::PushID(this);
+	if (ImGui::Button("Clear resources")) {
+		mFrameResourcePool.clear();
+		mPrevFrame.reset();
+	}
+
 	if (ImGui::Button("Reload shaders")) {
+		changed = true;
 		Device& device = *mNode.findAncestor<Device>();
 		device->waitIdle();
 		createPipelines(device);
 	}
 
-	if (ImGui::Button("Clear resources")) {
-		mFrameResourcePool.clear();
-		mPrevFrame.reset();
-	}
 	ImGui::PopID();
 
-	Gui::enumDropdown<TinyPTDebugMode>("Debug mode", mDebugMode, (uint32_t)TinyPTDebugMode::eNumTinyPTDebugMode);
+	if (Gui::enumDropdown<PathTracerDebugMode>("Debug mode", mDebugMode, (uint32_t)PathTracerDebugMode::eNumPathTracerDebugMode)) changed = true;
 
-	if (ImGui::CollapsingHeader("Feature flags")) {
-		for (uint32_t i = 0; i < (uint32_t)TinyPTFeatureFlagBits::eNumTinyPTFeatureFlagBits; i++)
-			ImGui::CheckboxFlags(std::to_string((TinyPTFeatureFlagBits)i).c_str(), &mFeatureFlags, BIT(i));
+	if (mDebugMode == PathTracerDebugMode::ePathTypeContribution) {
+		if (ImGui::DragScalar("Debug view vertices" , ImGuiDataType_U32, &mPushConstants.mDebugViewVertices, 0.2f)) changed = true;
+		if (ImGui::DragScalar("Debug light vertices", ImGuiDataType_U32, &mPushConstants.mDebugLightVertices, 0.2f)) changed = true;
 	}
 
-	if (mFeatureFlags & BIT((uint32_t)TinyPTFeatureFlagBits::ePerformanceCounters)) {
-		const auto [rps, ext] = formatNumber(mRaysPerSecond[0]);
-		ImGui::Text("%.2f%s Rays/second (%u%% shadow rays)", rps, ext, (uint32_t)(100 - (100*(uint64_t)mRaysPerSecond[1]) / mRaysPerSecond[0]));
+	if (ImGui::CollapsingHeader("Feature flags")) {
+		for (uint32_t i = 0; i < (uint32_t)PathTracerFeatureFlagBits::eNumPathTracerFeatureFlagBits; i++)
+			if (ImGui::CheckboxFlags(std::to_string((PathTracerFeatureFlagBits)i).c_str(), &mFeatureFlags, BIT(i)))
+				changed = true;
+	}
+
+	if (changed && mDenoise) {
+		if (auto denoiser = mNode.getComponent<Denoiser>(); denoiser)
+			denoiser->resetAccumulation();
 	}
 
 	if (ImGui::CollapsingHeader("Configuration")) {
@@ -100,8 +120,17 @@ void PathTracer::drawGui() {
 		ImGui::DragScalar("Max bounces", ImGuiDataType_U32, &mPushConstants.mMaxBounces);
 		ImGui::DragScalar("Min bounces", ImGuiDataType_U32, &mPushConstants.mMinBounces);
 		ImGui::DragScalar("Max diffuse bounces", ImGuiDataType_U32, &mPushConstants.mMaxDiffuseBounces);
+		if (mFeatureFlags & BIT((uint32_t)PathTracerFeatureFlagBits::eNee) && mPushConstants.mEnvironmentMaterialAddress != -1 && mPushConstants.mLightCount > 0)
+			ImGui::SliderFloat("Environment sample probability", &mPushConstants.mEnvironmentSampleProbability, 0, 1);
+
 		ImGui::PopItemWidth();
 	}
+
+	if (mFeatureFlags & BIT((uint32_t)PathTracerFeatureFlagBits::ePerformanceCounters)) {
+		const auto [rps, ext] = formatNumber(mPerformanceCounterPerSecond[0]);
+		ImGui::Text("%.2f%s Rays/second (%u%% visibility)", rps, ext, mPerformanceCounterPerSecond[0] == 0 ? 0 : (uint32_t)(100*mPerformanceCounterPerSecond[1] / mPerformanceCounterPerSecond[0]));
+	}
+
 	/*
 	if (mPrevFrame && ImGui::CollapsingHeader("Export")) {
 		ImGui::Indent();
@@ -145,7 +174,7 @@ void PathTracer::drawGui() {
 }
 
 void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
-	auto sceneResources = mNode.getComponent<Scene>()->resources();
+	auto sceneResources = mNode.findAncestor<Scene>()->resources();
 	if (!sceneResources) {
 		renderTarget.clearColor(commandBuffer, vk::ClearColorValue(array<uint32_t, 4>{ 0, 0, 0, 0 }));
 		return;
@@ -182,12 +211,12 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		frame->mTime = chrono::high_resolution_clock::now();
 		if (mPrevFrame) {
 			const float deltaTime = chrono::duration_cast<chrono::duration<float>>(frame->mTime - mPrevFrame->mTime).count();
-			mRayCountTimer += deltaTime;
-			if (mRayCountTimer > 1) {
-				for (uint32_t i = 0; i < mRaysPerSecond.size(); i++)
-					mRaysPerSecond[i] = (mRayCount[i] - mPrevRayCount[i]) / mRayCountTimer;
-				ranges::copy(mRayCount, mPrevRayCount.begin());
-				mRayCountTimer = 0;
+			mPerformanceCounterTimer += deltaTime;
+			if (mPerformanceCounterTimer >= 1) {
+				for (uint32_t i = 0; i < mPerformanceCounterPerSecond.size(); i++)
+					mPerformanceCounterPerSecond[i] = (mPerformanceCounters[i] - mPrevPerformanceCounters[i]) / mPerformanceCounterTimer;
+				ranges::copy(mPerformanceCounters, mPrevPerformanceCounters.begin());
+				mPerformanceCounterTimer -= 1;
 			}
 		}
 	}
@@ -245,10 +274,10 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 
 	if (mRandomPerFrame) mPushConstants.mRandomSeed = rand();
 	mPushConstants.mEnvironmentMaterialAddress = frame->mSceneData->mEnvironmentMaterialAddress;
-	mPushConstants.mLightCount = (uint32_t)frame->mSceneData->mLightInstanceMap.size();
+	mPushConstants.mLightCount = frame->mSceneData->mLightCount;
 
 	const Defines defines {
-		{ string("gDebugMode"), "(TinyPTDebugMode)" + to_string((uint32_t)mDebugMode) },
+		{ string("gDebugMode"), "(PathTracerDebugMode)" + to_string((uint32_t)mDebugMode) },
 		{ string("gFeatureFlags"), to_string(mFeatureFlags) }
 	};
 
@@ -281,7 +310,7 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 
 		for (auto& [name, d] : frame->mSceneData->getDescriptors())
 			descriptors[{ "gScene." + name.first, name.second }] = d;
-		descriptors[{ "gScene.mPerformanceCounters", 0u }] = mRayCount;
+		descriptors[{ "gScene.mPerformanceCounters", 0u }] = mPerformanceCounters;
 
 		for (const auto&[name, buffer] : frame->mBuffers)
 			descriptors[{ "gRenderParams." + name, 0 }] = buffer;
@@ -291,22 +320,14 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		frame->mDescriptorSets = mRenderPipelines[eTraceViewPaths].get(commandBuffer.mDevice, defines)->getDescriptorSets(descriptors);
 	}
 
-	auto zeroBuffers = [&](const vector<Buffer::View<byte>>& buffers, const vk::PipelineStageFlags dstStage = vk::PipelineStageFlagBits::eComputeShader, const vk::AccessFlags dstAccess = vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite) {
-		for (auto& b : buffers)
-			b.fill(commandBuffer, 0);
-		Buffer::barriers(commandBuffer, buffers, vk::PipelineStageFlagBits::eTransfer, dstStage, vk::AccessFlagBits::eTransferWrite, dstAccess);
-	};
-
-	const PushConstants pushConstants = { { "", PushConstantValue(mPushConstants) } };
-
 	// trace view paths
 	{
 		ProfilerScope ps("Sample visibility", &commandBuffer);
-		mRenderPipelines[eTraceViewPaths].get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, extent, frame->mDescriptorSets, {}, pushConstants);
+		mRenderPipelines[eTraceViewPaths].get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, extent, frame->mDescriptorSets, {}, { { "", PushConstantValue(mPushConstants) } });
 	}
 
 
-	Image::View renderResult = get<Image::View>(frame->mImages.at((mDebugMode == TinyPTDebugMode::eAlbedo) ? "mAlbedo" : "mOutput"));
+	Image::View renderResult = get<Image::View>(frame->mImages.at((mDebugMode == PathTracerDebugMode::eAlbedo) ? "mAlbedo" : "mOutput"));
 
 	shared_ptr<Denoiser> denoiser = mNode.findDescendant<Denoiser>();
 	if (mDenoise && denoiser) {
@@ -334,6 +355,8 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		else
 			Image::blit(commandBuffer, renderResult, renderTarget);
 	}
+
+	mLastResultImage = renderResult;
 
 	// copy VisibilityData for selected pixel
 	frame->mSelectionDataValid = false;

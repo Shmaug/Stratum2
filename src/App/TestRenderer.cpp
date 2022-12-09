@@ -25,14 +25,14 @@ void TestRenderer::createPipelines(Device& device) {
 
 void TestRenderer::drawGui() {
 	ImGui::PushID(this);
+	if (ImGui::Button("Clear resources")) {
+		mFrameResourcePool.clear();
+		mPrevFrame.reset();
+	}
 	if (ImGui::Button("Reload shaders")) {
 		Device& device = *mNode.findAncestor<Device>();
 		device->waitIdle();
 		createPipelines(device);
-	}
-	if (ImGui::Button("Clear resources")) {
-		mFrameResourcePool.clear();
-		mPrevFrame.reset();
 	}
 	ImGui::PopID();
 

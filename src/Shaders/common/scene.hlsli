@@ -1,3 +1,5 @@
+#pragma once
+
 struct SceneParameters {
 	RaytracingAccelerationStructure mAccelerationStructure;
 
@@ -7,7 +9,7 @@ struct SceneParameters {
 	StructuredBuffer<TransformData> mInstanceInverseTransforms;
 	StructuredBuffer<TransformData> mInstanceMotionTransforms;
 
-	StructuredBuffer<uint> mLightInstances; // gLightInstances[light] -> instance
+    StructuredBuffer<uint> mLightInstanceMap; // mLightInstanceMap[light] -> instance
 
 	ByteAddressBuffer mMaterialData;
 	ByteAddressBuffer mVertexBuffers[gVertexBufferCount];

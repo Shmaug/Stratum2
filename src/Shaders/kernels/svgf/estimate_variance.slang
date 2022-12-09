@@ -1,6 +1,6 @@
 struct PushConstants {
 	uint mViewCount;
-	float mHistoryLimit;
+	uint mHistoryLimit;
 	float mVarianceBoostLength;
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> gPushConstants;
@@ -9,6 +9,12 @@ struct PushConstants {
 
 ParameterBlock<DenoiserParameters> gParams;
 
+#ifndef gCheckNormal
+#define gCheckNormal false
+#endif
+#ifndef gCheckDepth
+#define gCheckDepth false
+#endif
 #ifndef gDebugMode
 #define gDebugMode 0
 #endif
@@ -48,8 +54,8 @@ void main(uint3 index: SV_DispatchThreadId, uint3 group_index: SV_GroupThreadID)
             const VisibilityData vis_p = reinterpret<VisibilityData>(gParams.mVisibility[p]);
             if (gParams.mInstanceIndexMap[vis.instanceIndex()] != vis_p.instanceIndex()) continue;
 
-			const float w_z = abs(reinterpret<DepthData>(gParams.mDepth[p]).mDepth - depth.mDepth) / (length(depth.mDepthDerivative * float2(xx, yy)) + 1e-2);
-			const float w_n = pow(saturate(dot(vis_p.normal(), vis.normal())), 128);
+			const float w_z = gCheckDepth ? abs(reinterpret<DepthData>(gParams.mDepth[p]).mDepth - depth.mDepth) / (length(depth.mDepthDerivative * float2(xx, yy)) + 1e-2) : 0;
+			const float w_n = gCheckNormal ? pow(saturate(dot(vis_p.normal(), vis.normal())), 128) : 1;
 			const float w = exp(-w_z) * w_n;
 			if (isnan(w) || isinf(w)) continue;
 

@@ -1,14 +1,14 @@
 #include "../Scene.hpp"
 #include <Core/CommandBuffer.hpp>
 
-#ifdef STRATUM_ENABLE_OPENVDB
+#ifdef ENABLE_OPENVDB
 #include <openvdb/openvdb.h>
 #endif
 
 #include <nanovdb/NanoVDB.h>
 #include <nanovdb/util/GridBuilder.h>
 #include <nanovdb/util/IO.h>
-#ifdef STRATUM_ENABLE_OPENVDB
+#ifdef ENABLE_OPENVDB
 #include <nanovdb/util/OpenToNanoVDB.h>
 #endif
 
@@ -120,7 +120,7 @@ shared_ptr<Node> Scene::loadNvdb(CommandBuffer& commandBuffer, const filesystem:
 	return nullptr;
 }
 
-#ifdef STRATUM_ENABLE_OPENVDB
+#ifdef ENABLE_OPENVDB
 shared_ptr<Node> Scene::loadVdb(CommandBuffer& commandBuffer, const filesystem::path& filename) {
 	static bool initialized = false;
 	if (!initialized) {

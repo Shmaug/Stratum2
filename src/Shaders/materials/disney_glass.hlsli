@@ -62,7 +62,7 @@ MaterialSampleRecord disneyglass_sample(const DisneyMaterialData bsdf, const flo
 	const float2 alpha = max(0.0001, float2(bsdf.alpha() / aspect, bsdf.alpha() * aspect));
 	r.mRoughness = bsdf.roughness();
 
-	const float3 h = sample_visible_normals(dirIn, alpha.x, alpha.y, rnd.xy);
+	const float3 h = sampleVisibleNormals(dirIn, alpha.x, alpha.y, rnd.xy);
 
 	const float h_dot_in = dot(h, dirIn);
 	const float F = fresnel_dielectric(h_dot_in, local_eta);

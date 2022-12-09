@@ -39,6 +39,8 @@ public:
 private:
 	bool mReprojection = true;
 	bool mDemodulateAlbedo = true;
+	bool mCheckNormal = true;
+	bool mCheckDepth = true;
 
 	uint32_t mAccumulatedFrames = 0;
 	uint32_t mAtrousIterations = 0;

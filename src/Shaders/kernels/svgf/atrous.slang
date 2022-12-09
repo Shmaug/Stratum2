@@ -1,8 +1,14 @@
-#ifndef gDebugMode
-#define gDebugMode 0
+#ifndef gCheckNormal
+#define gCheckNormal false
+#endif
+#ifndef gCheckDepth
+#define gCheckDepth false
 #endif
 #ifndef gFilterKernelType
 #define gFilterKernelType 1u
+#endif
+#ifndef gDebugMode
+#define gDebugMode 0
 #endif
 
 struct PushConstants {
@@ -63,9 +69,9 @@ struct TapData {
 		const float w_l = abs(l_p - l_center) / max(sigma_l, 1e-10);
 
 		const VisibilityData vis_p = reinterpret<VisibilityData>(gParams.mVisibility[p]);
-		const DepthData depth_p = reinterpret<DepthData>(gParams.mDepth[p]);
-		const float w_z = abs(depth_p.mDepth - z_center) / (length(dz_center * float2(offset * gPushConstants.mStepSize)) + 1e-2);
-		const float w_n = pow(max(0, dot(vis_p.normal(), center_normal)), 256);
+		const DepthData depth_p    = reinterpret<DepthData>(gParams.mDepth[p]);
+		const float w_z = gCheckDepth  ? abs(depth_p.mDepth - z_center) / (length(dz_center * float2(offset * gPushConstants.mStepSize)) + 1e-2) : 0;
+		const float w_n = gCheckNormal ? pow(max(0, dot(vis_p.normal(), center_normal)), 256) : 1;
 
 		const float w = exp(-pow2(w_l) - w_z) * kernel_weight * w_n;
 		if (isinf(w) || isnan(w)) return;

@@ -38,7 +38,6 @@ void FlyCamera::update(const float deltaTime) {
 				mMoveSpeed *= (1 + ImGui::GetIO().MouseWheel / 8);
 
 			const ImVec2 delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Right);
-
 			ImGui::ResetMouseDragDelta(ImGuiMouseButton_Right);
 
 			mRotation[1] += delta[0] * fwd * mRotateSpeed;

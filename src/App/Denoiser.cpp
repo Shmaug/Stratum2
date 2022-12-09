@@ -3,6 +3,7 @@
 #include "Inspector.hpp"
 
 #include <Core/Instance.hpp>
+#include <Core/Swapchain.hpp>
 #include <Core/CommandBuffer.hpp>
 #include <Core/Profiler.hpp>
 
@@ -55,9 +56,13 @@ void Denoiser::drawGui() {
 	if (ImGui::Button("Reset accumulation"))
 		resetAccumulation();
 
-	ImGui::Checkbox("Reprojection", &mReprojection);
 	if (ImGui::Checkbox("Demodulate albedo", &mDemodulateAlbedo))
 		resetAccumulation();
+	ImGui::Checkbox("Reprojection", &mReprojection);
+	if (mReprojection) {
+		ImGui::Checkbox("Check normal", &mCheckNormal);
+		ImGui::Checkbox("Check depth", &mCheckDepth);
+	}
 
 	ImGui::PushItemWidth(40);
 	ImGui::DragScalar("Target sample count", ImGuiDataType_U32, &mHistoryLimit);
@@ -93,12 +98,18 @@ Image::View Denoiser::denoise(
 
 	{
 		ProfilerScope ps("Allocate Frame Resources", &commandBuffer);
-		if (mCurFrame)
-			mPrevFrame = mCurFrame;
+		if (mNode.root()->findDescendant<Swapchain>()->imageCount() <= 1) {
+			if (!mPrevFrame) mPrevFrame = make_shared<FrameResources>(commandBuffer.mDevice);
+			if (!mCurFrame)  mCurFrame  = make_shared<FrameResources>(commandBuffer.mDevice);
+			swap(mCurFrame, mPrevFrame);
+		} else {
+			if (mCurFrame)
+				mPrevFrame = mCurFrame;
 
-		mCurFrame = mFrameResources.get();
-		if (!mCurFrame)
-			mCurFrame = mFrameResources.emplace(make_shared<FrameResources>(commandBuffer.mDevice));
+			mCurFrame = mFrameResources.get();
+			if (!mCurFrame)
+				mCurFrame = mFrameResources.emplace(make_shared<FrameResources>(commandBuffer.mDevice));
+		}
 	}
 
 	commandBuffer.trackResource(mCurFrame);
@@ -128,10 +139,12 @@ Image::View Denoiser::denoise(
 	Image::View output = radiance;
 
 	Defines defines {
-		{"gReprojection", to_string(mReprojection) },
-		{"gDemodulateAlbedo", to_string(mDemodulateAlbedo) },
+		{"gReprojection"    , mReprojection     ? "true" : "false" },
+		{"gDemodulateAlbedo", mDemodulateAlbedo ? "true" : "false" },
+		{"gCheckNormal"     , mCheckNormal      ? "true" : "false" },
+		{"gCheckDepth"      , mCheckDepth       ? "true" : "false" },
+		{"gFilterKernelType", to_string((uint32_t)mFilterType) },
 		{"gDebugMode", "(DenoiserDebugMode)" + to_string((uint32_t)mDebugMode) },
-		{"gFilterKernelType", to_string((uint32_t)mFilterType) }
 	};
 
 	if (!mResetAccumulation && mPrevFrame && mPrevFrame->mRadiance && mPrevFrame->mRadiance.extent() == mCurFrame->mRadiance.extent()) {

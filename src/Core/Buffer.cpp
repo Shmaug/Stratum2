@@ -65,8 +65,8 @@ void Buffer::barriers(CommandBuffer& commandBuffer, const vector<Buffer::View<by
 }
 
 void Buffer::copy(CommandBuffer& commandBuffer, const Buffer::View<byte>& src, const Buffer::View<byte>& dst) {
-	if (src.sizeBytes() != dst.sizeBytes())
-		throw runtime_error("src and dst size must match");
+	if (dst.sizeBytes() < src.sizeBytes())
+		throw runtime_error("dst buffer smaller than src buffer");
 
 	commandBuffer.trackResource(src.buffer());
 	commandBuffer.trackResource(dst.buffer());

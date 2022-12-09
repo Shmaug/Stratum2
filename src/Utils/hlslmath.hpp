@@ -22,70 +22,31 @@ using uint = uint32_t;
 template<typename T, int N>        using VectorType = Eigen::Array<T, N, 1, Eigen::ColMajor, N, 1>;
 template<typename T, int M, int N> using MatrixType = Eigen::Array<T, M, N, Eigen::RowMajor, M, N>;
 
-using char2    	= VectorType<int8_t , 2>;
-using char3    	= VectorType<int8_t , 3>;
-using char4    	= VectorType<int8_t , 4>;
-using uchar2   	= VectorType<int8_t , 2>;
-using uchar3   	= VectorType<int8_t , 3>;
-using uchar4   	= VectorType<int8_t , 4>;
-using int2    	= VectorType<int32_t, 2>;
-using int3    	= VectorType<int32_t, 3>;
-using int4    	= VectorType<int32_t, 4>;
-using uint2   	= VectorType<int32_t, 2>;
-using uint3   	= VectorType<int32_t, 3>;
-using uint4   	= VectorType<int32_t, 4>;
-using long2    	= VectorType<int64_t, 2>;
-using long3    	= VectorType<int64_t, 3>;
-using long4    	= VectorType<int64_t, 4>;
-using ulong2   	= VectorType<int64_t, 2>;
-using ulong3   	= VectorType<int64_t, 3>;
-using ulong4   	= VectorType<int64_t, 4>;
-using float2  	= VectorType<float  , 2>;
-using float3  	= VectorType<float  , 3>;
-using float4  	= VectorType<float  , 4>;
-using double2  	= VectorType<double , 2>;
-using double3  	= VectorType<double , 3>;
-using double4  	= VectorType<double , 4>;
+#define DECLARE_VECTOR_TYPES(T, tname) \
+	using tname##1 = VectorType<T, 1>; \
+	using tname##2 = VectorType<T, 2>; \
+	using tname##3 = VectorType<T, 3>; \
+	using tname##4 = VectorType<T, 4>; \
+	using tname##2x2 = MatrixType<T, 2, 2>; \
+	using tname##2x3 = MatrixType<T, 2, 3>; \
+	using tname##2x4 = MatrixType<T, 2, 4>; \
+	using tname##3x2 = MatrixType<T, 3, 2>; \
+	using tname##3x3 = MatrixType<T, 3, 3>; \
+	using tname##3x4 = MatrixType<T, 3, 4>; \
+	using tname##4x2 = MatrixType<T, 4, 2>; \
+	using tname##4x3 = MatrixType<T, 4, 3>; \
+	using tname##4x4 = MatrixType<T, 4, 4>;
 
-using int2x2    = MatrixType<int32_t, 2, 2>;
-using int2x3    = MatrixType<int32_t, 2, 3>;
-using int2x4    = MatrixType<int32_t, 2, 4>;
-using int3x2    = MatrixType<int32_t, 3, 2>;
-using int3x3    = MatrixType<int32_t, 3, 3>;
-using int3x4    = MatrixType<int32_t, 3, 4>;
-using int4x2    = MatrixType<int32_t, 4, 2>;
-using int4x3    = MatrixType<int32_t, 4, 3>;
-using int4x4    = MatrixType<int32_t, 4, 4>;
+DECLARE_VECTOR_TYPES(int8_t, char)
+DECLARE_VECTOR_TYPES(int8_t, uchar)
+DECLARE_VECTOR_TYPES(int32_t, int)
+DECLARE_VECTOR_TYPES(int32_t, uint)
+DECLARE_VECTOR_TYPES(int64_t, long)
+DECLARE_VECTOR_TYPES(int64_t, ulong)
+DECLARE_VECTOR_TYPES(float, float)
+DECLARE_VECTOR_TYPES(double, double)
 
-using uint2x2   = MatrixType<uint32_t, 2, 2>;
-using uint2x3   = MatrixType<uint32_t, 2, 3>;
-using uint2x4   = MatrixType<uint32_t, 2, 4>;
-using uint3x2   = MatrixType<uint32_t, 3, 2>;
-using uint3x3   = MatrixType<uint32_t, 3, 3>;
-using uint3x4   = MatrixType<uint32_t, 3, 4>;
-using uint4x2   = MatrixType<uint32_t, 4, 2>;
-using uint4x3   = MatrixType<uint32_t, 4, 3>;
-using uint4x4   = MatrixType<uint32_t, 4, 4>;
-
-using float2x2  = MatrixType<float, 2, 2>;
-using float2x3  = MatrixType<float, 2, 3>;
-using float2x4  = MatrixType<float, 2, 4>;
-using float3x2  = MatrixType<float, 3, 2>;
-using float3x3  = MatrixType<float, 3, 3>;
-using float3x4  = MatrixType<float, 3, 4>;
-using float4x2  = MatrixType<float, 4, 2>;
-using float4x3  = MatrixType<float, 4, 3>;
-using float4x4  = MatrixType<float, 4, 4>;
-
-using double2x2 = MatrixType<double, 2, 2>;
-using double2x3 = MatrixType<double, 2, 3>;
-using double2x4 = MatrixType<double, 2, 4>;
-using double3x2 = MatrixType<double, 3, 2>;
-using double3x3 = MatrixType<double, 3, 3>;
-using double3x4 = MatrixType<double, 3, 4>;
-using double4x2 = MatrixType<double, 4, 2>;
-using double4x3 = MatrixType<double, 4, 3>;
-using double4x4 = MatrixType<double, 4, 4>;
+#undef DECLARE_VECTOR_TYPES
 
 using std::min;
 using std::max;

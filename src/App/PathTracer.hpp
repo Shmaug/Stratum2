@@ -3,7 +3,7 @@
 #include "Scene.hpp"
 
 #include <Shaders/compat/scene.h>
-#include <Shaders/compat/tinypt.h>
+#include <Shaders/compat/path_tracer.h>
 
 namespace stm2 {
 
@@ -18,6 +18,8 @@ public:
 	void drawGui();
 	void render(CommandBuffer& commandBuffer, const Image::View& renderTarget);
 
+	inline Image::View resultImage() const { return mLastResultImage; }
+
 private:
 	enum RenderPipelineIndex {
 		eTraceViewPaths,
@@ -25,20 +27,23 @@ private:
 	};
 	array<ComputePipelineCache, RenderPipelineIndex::ePipelineCount> mRenderPipelines;
 
-	TinyPTPushConstants mPushConstants;
+	PathTracerPushConstants mPushConstants;
 
 	bool mHalfColorPrecision = false;
 	bool mRandomPerFrame = true;
 	bool mDenoise = true;
 	bool mTonemap = true;
 
-	TinyPTDebugMode mDebugMode = TinyPTDebugMode::eNone;
-	uint32_t mFeatureFlags = BIT((uint32_t)TinyPTFeatureFlagBits::ePerformanceCounters);
+	PathTracerDebugMode mDebugMode = PathTracerDebugMode::eNone;
+	uint32_t mFeatureFlags =
+		BIT((uint32_t)PathTracerFeatureFlagBits::ePerformanceCounters) |
+		BIT((uint32_t)PathTracerFeatureFlagBits::eNee) |
+		BIT((uint32_t)PathTracerFeatureFlagBits::eNeeMis);
 
-	Buffer::View<uint32_t> mRayCount;
-	vector<uint32_t> mPrevRayCount;
-	vector<float> mRaysPerSecond;
-	float mRayCountTimer;
+	Buffer::View<uint32_t> mPerformanceCounters;
+	vector<uint32_t> mPrevPerformanceCounters;
+	vector<float> mPerformanceCounterPerSecond;
+	float mPerformanceCounterTimer;
 
 	class FrameResources : public Device::Resource {
 	public:
@@ -87,6 +92,7 @@ private:
 
 	DeviceResourcePool<FrameResources> mFrameResourcePool;
 	shared_ptr<FrameResources> mPrevFrame;
+	Image::View mLastResultImage;
 };
 
 }

@@ -15,7 +15,7 @@
 #include <App/PathTracer.hpp>
 #include <App/Denoiser.hpp>
 #include <App/Tonemapper.hpp>
-#define RendererType PathTracer
+#include <App/ImageComparer.hpp>
 
 namespace stm2 {
 
@@ -39,12 +39,13 @@ struct App {
 	shared_ptr<FlyCamera> mFlyCamera;
 	shared_ptr<Camera> mCamera;
 
-	shared_ptr<RendererType> mRenderer;
+	shared_ptr<PathTracer> mRenderer;
+	shared_ptr<ImageComparer> mImageComparer;
 
 	chrono::high_resolution_clock::time_point mLastUpdate;
 	int mProfilerHistoryCount = 3;
 
-	inline App(const vector<string>& args) : mPresentQueue(nullptr) {
+	inline App(const vector<string>& args) : mPresentQueue(nullptr), mLastUpdate(chrono::high_resolution_clock::now()) {
 		mRootNode = Node::create("Root");
 		mInstance = mRootNode->makeComponent<Instance>(args);
 
@@ -71,18 +72,19 @@ struct App {
 		mInspector = mSwapchainNode->makeComponent<Inspector>(*mSwapchainNode);
 
 		auto sceneNode = deviceNode->addChild("Scene");
-		mInspector->select(sceneNode);
 		mScene = sceneNode->makeComponent<Scene>(*sceneNode);
-		mRenderer = sceneNode->makeComponent<RendererType>(*sceneNode);
-		sceneNode->makeComponent<Denoiser>(*sceneNode);
-		sceneNode->makeComponent<Tonemapper>(*sceneNode);
 
 		auto cameraNode = sceneNode->addChild("Camera");
 		cameraNode->makeComponent<TransformData>( float3(0,1.5f,0), quatf::identity(), float3::Ones() );
 		mFlyCamera = cameraNode->makeComponent<FlyCamera>(*cameraNode);
 		mCamera = cameraNode->makeComponent<Camera>(ProjectionData::makePerspective(radians(70.f), mSwapchain->extent().width / mSwapchain->extent().height, float2::Zero(), .001f));
 
-		mLastUpdate = chrono::high_resolution_clock::now();
+		auto pathTracerNode = sceneNode->addChild("Path tracer");
+		mInspector->select(pathTracerNode);
+		mRenderer = pathTracerNode->makeComponent<PathTracer>(*pathTracerNode);
+		pathTracerNode->makeComponent<Denoiser>(*pathTracerNode);
+		pathTracerNode->makeComponent<Tonemapper>(*pathTracerNode);
+		mImageComparer = pathTracerNode->makeComponent<ImageComparer>(*pathTracerNode);
 	}
 	inline ~App() {
 		(*mDevice)->waitIdle();
@@ -123,6 +125,7 @@ struct App {
 		drawGui();
 		mInspector->draw();
 
+		mImageComparer->update(commandBuffer);
 		mScene->update(commandBuffer, deltaTime);
 		mFlyCamera->update(deltaTime);
 	}

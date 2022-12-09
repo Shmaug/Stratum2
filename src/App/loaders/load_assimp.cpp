@@ -1,18 +1,20 @@
-#include <App/Scene.hpp>
+#ifdef ENABLE_ASSIMP
 
-#ifdef STRATUM_ENABLE_ASSIMP
+#include <App/Scene.hpp>
+#include <COre/Profiler.hpp>
+
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
-#endif
 
 #include <portable-file-dialogs.h>
 
 namespace stm2 {
 
-#ifdef STRATUM_ENABLE_ASSIMP
-NodePtr Scene::loadAssimp(CommandBuffer& commandBuffer, const filesystem::path& filename) {
+shared_ptr<Node> Scene::loadAssimp(CommandBuffer& commandBuffer, const filesystem::path& filename) {
 	ProfilerScope ps("loadAssimp", &commandBuffer);
+
+	cout << "Loading " << filename << endl;
 
 	Device& device = commandBuffer.mDevice;
 
@@ -36,31 +38,42 @@ NodePtr Scene::loadAssimp(CommandBuffer& commandBuffer, const filesystem::path& 
 	// If the import failed, report it
 	if (!scene) {
 		cout << "Failed to load " << filename << ": " << importer.GetErrorString() << endl;
-		return;
+		return nullptr;
 	}
 
-	vector<component_ptr<Material>> materials;
-	vector<component_ptr<Mesh>> meshes;
+	cout << "Processing scene data..." << endl;
+
+	vector<shared_ptr<Material>> materials;
+	vector<shared_ptr<Mesh>> meshes;
 	unordered_map<string, Image::View> images;
 
-	auto get_image = [&](fs::path path, bool srgb) -> Image::View {
+	auto getImage = [&](filesystem::path path, const bool srgb) -> Image::View {
 		if (path.is_relative()) {
-			fs::path cur = fs::current_path();
-			fs::current_path(filename.parent_path());
-			path = fs::absolute(path);
-			fs::current_path(cur);
+			filesystem::path cur = filesystem::current_path();
+			filesystem::current_path(filename.parent_path());
+			path = filesystem::absolute(path);
+			filesystem::current_path(cur);
 		}
 		auto it = images.find(path.string());
 		if (it != images.end()) return it->second;
-		ImageData pixels = load_image_data(device, path, srgb);
-		auto img = make_shared<Image>(commandBuffer, path.filename().string(), pixels, 1);
-		commandBuffer.hold_resource(img);
+
+		Image::Metadata md = {};
+		shared_ptr<Buffer> pixels;
+		tie(pixels, md.mFormat, md.mExtent) = Image::loadFile(commandBuffer.mDevice, path, srgb);
+		md.mUsage = vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
+		const shared_ptr<Image> img = make_shared<Image>(commandBuffer.mDevice, path.filename().string(), md);
+
+		pixels->copyToImage(commandBuffer, img);
+		commandBuffer.trackResource(pixels);
+
 		images.emplace(path.string(), img);
 		return img;
 	};
 
 	if (scene->HasLights())
 		cout << "Warning: punctual lights are unsupported" << endl;
+
+	const shared_ptr<Node> root = Node::create(filename.stem().string());
 
 	if (scene->HasMaterials()) {
 		bool interpret_as_pbr = false;
@@ -72,59 +85,59 @@ NodePtr Scene::loadAssimp(CommandBuffer& commandBuffer, const filesystem::path& 
 
 		cout << "Loading materials...";
 
-		const NodePtr materials_node = root.addChild("materials");
+		const shared_ptr<Node> materialsNode = root->addChild("materials");
 		for (int i = 0; i < scene->mNumMaterials; i++) {
 			cout << "\rLoading materials " << (i+1) << "/" << scene->mNumMaterials << "     ";
 
 			aiMaterial* m = scene->mMaterials[i];
-			Material& material = *materials.emplace_back(materials_node.make_child(m->GetName().C_Str()).makeComponent<Material>());
+			Material& material = *materials.emplace_back(materialsNode->addChild(m->GetName().C_Str())->makeComponent<Material>());
 
-			ImageValue3 diffuse       = ImageValue3{ float3::Ones() };
-			ImageValue4 specular      = ImageValue4{ interpret_as_pbr ? float4(1,.5f,0,0) : float4::Ones() };
-			ImageValue3 transmittance = ImageValue3{ float3::Zero() };
-			ImageValue3 emission      = ImageValue3{ float3::Zero() };
+			ImageValue<3> diffuse       = ImageValue<3>{ float3::Ones() };
+			ImageValue<4> specular      = ImageValue<4>{ interpret_as_pbr ? float4(1,.5f,0,0) : float4::Ones() };
+			ImageValue<3> transmittance = ImageValue<3>{ float3::Zero() };
+			ImageValue<3> emission      = ImageValue<3>{ float3::Zero() };
 			float eta = 1.45f;
 
             aiColor3D tmp_color;
-            if (m->Get(AI_MATKEY_COLOR_DIFFUSE, tmp_color) == AI_SUCCESS) diffuse.value  = float3(tmp_color.r, tmp_color.g, tmp_color.b);
-            if (m->Get(AI_MATKEY_COLOR_SPECULAR, tmp_color) == AI_SUCCESS) specular.value = float4(tmp_color.r, tmp_color.g, tmp_color.b, 1);
-            if (m->Get(AI_MATKEY_COLOR_TRANSPARENT, tmp_color) == AI_SUCCESS) transmittance.value = float3(tmp_color.r, tmp_color.g, tmp_color.b);
-            if (m->Get(AI_MATKEY_COLOR_EMISSIVE, tmp_color) == AI_SUCCESS) emission.value = float3(tmp_color.r, tmp_color.g, tmp_color.b);
+            if (m->Get(AI_MATKEY_COLOR_DIFFUSE    , tmp_color) == AI_SUCCESS) diffuse.mValue       = float3(tmp_color.r, tmp_color.g, tmp_color.b);
+            if (m->Get(AI_MATKEY_COLOR_SPECULAR   , tmp_color) == AI_SUCCESS) specular.mValue      = float4(tmp_color.r, tmp_color.g, tmp_color.b, 1);
+            if (m->Get(AI_MATKEY_COLOR_TRANSPARENT, tmp_color) == AI_SUCCESS) transmittance.mValue = float3(tmp_color.r, tmp_color.g, tmp_color.b);
+            if (m->Get(AI_MATKEY_COLOR_EMISSIVE   , tmp_color) == AI_SUCCESS) emission.mValue      = float3(tmp_color.r, tmp_color.g, tmp_color.b);
 			m->Get(AI_MATKEY_REFRACTI, eta);
 
 			if (m->GetTextureCount(aiTextureType_DIFFUSE) > 0) {
 				aiString aiPath;
 				m->GetTexture(aiTextureType_DIFFUSE, 0, &aiPath);
-				diffuse.image = get_image(aiPath.C_Str(), true);
+				diffuse.mImage = getImage(aiPath.C_Str(), true);
 			}
 			if (m->GetTextureCount(aiTextureType_SPECULAR) > 0) {
 				aiString aiPath;
 				m->GetTexture(aiTextureType_SPECULAR, 0, &aiPath);
-				specular.image = get_image(aiPath.C_Str(), false);
+				specular.mImage = getImage(aiPath.C_Str(), false);
 			}
 			if (m->GetTextureCount(aiTextureType_EMISSIVE) > 0) {
 				aiString aiPath;
 				m->GetTexture(aiTextureType_EMISSIVE, 0, &aiPath);
-				emission = ImageValue3{float3::Ones(), get_image(aiPath.C_Str(), true)};
+				emission = ImageValue<3>{float3::Ones(), getImage(aiPath.C_Str(), true)};
 			}
 
 			if (interpret_as_pbr)
-				material = root.find_in_ancestor<Scene>()->make_metallic_roughness_material(commandBuffer, diffuse, specular, transmittance, eta, emission);
+				material = makeMetallicRoughnessMaterial(commandBuffer, diffuse, specular, transmittance, eta, emission);
 			else
-				material = root.find_in_ancestor<Scene>()->make_diffuse_specular_material(commandBuffer, diffuse, ImageValue3{specular.image,specular.value.head<3>()}, ImageValue1{1.f}, transmittance, eta, emission);
+				material = makeDiffuseSpecularMaterial(commandBuffer, diffuse, ImageValue<3>{specular.mValue.head<3>(), specular.mImage}, ImageValue<1>{float1(1.f)}, transmittance, eta, emission);
 
 			if (m->GetTextureCount(aiTextureType_NORMALS) > 0) {
 				aiString aiPath;
 				m->GetTexture(aiTextureType_NORMALS, 0, &aiPath);
-				material.bump_image = get_image(aiPath.C_Str(), false);
+				material.mBumpImage = getImage(aiPath.C_Str(), false);
 			} else if (m->GetTextureCount(aiTextureType_HEIGHT) > 0) {
 				aiString aiPath;
 				m->GetTexture(aiTextureType_HEIGHT, 0, &aiPath);
-				material.bump_image = get_image(aiPath.C_Str(), false);
+				material.mBumpImage = getImage(aiPath.C_Str(), false);
 			}
 
-			material.bump_strength = 1;
-            m->Get(AI_MATKEY_BUMPSCALING, material.bump_strength);
+			material.mBumpStrength = 1;
+            m->Get(AI_MATKEY_BUMPSCALING, material.mBumpStrength);
 		}
 		cout << endl;
 	}
@@ -151,15 +164,15 @@ NodePtr Scene::loadAssimp(CommandBuffer& commandBuffer, const filesystem::path& 
 			if (!(m->mPrimitiveTypes & aiPrimitiveType_TRIANGLE) || (m->mPrimitiveTypes & ~aiPrimitiveType_TRIANGLE) != 0)
 				continue;
 
-			positions_tmp[i] = make_shared<Buffer>(commandBuffer.mDevice, "tmp vertices", m->mNumVertices*sizeof(float3), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
-			normals_tmp[i] = make_shared<Buffer>(commandBuffer.mDevice, "tmp normals" , m->mNumVertices*sizeof(float3), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
-			indices_tmp[i] = make_shared<Buffer>(commandBuffer.mDevice, "tmp indices" , m->mNumFaces*3*sizeof(uint32_t), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+			positions_tmp[i] = make_shared<Buffer>(commandBuffer.mDevice, "tmp vertices", m->mNumVertices*sizeof(float3) , vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+			normals_tmp[i]   = make_shared<Buffer>(commandBuffer.mDevice, "tmp normals" , m->mNumVertices*sizeof(float3) , vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+			indices_tmp[i]   = make_shared<Buffer>(commandBuffer.mDevice, "tmp indices" , m->mNumFaces*3*sizeof(uint32_t), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
 			if (m->GetNumUVChannels() >= 1)
-				uvs_tmp[i] = make_shared<Buffer>(commandBuffer.mDevice, "tmp uvs", m->mNumVertices*sizeof(float2), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+				uvs_tmp[i]   = make_shared<Buffer>(commandBuffer.mDevice, "tmp uvs"     , m->mNumVertices*sizeof(float2) , vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
 		}
 		cout << endl;
 
-		auto copy_vertices_fn = [&](uint32_t i) {
+		auto copyVertices = [&](uint32_t i) {
 			const aiMesh* m = scene->mMeshes[i];
 			if (!(m->mPrimitiveTypes & aiPrimitiveType_TRIANGLE) || (m->mPrimitiveTypes & ~aiPrimitiveType_TRIANGLE) != 0)
 				return;
@@ -183,12 +196,12 @@ NodePtr Scene::loadAssimp(CommandBuffer& commandBuffer, const filesystem::path& 
 		vector<thread> threads;
 		threads.reserve(scene->mNumMeshes);
 		for (uint32_t i = 0; i < scene->mNumMeshes; i++)
-			threads.push_back(thread(bind(copy_vertices_fn, i)));
+			threads.push_back(thread(bind(copyVertices, i)));
 		cout << "Copying vertex data...";
 		for (thread& t : threads) if (t.joinable()) t.join();
 		cout << endl;
 
-		Node& meshes_node = root.make_child("meshes");
+		const shared_ptr<Node>& meshesNode = root->addChild("meshes");
 		for (int i = 0; i < scene->mNumMeshes; i++) {
 			cout << "\rCreating meshes " << (i+1) << "/" << scene->mNumMeshes;
 
@@ -203,53 +216,55 @@ NodePtr Scene::loadAssimp(CommandBuffer& commandBuffer, const filesystem::path& 
 			bufferUsage |= vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
 			#endif
 
-			auto vao = make_shared<VertexArrayObject>(unordered_map<VertexArrayObject::AttributeType, vector<VertexArrayObject::Attribute>>{
-				{ VertexArrayObject::AttributeType::ePosition, { {
-					VertexArrayObject::AttributeDescription{ (uint32_t)sizeof(float3), vk::Format::eR32G32B32Sfloat, 0, vk::VertexInputRate::eVertex },
-					make_shared<Buffer>(commandBuffer.mDevice, filename.stem().string() + " vertices", positions_tmp[i].size_bytes(), bufferUsage|vk::BufferUsageFlagBits::eVertexBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal) } } },
-				{ VertexArrayObject::AttributeType::eNormal, { {
-					VertexArrayObject::AttributeDescription{ (uint32_t)sizeof(float3), vk::Format::eR32G32B32Sfloat, 0, vk::VertexInputRate::eVertex },
-					make_shared<Buffer>(commandBuffer.mDevice, filename.stem().string() + " normals", normals_tmp[i].size_bytes(), bufferUsage|vk::BufferUsageFlagBits::eVertexBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal) } } },
-			});
+			Mesh::Vertices vertices;
+			vertices[Mesh::VertexAttributeType::ePosition].emplace_back(
+				make_shared<Buffer>(commandBuffer.mDevice, filename.stem().string() + " vertices", positions_tmp[i].sizeBytes(), bufferUsage|vk::BufferUsageFlagBits::eVertexBuffer),
+				Mesh::VertexAttributeDescription{ (uint32_t)sizeof(float3), vk::Format::eR32G32B32Sfloat, 0, vk::VertexInputRate::eVertex });
+			vertices[Mesh::VertexAttributeType::eNormal].emplace_back(
+				make_shared<Buffer>(commandBuffer.mDevice, filename.stem().string() + " normals", normals_tmp[i].sizeBytes(), bufferUsage|vk::BufferUsageFlagBits::eVertexBuffer),
+				Mesh::VertexAttributeDescription{ (uint32_t)sizeof(float3), vk::Format::eR32G32B32Sfloat, 0, vk::VertexInputRate::eVertex });
 
-			Buffer::View<uint32_t> indexBuffer = make_shared<Buffer>(commandBuffer.mDevice, filename.stem().string() + " indices", indices_tmp[i].size_bytes(), bufferUsage|vk::BufferUsageFlagBits::eIndexBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal);
-			commandBuffer.copy_buffer(positions_tmp[i], vao->at(VertexArrayObject::AttributeType::ePosition)[0].second);
-			commandBuffer.copy_buffer(normals_tmp[i], vao->at(VertexArrayObject::AttributeType::eNormal)[0].second);
-			commandBuffer.copy_buffer(indices_tmp[i], indexBuffer);
+			Buffer::View<uint32_t> indexBuffer = make_shared<Buffer>(commandBuffer.mDevice, filename.stem().string() + " indices", indices_tmp[i].sizeBytes(), bufferUsage|vk::BufferUsageFlagBits::eIndexBuffer);
+			Buffer::copy(commandBuffer, positions_tmp[i], vertices.at(Mesh::VertexAttributeType::ePosition)[0].first);
+			Buffer::copy(commandBuffer, normals_tmp[i]  , vertices.at(Mesh::VertexAttributeType::eNormal)[0].first);
+			Buffer::copy(commandBuffer, indices_tmp[i], indexBuffer);
 
 			if (m->GetNumUVChannels() >= 1) {
-				(*vao)[VertexArrayObject::AttributeType::eTexcoord].emplace_back(
-					VertexArrayObject::AttributeDescription{ (uint32_t)sizeof(float2), vk::Format::eR32G32Sfloat, 0, vk::VertexInputRate::eVertex },
-					make_shared<Buffer>(commandBuffer.mDevice, filename.stem().string() + " uvs", uvs_tmp[i].size_bytes(), bufferUsage|vk::BufferUsageFlagBits::eVertexBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal));
-				commandBuffer.copy_buffer(uvs_tmp[i], vao->at(VertexArrayObject::AttributeType::eTexcoord)[0].second);
+				vertices[Mesh::VertexAttributeType::eTexcoord].emplace_back(
+					make_shared<Buffer>(commandBuffer.mDevice, filename.stem().string() + " uvs", uvs_tmp[i].sizeBytes(), bufferUsage|vk::BufferUsageFlagBits::eVertexBuffer),
+					Mesh::VertexAttributeDescription{ (uint32_t)sizeof(float2), vk::Format::eR32G32Sfloat, 0, vk::VertexInputRate::eVertex } );
+				Buffer::copy(commandBuffer, uvs_tmp[i], vertices.at(Mesh::VertexAttributeType::eTexcoord)[0].first);
 			}
 
-			Node& mesh_node = meshes_node.make_child(m->mName.C_Str());
-			meshes.emplace_back( mesh_node.makeComponent<Mesh>(vao, indexBuffer, vk::PrimitiveTopology::eTriangleList) );
+			const shared_ptr<Node>& meshNode = meshesNode->addChild(m->mName.C_Str());
+			meshes.emplace_back( meshNode->makeComponent<Mesh>(vertices, indexBuffer, vk::PrimitiveTopology::eTriangleList) );
 		}
 		cout << endl;
 	}
 
 	stack<pair<aiNode*, Node*>> nodes;
-	nodes.push(make_pair(scene->mRootNode, &root.make_child(scene->mRootNode->mName.C_Str())));
+	nodes.push(make_pair(scene->mRootNode, root->addChild(scene->mRootNode->mName.C_Str()).get()));
 	while (!nodes.empty()) {
 		auto[an, n] = nodes.top();
 		nodes.pop();
 
-		n->makeComponent<TransformData>( from_float3x4(Eigen::Array<ai_real,4,4,Eigen::RowMajor>::Map(&an->mTransformation.a1).block<3,4>(0,0).cast<float>()) );
+		n->makeComponent<TransformData>( Eigen::Array<ai_real,4,4,Eigen::RowMajor>::Map(&an->mTransformation.a1).block<3,4>(0,0).cast<float>() );
 
 		if (an->mNumMeshes == 1)
 			n->makeComponent<MeshPrimitive>(materials[scene->mMeshes[an->mMeshes[0]]->mMaterialIndex], meshes[an->mMeshes[0]]);
 		else if (an->mNumMeshes > 1)
 			for (int i = 0; i < an->mNumMeshes; i++)
-				n->make_child(scene->mMeshes[an->mMeshes[i]]->mName.C_Str()).makeComponent<MeshPrimitive>(materials[scene->mMeshes[an->mMeshes[i]]->mMaterialIndex], meshes[an->mMeshes[i]]);
+				n->addChild(scene->mMeshes[an->mMeshes[i]]->mName.C_Str())->makeComponent<MeshPrimitive>(materials[scene->mMeshes[an->mMeshes[i]]->mMaterialIndex], meshes[an->mMeshes[i]]);
 
 		for (int i = 0; i < an->mNumChildren; i++)
-			nodes.push(make_pair(an->mChildren[i], &n->make_child(an->mChildren[i]->mName.C_Str())));
+			nodes.push(make_pair(an->mChildren[i], n->addChild(an->mChildren[i]->mName.C_Str()).get()));
 	}
 
 	cout << "Loaded " << filename << endl;
+	return root;
 }
-#endif
+
 
 }
+
+#endif

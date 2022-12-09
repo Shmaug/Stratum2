@@ -1,21 +1,23 @@
+#pragma once
+
 #include "D3DX_DXGIFormatConvert.inl"
 
-inline float2 packNormal2(const float3 v) {
+float2 packNormal2(const float3 v) {
 	// Project the sphere onto the octahedron, and then onto the xy plane
 	const float2 p = v.xy * (1 / (abs(v.x) + abs(v.y) + abs(v.z)));
 	// Reflect the folds of the lower hemisphere over the diagonals
 	return (v.z <= 0) ? ((1 - abs(p.yx)) * lerp(-1, 1, float2(p >= 0))) : p;
 }
-inline float3 unpackNormal2(const float2 p) {
+float3 unpackNormal2(const float2 p) {
 	float3 v = float3(p, 1 - dot(1, abs(p)));
 	if (v.z < 0) v.xy = (1 - abs(v.yx)) * lerp(-1, 1, float2(v.xy >= 0));
 	return normalize(v);
 }
 
-inline uint packNormal(const float3 v) {
+uint packNormal(const float3 v) {
 	return D3DX_FLOAT2_to_R16G16_SNORM(packNormal2(v));
 }
-inline float3 unpackNormal(const uint packed) {
+float3 unpackNormal(const uint packed) {
 	return unpackNormal2(D3DX_R16G16_SNORM_to_FLOAT2(packed));
 }
 
@@ -32,15 +34,25 @@ float3x3 makeOrthonormal(const float3 N) {
     return r;
 }
 
-inline float2 sampleUniformSphere(const float u1, const float u2) {
-	return float2(2 * M_PI * u2, acos(2*u1 - 1));
+float2 sampleUniformTriangle(const float u1, const float u2) {
+    const float a = sqrt(u1);
+    return float2(1 - a, a * u2);
 }
-inline float3 sampleCosHemisphere(const float u1, const float u2) {
+float2 sampleUniformSphere(const float u1, const float u2) {
+    return float2(2 * M_PI * u2, acos(2 * u1 - 1));
+}
+float3 sampleUniformSphereCartesian(const float u1, const float u2) {
+    const float z = 1 - 2 * u1;
+    const float r = sqrt(max(0, 1 - z * z));
+    const float phi = 2 * M_PI * u2;
+    return float3(r * cos(phi), r * sin(phi), z);
+}
+float3 sampleCosHemisphere(const float u1, const float u2) {
 	const float phi = (2*M_PI) * u2;
 	float2 xy = sqrt(u1) * float2(cos(phi), sin(phi));
 	return float3(xy[0], xy[1], sqrt(max(0.f, 1 - dot(xy, xy))));
 }
-inline float cosHemispherePdfW(const float cosTheta) {
+float cosHemispherePdfW(const float cosTheta) {
 	return max(cosTheta, 0.f) / M_PI;
 }
 

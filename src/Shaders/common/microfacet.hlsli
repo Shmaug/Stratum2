@@ -1,5 +1,4 @@
-#ifndef MICROFACET_H
-#define MICROFACET_H
+#pragma once
 
 /// A microfacet model assumes that the surface is composed of infinitely many little mirrors/glasses.
 /// The orientation of the mirrors determines the amount of lights reflected.
@@ -18,11 +17,11 @@
 /// See "Memo on Fresnel equations" from Sebastien Lagarde
 /// for a really nice introduction.
 /// https://seblagarde.wordpress.com/2013/04/29/memo-on-fresnel-equations/
-inline float schlick_fresnel1(const float F0, const float cos_theta) {
-    return F0 + (1 - F0) * pow(max(1 - cos_theta, 0), 5);
+inline float schlick_fresnel1(const float F0, const float cosTheta) {
+    return F0 + (1 - F0) * pow(max(1 - cosTheta, 0), 5);
 }
-inline float3 schlick_fresnel3(const float3 F0, const float cos_theta) {
-    return F0 + (1 - F0) * pow(max(1 - cos_theta, 0), 5);
+inline float3 schlick_fresnel3(const float3 F0, const float cosTheta) {
+    return F0 + (1 - F0) * pow(max(1 - cosTheta, 0), 5);
 }
 
 /// Fresnel equation of a dielectric interface.
@@ -73,34 +72,33 @@ inline float smith_masking_gtr2(const float3 w, const float alpha) {
 
 /// See "Sampling the GGX Distribution of Visible Normals", Heitz, 2018.
 /// https://jcgt.org/published/0007/04/01/
-inline float3 sample_visible_normals(float3 local_dir_in, const float alpha_x, const float alpha_y, const float2 rnd_param) {
+inline float3 sampleVisibleNormals(float3 localDirIn, const float alphaX, const float alphaY, const float2 rnd) {
     // The incoming direction is in the "ellipsodial configuration" in Heitz's paper
-	const bool inside = local_dir_in[2] < 0;
+	const bool inside = localDirIn[2] < 0;
 	// Ensure the input is on top of the surface.
-    if (inside) local_dir_in = -local_dir_in;
+    if (inside) localDirIn = -localDirIn;
 
     // Transform the incoming direction to the "hemisphere configuration".
-    const float3 hemi_dir_in = normalize(float3(alpha_x * local_dir_in[0], alpha_y * local_dir_in[1], local_dir_in[2]));
+    const float3 hemiDirIn = normalize(float3(alphaX * localDirIn[0], alphaY * localDirIn[1], localDirIn[2]));
 
     // Parameterization of the projected area of a hemisphere.
     // First, sample a disk.
-    const float r = sqrt(rnd_param[0]);
-    const float phi = 2 * M_PI * rnd_param[1];
+    const float r = sqrt(rnd[0]);
+    const float phi = 2 * M_PI * rnd[1];
     const float t1 = r * cos(phi);
     float t2 = r * sin(phi);
     // Vertically scale the position of a sample to account for the projection.
-    const float s = (1 + hemi_dir_in[2]) / 2;
+    const float s = (1 + hemiDirIn[2]) / 2;
     t2 = (1 - s) * sqrt(1 - t1 * t1) + s * t2;
     // Point in the disk space
-    const float3 disk_N = float3(t1, t2, sqrt(max(float(0), 1 - t1*t1 - t2*t2)));
+    const float3 diskN = float3(t1, t2, sqrt(max(0, 1 - t1*t1 - t2*t2)));
 
     // Reprojection onto hemisphere -- we get our sampled normal in hemisphere space.
-    const float3 hemi_N = mul(makeOrthonormal(hemi_dir_in), disk_N);
+    const float3x3 frame = makeOrthonormal(hemiDirIn);
+	const float3 hemiN = frame[0] * diskN.x + frame[1] * diskN.y + frame[2] * diskN.z;
 
     // Transforming the normal back to the ellipsoid configuration
-    float3 N = normalize(float3(alpha_x * hemi_N[0], alpha_y * hemi_N[1], max(0.f, hemi_N[2])));
+    float3 N = normalize(float3(alphaX * hemiN[0], alphaY * hemiN[1], max(0, hemiN[2])));
     if (inside) N = -N;
     return N;
 }
-
-#endif

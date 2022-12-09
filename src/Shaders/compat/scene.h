@@ -10,18 +10,19 @@ STM_NAMESPACE_BEGIN
 #define BVH_FLAG_TRIANGLES BIT(0)
 #define BVH_FLAG_SPHERES BIT(1)
 #define BVH_FLAG_VOLUME BIT(2)
-#define BVH_FLAG_EMITTER BIT(3)
-
-#define INSTANCE_TYPE_MESH 0
-#define INSTANCE_TYPE_SPHERE 1
-#define INSTANCE_TYPE_VOLUME 2
-
-#define INVALID_INSTANCE 0xFFFF
-#define INVALID_PRIMITIVE 0xFFFF
 
 #define gVertexBufferCount 1024
 #define gImageCount 1024
 #define gVolumeCount 8
+
+#define INVALID_INSTANCE 0xFFFF
+#define INVALID_PRIMITIVE 0xFFFF
+
+enum class InstanceType {
+	eMesh = 0,
+	eSphere = 1,
+    eVolume = 2,
+};
 
 inline static TransformData makeMotionTransform(const TransformData worldToObject, const TransformData prevObjectToWorld) {
 	return tmul(prevObjectToWorld, worldToObject);
@@ -31,13 +32,13 @@ struct InstanceData {
 	uint mTypeMaterialAddress;
 	uint mData;
 
-	inline uint type() CONST_CPP            { return BF_GET(mTypeMaterialAddress, 0, 4); }
+    inline InstanceType type() CONST_CPP { return (InstanceType)BF_GET(mTypeMaterialAddress, 0, 4); }
 	inline uint materialAddress() CONST_CPP { return BF_GET(mTypeMaterialAddress, 4, 28); }
 
 #ifdef __cplusplus
-	inline InstanceData(const uint type, const uint materialAddress) {
+    inline InstanceData(const InstanceType type, const uint materialAddress) {
 		mTypeMaterialAddress = 0;
-		BF_SET(mTypeMaterialAddress, type, 0, 4);
+		BF_SET(mTypeMaterialAddress, (uint)type, 0, 4);
 		BF_SET(mTypeMaterialAddress, materialAddress, 4, 28);
 	}
 #endif
@@ -48,8 +49,8 @@ struct MeshInstanceData : InstanceData {
 	inline uint primitiveCount() CONST_CPP  { return BF_GET(mData, 16, 16); }
 
 #ifdef __cplusplus
-	inline MeshInstanceData(const uint materialAddress, const uint vertexInfoIndex, const uint primitiveCount)
-		: InstanceData(INSTANCE_TYPE_MESH, materialAddress) {
+    inline MeshInstanceData(const uint materialAddress, const uint vertexInfoIndex, const uint primitiveCount)
+        : InstanceData(InstanceType::eMesh, materialAddress) {
 		mData = 0;
 		BF_SET(mData, vertexInfoIndex,  0, 16);
 		BF_SET(mData, primitiveCount , 16, 16);
@@ -61,8 +62,8 @@ struct SphereInstanceData : InstanceData {
 	inline float radius() CONST_CPP { return asfloat(mData); }
 
 #ifdef __cplusplus
-	inline SphereInstanceData(const uint materialAddress, const float radius)
-		: InstanceData(INSTANCE_TYPE_SPHERE, materialAddress) {
+    inline SphereInstanceData(const uint materialAddress, const float radius)
+        : InstanceData(InstanceType::eSphere, materialAddress) {
 		mData = asuint(radius);
 	}
 #endif
@@ -72,8 +73,8 @@ struct VolumeInstanceData : InstanceData {
 	inline uint volumeIndex() CONST_CPP { return mData; }
 
 #ifdef __cplusplus
-	inline VolumeInstanceData(const uint materialAddress, const uint volumeIndex)
-		: InstanceData(INSTANCE_TYPE_VOLUME, materialAddress) {
+    inline VolumeInstanceData(const uint materialAddress, const uint volumeIndex)
+        : InstanceData(InstanceType::eVolume, materialAddress) {
 		mData = volumeIndex;
 	}
 #endif

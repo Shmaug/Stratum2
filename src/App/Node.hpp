@@ -87,27 +87,28 @@ public:
 		return n;
 	}
 
+	inline void addChild(const shared_ptr<Node>& c) {
+		if (!c) return;
+		c->removeParent();
+		c->mParent = shared_from_this();
+		mChildren.emplace_back(c);
+	}
 	inline shared_ptr<Node> addChild(const string& name) {
 		const shared_ptr<Node> c = create(name);
 		addChild(c);
 		return c;
 	}
-	inline void addChild(const shared_ptr<Node>& c) {
-		if (!c) return;
-		c->mParent = shared_from_this();
-		mChildren.emplace_back(c);
-	}
 	inline void removeChild(Node& c) {
-		c.mParent.reset();
 		for (auto it = mChildren.begin(); it != mChildren.end(); it++) {
 			if (it->get() == &c) {
+				c.mParent.reset();
 				mChildren.erase(it);
 				break;
 			}
 		}
 	}
 	inline void removeParent() {
-		if (auto p = parent(); p)
+		if (auto p = parent())
 			p->removeChild(*this);
 	}
 

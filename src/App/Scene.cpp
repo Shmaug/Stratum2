@@ -365,6 +365,7 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 		mResources = mResourcePool.emplace(make_shared<FrameResources>(commandBuffer.mDevice));
 
 	mResources->update(*this, commandBuffer, prevFrame);
+	commandBuffer.trackResource(mResources);
 }
 
 void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, const shared_ptr<FrameResources>& prevFrame) {
@@ -703,27 +704,28 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 		uploadBuffer("mInstanceIndexMap", mInstanceIndexMap, instanceIndexMap);
 		uploadBuffer("mLightInstanceMap", mLightInstanceMap, lightInstanceMap);
 		uploadBuffer("mMeshVertexInfo", mMeshVertexInfo, meshVertexInfos);
+		mLightCount = (uint32_t)lightInstanceMap.size();
 	}
 }
 
 Descriptors Scene::FrameResources::getDescriptors() const {
 	Descriptors descriptors;
 	descriptors[{ "mAccelerationStructure", 0u }]     = mAccelerationStructure;
-	descriptors[{ "mMaterialData", 0u }]              = mMaterialData;
-	for (uint32_t i = 0; i < mVertexBuffers.size(); i++)
-		descriptors[{ "mVertexBuffers", i }] = mVertexBuffers[i];
-	descriptors[{ "mMeshVertexInfo", 0u }]            = mMeshVertexInfo;
 	descriptors[{ "mInstances", 0u }]                 = mInstances;
 	descriptors[{ "mInstanceTransforms", 0u }]        = mInstanceTransforms;
 	descriptors[{ "mInstanceInverseTransforms", 0u }] = mInstanceInverseTransforms;
 	descriptors[{ "mInstanceMotionTransforms", 0u }]  = mInstanceMotionTransforms;
-	descriptors[{ "mLightInstances", 0u }]            = mLightInstanceMap;
-	for (const auto& [vol, index] : mMaterialResources.mVolumeDataMap)
-		descriptors[{"mVolumes", index}] = vol;
+	descriptors[{ "mLightInstanceMap", 0u }]          = mLightInstanceMap;
+	descriptors[{ "mMaterialData", 0u }]              = mMaterialData;
+	for (uint32_t i = 0; i < mVertexBuffers.size(); i++)
+		descriptors[{ "mVertexBuffers", i }] = mVertexBuffers[i];
+	descriptors[{ "mMeshVertexInfo", 0u }]            = mMeshVertexInfo;
 	for (const auto& [image, index] : mMaterialResources.mImage4s)
 		descriptors[{"mImages", index}] = ImageDescriptor{ image, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
 	for (const auto& [image, index] : mMaterialResources.mImage1s)
 		descriptors[{"mImage1s", index}] = ImageDescriptor{ image, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+	for (const auto& [vol, index] : mMaterialResources.mVolumeDataMap)
+		descriptors[{"mVolumes", index}] = vol;
 	return descriptors;
 }
 

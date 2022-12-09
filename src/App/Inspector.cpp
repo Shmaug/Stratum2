@@ -37,7 +37,8 @@ void Inspector::drawNodeGui(Node& n) {
 }
 
 void Inspector::draw() {
-	ProfilerScope ps("Inspector::update");
+	ProfilerScope ps("Inspector::draw");
+
 	if (ImGui::Begin("Node Graph"))
 		drawNodeGui(*mNode.root());
 	ImGui::End();
@@ -45,10 +46,10 @@ void Inspector::draw() {
 	if (ImGui::Begin("Inspector")) {
 		if (mSelected) {
 			auto s = mSelected->findAncestor<Scene>();
+			ImGui::PushID(s.get());
 			if ((s && !mSelected->getComponent<Scene>()) && ImGui::Button("x")) {
 				// delete selected node
 
-				s->markDirty();
 				if (ImGui::GetIO().KeyAlt) {
 					if (const shared_ptr<Node> p = mSelected->parent())
 						for (const shared_ptr<Node>& c : mSelected->children())
@@ -56,6 +57,7 @@ void Inspector::draw() {
 				}
 				mSelected->removeParent();
 				select(nullptr);
+				s->markDirty();
 			} else {
 				// inspect selected node
 
@@ -92,22 +94,36 @@ void Inspector::draw() {
 					s->markDirty();
 				}
 			}
+			ImGui::PopID();
 		} else
 			ImGui::Text("Select a node to inspect");
 	}
 	ImGui::End();
 
-	for (const auto[ptr, tpl] : mPinned) {
-		const auto&[label, weakptr, drawFn] = tpl;
-		if (const auto node = weakptr.lock()) {
-			if (ImGui::Begin(label.c_str())) {
-				if (drawFn.index() == 0)
-					get<0>(drawFn)();
-				else
-					get<1>(drawFn)(*node);
+	if (!mPinned.empty()) {
+		if (ImGui::Begin("Pinned")) {
+			for (auto it = mPinned.begin(); it != mPinned.end();) {
+				const auto&[label, weakptr, drawFn] = it->second;
+				if (const auto node = weakptr.lock()) {
+					ImGui::PushID(node.get());
+					if (ImGui::Button("x")) {
+						it = mPinned.erase(it);
+						ImGui::PopID();
+						continue;
+					}
+					ImGui::SameLine();
+					if (ImGui::CollapsingHeader(label.c_str())) {
+						if (drawFn.index() == 0)
+							get<0>(drawFn)();
+						else
+							get<1>(drawFn)(*node);
+					}
+					ImGui::PopID();
+				}
+				it++;
 			}
-			ImGui::End();
 		}
+		ImGui::End();
 	}
 }
 

@@ -1,5 +1,4 @@
-#ifndef RNG_H
-#define RNG_H
+#pragma once
 
 // xxhash (https://github.com/Cyan4973/xxHash)
 //   From https://www.shadertoy.com/view/Xt3cDn
@@ -60,6 +59,3 @@ struct RandomSampler {
         return unorm32ToFloat(next());
 	}
 };
-
-
-#endif

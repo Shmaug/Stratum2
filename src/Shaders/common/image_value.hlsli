@@ -1,3 +1,5 @@
+#pragma once
+
 #include "compat/scene.h"
 
 float sampleImage1(const uint imageIndex, const float2 uv, const float uvScreenSize) {

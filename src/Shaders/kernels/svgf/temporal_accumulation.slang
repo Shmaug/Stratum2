@@ -4,13 +4,19 @@
 #ifndef gDemodulateAlbedo
 #define gDemodulateAlbedo false
 #endif
+#ifndef gCheckNormal
+#define gCheckNormal false
+#endif
+#ifndef gCheckDepth
+#define gCheckDepth false
+#endif
 #ifndef gDebugMode
 #define gDebugMode (DenoiserDebugMode)0
 #endif
 
 struct PushConstants {
 	uint mViewCount;
-	float mHistoryLimit;
+	uint mHistoryLimit;
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> gPushConstants;
 
@@ -45,10 +51,12 @@ void main(uint3 index: SV_DispatchThreadId) {
 					const int2 ipos_prev = p + int2(xx, yy);
 					if (!gParams.mViews[view_index].isInside(ipos_prev)) continue;
 
-					const VisibilityData prev_vis = reinterpret<VisibilityData>(gParams.mPrevVisibility[ipos_prev]);
-					if (gParams.mInstanceIndexMap[vis.instanceIndex()] != prev_vis.instanceIndex()) continue;
-                    if (dot(vis.normal(), prev_vis.normal()) < cos(degrees(2))) continue;
-                    if (abs(depth.mPrevDepth - reinterpret<DepthData>(gParams.mPrevDepth[ipos_prev]).mDepth) >= 1.5 * length(depth.mDepthDerivative)) continue;
+                    if (gCheckNormal || gCheckDepth) {
+						const VisibilityData prev_vis = reinterpret<VisibilityData>(gParams.mPrevVisibility[ipos_prev]);
+						if (gParams.mInstanceIndexMap[vis.instanceIndex()] != prev_vis.instanceIndex()) continue;
+						if (gCheckNormal && dot(vis.normal(), prev_vis.normal()) < cos(degrees(2))) continue;
+						if (gCheckDepth && abs(depth.mPrevDepth - reinterpret<DepthData>(gParams.mPrevDepth[ipos_prev]).mDepth) >= 2 * length(depth.mDepthDerivative)) continue;
+                    }
 
 					const float4 c = gParams.mPrevAccumColor[ipos_prev];
 

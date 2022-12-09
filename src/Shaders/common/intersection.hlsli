@@ -1,5 +1,8 @@
+#pragma once
+
 #include "compat/scene.h"
 #include "materials/medium.hlsli"
+#include "rng.hlsli"
 
 #define SHADING_FLAG_FLIP_BITANGENT BIT(0)
 
@@ -18,7 +21,6 @@ struct ShadingData {
 	float mMeanCurvature;
 
 	property bool isSurface    { get { return mShapeArea > 0; } }
-	property bool isBackground { get { return mShapeArea < 0; } }
 	property bool isMedium     { get { return mShapeArea == 0; } }
 	property uint materialAddress { get { return BF_GET(mFlagsMaterialAddress, 4, 28); } }
 
@@ -54,7 +56,7 @@ struct IntersectionResult {
 	}
 	property InstanceData instance { get { return gScene.mInstances[instanceIndex]; } }
 	property TransformData transform { get { return gScene.mInstanceTransforms[instanceIndex]; } }
-	float mShapePdfA;
+	float mLightPickPdf;
 };
 
 float3 rayOffset(const float3 P, const float3 Ng) {
@@ -248,7 +250,7 @@ extension SceneParameters {
 				case CANDIDATE_PROCEDURAL_PRIMITIVE: {
 					const InstanceData instance = mInstances[instanceIndex];
 					switch (instance.type()) {
-						case INSTANCE_TYPE_SPHERE: {
+						case InstanceType::eSphere: {
 							const float2 st = raySphere(rayQuery.CandidateObjectRayOrigin(), rayQuery.CandidateObjectRayDirection(), 0, reinterpret<SphereInstanceData>(instance).radius());
 							if (st.x < st.y) {
 								const float t = st.x > rayQuery.RayTMin() ? st.x : st.y;
@@ -258,7 +260,7 @@ extension SceneParameters {
 							break;
 						}
 
-						case INSTANCE_TYPE_VOLUME: {
+						case InstanceType::eVolume: {
 							pnanovdb_buf_t volumeBuffer = mVolumes[NonUniformResourceIndex(reinterpret<VolumeInstanceData>(instance).volumeIndex())];
 							pnanovdb_grid_handle_t gridHandle = {0};
 							pnanovdb_root_handle_t root = pnanovdb_tree_get_root(volumeBuffer, pnanovdb_grid_get_tree(volumeBuffer, gridHandle));
@@ -306,25 +308,27 @@ extension SceneParameters {
 
 		isect.mDistance = rayQuery.CommittedRayT();
 		isect.instanceIndex = rayQuery.CommittedInstanceID();
+		isect.mLightPickPdf = 1;
 
 		if (rayQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
-			MeshInstanceData meshInstance = reinterpret<MeshInstanceData>(isect.instance);
 			isect.primitiveIndex = rayQuery.CommittedPrimitiveIndex();
-			shadingData = makeTriangleShadingData(meshInstance, isect.transform, rayQuery.CommittedPrimitiveIndex(), rayQuery.CommittedTriangleBarycentrics());
-			isect.mShapePdfA = 1 / (shadingData.mShapeArea * meshInstance.primitiveCount());
+
+			MeshInstanceData meshInstance = reinterpret<MeshInstanceData>(isect.instance);
+			isect.mLightPickPdf /= meshInstance.primitiveCount();
+            shadingData = makeTriangleShadingData(meshInstance, isect.transform, rayQuery.CommittedPrimitiveIndex(), rayQuery.CommittedTriangleBarycentrics());
+
 		} else if (rayQuery.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT) {
 			isect.primitiveIndex = INVALID_PRIMITIVE;
+
 			const float3 localPosition = rayQuery.CommittedObjectRayOrigin() + rayQuery.CommittedObjectRayDirection()*rayQuery.CommittedRayT();
+
 			switch (isect.instance.type()) {
-				case INSTANCE_TYPE_SPHERE:
-					shadingData = makeSphereShadingData(reinterpret<SphereInstanceData>(isect.instance), isect.transform, localPosition);
-					isect.mShapePdfA = 1/shadingData.mShapeArea;
+				case InstanceType::eSphere:
+                    shadingData = makeSphereShadingData(reinterpret<SphereInstanceData>(isect.instance), isect.transform, localPosition);
 					break;
-				case INSTANCE_TYPE_VOLUME:
-					// shadingData.mPackedGeometryNormal set in the rayQuery loop above
-					const uint n = shadingData.mPackedGeometryNormal;
-					shadingData = makeVolumeShadingData(reinterpret<VolumeInstanceData>(isect.instance), isect.transform, localPosition);
-					isect.mShapePdfA = 1;
+				case InstanceType::eVolume:
+					const uint n = shadingData.mPackedGeometryNormal; // assigned in the rayQuery loop above
+                    shadingData = makeVolumeShadingData(reinterpret<VolumeInstanceData>(isect.instance), isect.transform, localPosition);
 					shadingData.mPackedGeometryNormal = n;
 					break;
 			}
@@ -380,7 +384,7 @@ extension SceneParameters {
 
 			if (!hit) return false; // missed scene
 
-			if (isect.instance.type() != INSTANCE_TYPE_VOLUME)
+            if (isect.instance.type() != InstanceType::eVolume)
 				return true;
 
 			const float3 ng = shadingData.geometryNormal;
@@ -399,7 +403,10 @@ extension SceneParameters {
 		}
 	}
 
-	void traceVisibilityRay(inout RandomSampler rng, RayDesc ray, uint curMediumInstance, out float3 beta, out float dirPdf, out float neePdf) {
+    void traceVisibilityRay(inout RandomSampler rng, RayDesc ray, uint curMediumInstance, out float3 beta, out float dirPdf, out float neePdf) {
+        if (CHECK_FEATURE(PerformanceCounters))
+            InterlockedAdd(mPerformanceCounters[1], 1);
+
 		dirPdf = 1;
 		neePdf = 1;
 		beta = 1;
@@ -425,7 +432,7 @@ extension SceneParameters {
             ShadingData shadingData;
             const bool hit = traceRay(ray, true, /*out*/ isect, /*out*/ shadingData);
 
-			if (hit && isect.instance.type() != INSTANCE_TYPE_VOLUME) {
+            if (hit && isect.instance.type() != InstanceType::eVolume) {
 				// hit a surface
 				beta = 0;
 				dirPdf = 0;

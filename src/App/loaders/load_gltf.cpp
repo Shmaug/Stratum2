@@ -23,6 +23,8 @@ shared_ptr<Node> Scene::loadGltf(CommandBuffer& commandBuffer, const filesystem:
 		throw runtime_error(filename.string() + ": " + err);
 	if (!warn.empty()) cerr << filename.string() << ": " << warn << endl;
 
+	cout << "Processing scene data..." << endl;
+
 	Device& device = commandBuffer.mDevice;
 
 	vector<shared_ptr<Buffer>> buffers(model.buffers.size());

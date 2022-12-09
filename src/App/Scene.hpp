@@ -65,6 +65,7 @@ public:
 		Buffer::View<TransformData> mInstanceMotionTransforms;
 		Buffer::View<uint32_t> mLightInstanceMap;
 		Buffer::View<uint32_t> mInstanceIndexMap;
+		uint32_t mLightCount;
 
 		MaterialResources mMaterialResources;
 		Buffer::View<uint32_t> mImage1Extents;
@@ -103,10 +104,10 @@ public:
 	shared_ptr<Node> loadGltf(CommandBuffer& commandBuffer, const filesystem::path& filename);
 	shared_ptr<Node> loadVol(CommandBuffer& commandBuffer, const filesystem::path& filename);
 	shared_ptr<Node> loadNvdb(CommandBuffer& commandBuffer, const filesystem::path& filename);
-#ifdef STRATUM_ENABLE_ASSIMP
+#ifdef ENABLE_ASSIMP
 	shared_ptr<Node> loadAssimp(CommandBuffer& commandBuffer, const filesystem::path& filename);
 #endif
-#ifdef STRATUM_ENABLE_OPENVDB
+#ifdef ENABLE_OPENVDB
 	shared_ptr<Node> loadVdb(CommandBuffer& commandBuffer, const filesystem::path& filename);
 #endif
 
@@ -117,14 +118,14 @@ public:
 			"glTF Scenes (.gltf .glb)", "*.gltf *.glb",
 			"Mitsuba Volumes (.vol)" , "*.vol",
 			"NVDB Volume (.nvdb)" , "*.nvdb",
-	#ifdef STRATUM_ENABLE_ASSIMP
+	#ifdef ENABLE_ASSIMP
 			"Autodesk (.fbx)", "*.fbx",
 			"Wavefront Object Files (.obj)", "*.obj",
 			"Stanford Polygon Library Files (.ply)", "*.ply",
 			"Stereolithography Files (.stl)", "*.stl",
 			"Blender Scenes (.blend)", "*.blend",
 	#endif
-	#ifdef STRATUM_ENABLE_OPENVDB
+	#ifdef ENABLE_OPENVDB
 			"VDB Volumes (.vdb)", "*.vdb",
 	#endif
 		};
@@ -137,14 +138,14 @@ public:
 		else if (ext == ".glb") return loadGltf(commandBuffer, filename);
 		else if (ext == ".vol") return loadVol(commandBuffer, filename);
 		else if (ext == ".nvdb") return loadNvdb(commandBuffer, filename);
-	#ifdef STRATUM_ENABLE_ASSIMP
+	#ifdef ENABLE_ASSIMP
 		else if (ext == ".fbx") return loadAssimp(commandBuffer, filename);
 		else if (ext == ".obj") return loadAssimp(commandBuffer, filename);
 		else if (ext == ".blend") return loadAssimp(commandBuffer, filename);
 		else if (ext == ".ply") return loadAssimp(commandBuffer, filename);
 		else if (ext == ".stl") return loadAssimp(commandBuffer, filename);
 	#endif
-	#ifdef STRATUM_ENABLE_OPENVDB
+	#ifdef ENABLE_OPENVDB
 		else if (ext == ".vdb") return loadVdb(commandBuffer, filename)
 	#endif
 		else

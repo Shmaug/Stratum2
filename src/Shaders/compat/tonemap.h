@@ -9,7 +9,7 @@
 STM_NAMESPACE_BEGIN
 
 enum class TonemapMode {
-	eRaw,
+	eRaw = 0,
 	eReinhard,
 	eReinhardExtended,
 	eReinhardLuminance,

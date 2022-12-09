@@ -33,6 +33,11 @@ float Gc(const float3 w_l) {
 }
 
 #include "compat/disney_data.h"
+
+extension DisneyMaterialData {
+
+};
+
 #include "disney_diffuse.hlsli"
 #include "disney_metal.hlsli"
 #include "disney_glass.hlsli"
@@ -186,7 +191,7 @@ struct DisneyMaterial : BSDF {
 		if (rnd.z < w_glass + w_metal) {
 			// glass or metal
 			// importance sample Dm
-			h = sample_visible_normals(dirIn, alpha.x, alpha.y, rnd.xy);
+			h = sampleVisibleNormals(dirIn, alpha.x, alpha.y, rnd.xy);
 			h_dot_in = dot(h, dirIn);
 			D = Dm(alpha.x, alpha.y, h);
 			F = fresnel_dielectric(h_dot_in, local_eta);
