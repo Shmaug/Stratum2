@@ -8,6 +8,9 @@
 namespace stm2 {
 
 template<typename T>
+concept is_node_constructible = requires(Node& n) { new T(n); };
+
+template<typename T>
 concept has_drawGui_node = requires(T t, Node& n) { t.drawGui(n); };
 template<typename T>
 concept has_drawGui_void = requires(T t) { t.drawGui(); };
@@ -41,36 +44,33 @@ public:
 		mPinned.erase(&n);
 	}
 
-	template<typename T> requires(has_drawGui_node<T> || has_drawGui_void<T>)
-	inline void setTypeCallback() {
-		if (mInspectorGuiFns.find(typeid(T)) == mInspectorGuiFns.end())
-			mInspectorGuiFns[typeid(T)] = [](Node& n) {
-				if constexpr(has_drawGui_node<T>)
-					n.getComponent<T>()->drawGui(n);
-				else
-					n.getComponent<T>()->drawGui();
-			};
-	}
 	template<typename T, invocable<Node&> F>
-	inline void setTypeCallback(F&& fn) {
+	inline void setInspectCallback(F&& fn) {
 		if (mInspectorGuiFns.find(typeid(T)) == mInspectorGuiFns.end())
 			mInspectorGuiFns[typeid(T)] = fn;
 	}
-
-	template<typename T>
-	inline void unsetTypeCallback() {
-		mInspectorGuiFns.erase(typeid(T));
-	}
-	inline void unsetTypeCallback(type_index t) {
-		mInspectorGuiFns.erase(t);
+	template<typename T> requires(has_drawGui_node<T> || has_drawGui_void<T>)
+	inline void setInspectCallback() {
+		setInspectCallback<T>([](Node& n) {
+			if constexpr(has_drawGui_node<T>)
+				n.getComponent<T>()->drawGui(n);
+			else
+				n.getComponent<T>()->drawGui();
+		});
+		if constexpr(is_default_constructible_v<T>)
+			mInspectorConstructFns[typeid(T)] = [](Node& n){ return static_pointer_cast<void>(make_shared<T>()); };
+		else if constexpr(is_node_constructible<T>)
+			mInspectorConstructFns[typeid(T)] = [](Node& n){ return static_pointer_cast<void>(make_shared<T>(n)); };
 	}
 
 private:
 	unordered_map<type_index, function<void(Node&)>> mInspectorGuiFns;
-	shared_ptr<Node> mSelected;
+	unordered_map<type_index, function<shared_ptr<void>(Node& n)>> mInspectorConstructFns;
 	unordered_map<Node*, PinnedComponent> mPinned;
+	shared_ptr<Node> mSelected;
+	string mInputChildName;
 
-	void drawNodeGui(Node& n);
+	bool drawNodeGui(Node& n);
 };
 
 }

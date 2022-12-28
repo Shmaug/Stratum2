@@ -45,11 +45,12 @@ struct LambertianMaterial : BSDF {
 		load(sd);
 	}
 
-
-	float3 emission() { return bsdf.baseColor()*bsdf.emission(); }
+    float3 emission() { return bsdf.baseColor() * bsdf.emission(); }
+    float emissionPdf() { return any(bsdf.emission() > 0) ? 1 : 0; }
 	float3 albedo() { return bsdf.baseColor(); }
-	bool canEvaluate() { return bsdf.emission() <= 0 && any(bsdf.baseColor() > 0); }
-	bool isSingular() { return false; }
+    bool canEvaluate() { return bsdf.emission() <= 0 && any(bsdf.baseColor() > 0); }
+    bool isSingular() { return false; }
+    float continuationProb() { return saturate(luminance(bsdf.baseColor())); }
 
 	MaterialEvalRecord evaluate<let Adjoint : bool>(const float3 dirIn, const float3 dirOut) {
 		MaterialEvalRecord r;

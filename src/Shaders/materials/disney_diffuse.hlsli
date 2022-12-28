@@ -1,3 +1,6 @@
+#include "compat/disney_data.h"
+#include "bsdf.hlsli"
+
 float3 disneydiffuse_eval(const DisneyMaterialData bsdf, const float3 dirIn, const float3 dirOut) {
 	const float hdotwo = abs(dot(normalize(dirIn + dirOut), dirOut));
 
@@ -26,7 +29,7 @@ struct DisneyDiffuseMaterial : BSDF {
             bsdf.data[i] = ImageValue4(gScene.mMaterialData, address + i * ImageValue4::PackedSize).eval(uv, uvScreenSize);
 
         // normal map
-        if (CHECK_FEATURE(NormalMaps)) {
+        if (gNormalMaps) {
             const uint2 p = gScene.mMaterialData.Load<uint2>(address + (ImageValue4::PackedSize * DisneyMaterialData::gDataCount) + 4);
             ImageValue3 bump_img = { 1, p.x };
             if (bump_img.hasImage() && asfloat(p.y) > 0) {
@@ -58,8 +61,10 @@ struct DisneyDiffuseMaterial : BSDF {
     }
 
     float3 emission() { return bsdf.baseColor() * bsdf.emission(); }
+    float emissionPdf() { return any(bsdf.emission() > 0) ? 1 : 0; }
     float3 albedo() { return bsdf.baseColor(); }
     bool canEvaluate() { return bsdf.emission() <= 0 && any(bsdf.baseColor() > 0); }
+    float continuationProb() { return luminance(bsdf.baseColor()); }
 
     bool isSingular() { return false; }
 

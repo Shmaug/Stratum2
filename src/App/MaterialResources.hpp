@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Utils/hlslmath.hpp>
+#include <Core/hlslmath.hpp>
 #include <Core/Buffer.hpp>
 #include <Core/Image.hpp>
 
@@ -38,7 +38,7 @@ struct MaterialResources {
 
 	unordered_map<Image::View, uint32_t> mImage4s;
 	unordered_map<Image::View, uint32_t> mImage1s;
-	unordered_map<Buffer::View<byte>, uint32_t> mVolumeDataMap;
+	unordered_map<pair<shared_ptr<Buffer>, vk::DeviceSize>, uint32_t> mVolumeDataMap;
 
 	inline uint32_t getIndex(const Image::View& image) {
 		if (!image) return ~0u;
@@ -53,8 +53,9 @@ struct MaterialResources {
 	}
 	inline uint32_t getIndex(const Buffer::View<byte>& buf) {
 		if (!buf) return ~0u;
-		auto it = mVolumeDataMap.find(buf);
-		return (it == mVolumeDataMap.end()) ? mVolumeDataMap.emplace(buf, (uint32_t)mVolumeDataMap.size()).first->second : it->second;
+		const auto key = pair{buf.buffer(), buf.offset()};
+		auto it = mVolumeDataMap.find(key);
+		return (it == mVolumeDataMap.end()) ? mVolumeDataMap.emplace(key, (uint32_t)mVolumeDataMap.size()).first->second : it->second;
 	}
 };
 

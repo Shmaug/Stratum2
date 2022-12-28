@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Utils/hash.hpp>
+#include "hash.hpp"
 
 #include "Buffer.hpp"
 #include "Shader.hpp"

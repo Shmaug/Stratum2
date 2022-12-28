@@ -1,5 +1,4 @@
-#ifndef TONEMAP_H
-#define TONEMAP_H
+#pragma once
 
 #include "hlslcompat.h"
 #ifdef __cplusplus
@@ -54,6 +53,4 @@ inline string to_string(const stm2::TonemapMode& m) {
 	}
 }
 }
-#endif
-
 #endif

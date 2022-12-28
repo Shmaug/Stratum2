@@ -5,8 +5,8 @@
 
 #include <vulkan/vulkan_raii.hpp>
 
-#include <Utils/fwd.hpp>
-#include <Utils/hlslmath.hpp>
+#include "fwd.hpp"
+#include "hlslmath.hpp"
 
 struct GLFWwindow;
 

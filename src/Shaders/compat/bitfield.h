@@ -1,5 +1,4 @@
-#ifndef BITFIELD_H
-#define BITFIELD_H
+#pragma once
 
 // https://gist.github.com/Jeff-Russ/c9b471158fa7427280e6707d9b11d7d2
 
@@ -52,5 +51,3 @@ of the bit is '1', '0' if it was '0'. */
 #define BF_SET(x, bf, start, len) ( x = ((x) &~ BF_MASK(start, len)) | BF_PREP(bf, start, len) )
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-#endif

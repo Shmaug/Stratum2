@@ -3,7 +3,7 @@
 #include "MaterialResources.hpp"
 
 #include <Shaders/compat/scene.h>
-#include <Shaders/compat/environment.h>
+#include <Shaders/compat/environment_image.h>
 #include <Shaders/compat/disney_data.h>
 
 namespace stm2 {

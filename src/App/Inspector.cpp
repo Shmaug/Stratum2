@@ -10,37 +10,101 @@
 namespace stm2 {
 
 Inspector::Inspector(Node& node) : mNode(node) {
-	setTypeCallback<Device>();
-	setTypeCallback<Instance>();
-	setTypeCallback<Swapchain>();
-	setTypeCallback<Window>();
+	setInspectCallback<Device>();
+	setInspectCallback<Instance>();
+	setInspectCallback<Swapchain>();
+	setInspectCallback<Window>();
 }
 
-void Inspector::drawNodeGui(Node& n) {
+// scene graph node inspector
+bool Inspector::drawNodeGui(Node& n) {
 	ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnDoubleClick | ImGuiTreeNodeFlags_OpenOnArrow;
 	if (&n == mSelected.get()) flags |= ImGuiTreeNodeFlags_Selected;
 	if (n.children().empty()) flags |= ImGuiTreeNodeFlags_Leaf;
 
+	// open nodes above selected node
 	if (mSelected && n.isDescendant(*mSelected))
 		ImGui::SetNextItemOpen(true, ImGuiCond_Once);
 
+	// tree menu item
 	ImGui::PushID(&n);
 	const bool open = ImGui::TreeNodeEx(n.name().c_str(), flags);
 	ImGui::PopID();
+
+	bool erase = false;
+
+	// context menu
+	if (ImGui::BeginPopupContextItem()) {
+		if (ImGui::Button("Delete")) {
+			erase = true;
+		}
+
+		if (ImGui::Button("Add child")) {
+			n.addChild("Child");
+			ImGui::OpenPopup("Add node");
+		}
+
+		if (ImGui::Button("Add component")) {
+			ImGui::OpenPopup("Add component");
+		}
+
+		// add child dialog
+		if (ImGui::BeginPopupModal("Add node")) {
+			mInputChildName.resize(64);
+			ImGui::InputText("Child name", mInputChildName.data(), mInputChildName.size());
+			if (ImGui::Button("Done")) {
+				n.addChild(mInputChildName);
+				ImGui::CloseCurrentPopup();
+			}
+			ImGui::EndPopup();
+		}
+
+		// add component dialog
+		if (ImGui::BeginPopupModal("Add component")) {
+			for (auto[type, ctor] : mInspectorConstructFns) {
+				if (n.hasComponent(type))
+					continue;
+
+				if (ImGui::Button(type.name())) {
+					n.addComponent(type, ctor(n));
+					ImGui::CloseCurrentPopup();
+				}
+			}
+			ImGui::EndPopup();
+		}
+
+		ImGui::EndPopup();
+	}
+
 	if (open) {
+		// select node if treenode is clicked
 		if (ImGui::IsItemClicked())
 			select(n.getPtr());
+
+		unordered_set<Node*> toErase;
+
+		// draw children
 		for (const shared_ptr<Node>& c : n.children())
-			drawNodeGui(*c);
+			if (drawNodeGui(*c))
+				toErase.emplace(c.get());
 		ImGui::TreePop();
+
+		for (Node* c : toErase) {
+			c->removeParent();
+			if (mSelected.get() == c) {
+				select(nullptr);
+			}
+		}
 	}
+	return erase;
 }
 
 void Inspector::draw() {
 	ProfilerScope ps("Inspector::draw");
 
-	if (ImGui::Begin("Node Graph"))
+	if (ImGui::Begin("Node Graph")) {
 		drawNodeGui(*mNode.root());
+	}
 	ImGui::End();
 
 	if (ImGui::Begin("Inspector")) {
@@ -50,10 +114,9 @@ void Inspector::draw() {
 			if ((s && !mSelected->getComponent<Scene>()) && ImGui::Button("x")) {
 				// delete selected node
 
-				if (ImGui::GetIO().KeyAlt) {
-					if (const shared_ptr<Node> p = mSelected->parent())
-						for (const shared_ptr<Node>& c : mSelected->children())
-							p->addChild(c);
+				if (const shared_ptr<Node> p = mSelected->parent(); p && ImGui::GetIO().KeyAlt) {
+					for (const shared_ptr<Node>& c : mSelected->children())
+						p->addChild(c);
 				}
 				mSelected->removeParent();
 				select(nullptr);
@@ -64,9 +127,6 @@ void Inspector::draw() {
 				ImGui::SameLine();
 				ImGui::Text(mSelected->name().c_str());
 				ImGui::SetNextItemWidth(40);
-
-				if (!mSelected->getComponent<TransformData>() && ImGui::Button("Add transform"))
-					mSelected->makeComponent<TransformData>(float3::Zero(), quatf::identity(), float3::Ones());
 
 				// list components in selected node
 

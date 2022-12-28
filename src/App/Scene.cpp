@@ -25,7 +25,7 @@ tuple<shared_ptr<vk::raii::AccelerationStructureKHR>, Buffer::View<byte>> buildA
 	} else
 		buildSizes.accelerationStructureSize = buildSizes.buildScratchSize = 4;
 
-	Buffer::View<byte> buffer      = make_shared<Buffer>(
+	Buffer::View<byte> buffer = make_shared<Buffer>(
 		commandBuffer.mDevice,
 		name,
 		buildSizes.accelerationStructureSize,
@@ -69,15 +69,15 @@ TransformData nodeToWorld(const Node& node) {
 
 Scene::Scene(Node& node): mNode(node) {
 	if (shared_ptr<Inspector> inspector = mNode.root()->findDescendant<Inspector>()) {
-		inspector->setTypeCallback<Scene>();
-		inspector->setTypeCallback<TransformData>();
-		inspector->setTypeCallback<Camera>();
-		inspector->setTypeCallback<MeshPrimitive>();
-		inspector->setTypeCallback<SpherePrimitive>();
-		inspector->setTypeCallback<Material>();
-		inspector->setTypeCallback<Medium>();
-		inspector->setTypeCallback<Environment>();
-		inspector->setTypeCallback<nanovdb::GridMetaData>([](Node& n) {
+		inspector->setInspectCallback<Scene>();
+		inspector->setInspectCallback<TransformData>();
+		inspector->setInspectCallback<Camera>();
+		inspector->setInspectCallback<MeshPrimitive>();
+		inspector->setInspectCallback<SpherePrimitive>();
+		inspector->setInspectCallback<Material>();
+		inspector->setInspectCallback<Medium>();
+		inspector->setInspectCallback<EnvironmentImage>();
+		inspector->setInspectCallback<nanovdb::GridMetaData>([](Node& n) {
 		auto metadata = n.getComponent<nanovdb::GridMetaData>();
 			ImGui::LabelText("Grid name", metadata->shortGridName());
 			ImGui::LabelText("Grid count", "%u", metadata->gridCount());
@@ -123,7 +123,7 @@ shared_ptr<Node> Scene::loadEnvironmentMap(CommandBuffer& commandBuffer, const f
 	commandBuffer.trackResource(pixels);
 
 	const shared_ptr<Node> node = Node::create(filepath.stem().string());
-	node->makeComponent<Environment>(ImageValue<3>{ float3::Ones(), img });
+	node->makeComponent<EnvironmentImage>(ImageValue<3>{ float3::Ones(), img });
 	return node;
 }
 
@@ -364,6 +364,7 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 	if (!mResources)
 		mResources = mResourcePool.emplace(make_shared<FrameResources>(commandBuffer.mDevice));
 
+	mLastUpdate = chrono::high_resolution_clock::now();
 	mResources->update(*this, commandBuffer, prevFrame);
 	commandBuffer.trackResource(mResources);
 }
@@ -376,8 +377,9 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 	vector<TransformData> instanceTransforms;
 	vector<TransformData> instanceInverseTransforms;
 	vector<TransformData> instanceMotionTransforms;
-	vector<uint32_t> lightInstanceMap;
-	vector<uint32_t> instanceIndexMap;
+	vector<uint32_t> lightInstanceMap; // light index -> instance index
+	vector<uint32_t> instanceLightMap; // instance index -> light index
+	vector<uint32_t> instanceIndexMap; // current frame instance index -> previous frame instance index
 
 	vector<MeshVertexInfo> meshVertexInfos;
 	mVertexBuffers.clear();
@@ -432,11 +434,11 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 		const uint32_t instanceIndex = (uint32_t)instanceDatas.size();
 		instanceDatas.emplace_back(instance);
 		mInstanceNodes.emplace_back(node.getPtr());
+		uint32_t& lightIndex = instanceLightMap.emplace_back(INVALID_INSTANCE);
 		uint32_t& prevInstanceIndex = instanceIndexMap.emplace_back(-1);
 
 		// add light if emissive
 
-		uint32_t lightIndex = INVALID_INSTANCE;
 		if (emissivePower > 0) {
 			lightIndex = (uint32_t)lightInstanceMap.size();
 			//instanceDatas[instanceIndex].lightIndex(lightIndex);
@@ -638,7 +640,7 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 			const TransformData transform = nodeToWorld(primNode);
 			vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
 			float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
-			instance.instanceCustomIndex = appendInstanceData(primNode, vol.get(), VolumeInstanceData(materialAddress, mMaterialResources.mVolumeDataMap.at(vol->mDensityBuffer)), transform, 0);
+			instance.instanceCustomIndex = appendInstanceData(primNode, vol.get(), VolumeInstanceData(materialAddress, mMaterialResources.mVolumeDataMap.at({vol->mDensityBuffer.buffer(),vol->mDensityBuffer.offset()})), transform, 0);
 			instance.mask = BVH_FLAG_VOLUME;
 			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**aabb_it->second.first);
 		});
@@ -647,7 +649,7 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 	{ // environment material
 		ProfilerScope s("Process environment", &commandBuffer);
 		mEnvironmentMaterialAddress = -1;
-		scene.mNode.forEachDescendant<Environment>([&](Node& node, const shared_ptr<Environment> environment) {
+		scene.mNode.forEachDescendant<EnvironmentImage>([&](Node& node, const shared_ptr<EnvironmentImage> environment) {
 			if (environment->mEmission.mValue.isZero()) return true;
 			mEnvironmentMaterialAddress = mMaterialResources.mMaterialData.sizeBytes();
 			mMaterialCount++;
@@ -692,7 +694,7 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 				dst = make_shared<Buffer>(commandBuffer.mDevice, name, sizeof(T)*max(src.size(), size_t(1)), vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst);
 			if (src.empty()) return;
 			Buffer::View<T> staging = make_shared<Buffer>(commandBuffer.mDevice, dst.buffer()->resourceName()+"/Staging", sizeof(T)*src.size(), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
-			ranges::copy(src, staging.begin());
+			ranges::uninitialized_copy(src, staging);
 			Buffer::copy(commandBuffer, staging, dst);
 		};
 
@@ -701,9 +703,10 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 		uploadBuffer("mInstanceInverseTransforms", mInstanceInverseTransforms, instanceInverseTransforms);
 		uploadBuffer("mInstanceMotionTransforms", mInstanceMotionTransforms, instanceMotionTransforms);
 		uploadBuffer("mMaterialData", mMaterialData, mMaterialResources.mMaterialData);
-		uploadBuffer("mInstanceIndexMap", mInstanceIndexMap, instanceIndexMap);
 		uploadBuffer("mLightInstanceMap", mLightInstanceMap, lightInstanceMap);
+		uploadBuffer("mInstanceLightMap", mInstanceLightMap, instanceLightMap);
 		uploadBuffer("mMeshVertexInfo", mMeshVertexInfo, meshVertexInfos);
+		uploadBuffer("mInstanceIndexMap", mInstanceIndexMap, instanceIndexMap);
 		mLightCount = (uint32_t)lightInstanceMap.size();
 	}
 }
@@ -716,6 +719,7 @@ Descriptors Scene::FrameResources::getDescriptors() const {
 	descriptors[{ "mInstanceInverseTransforms", 0u }] = mInstanceInverseTransforms;
 	descriptors[{ "mInstanceMotionTransforms", 0u }]  = mInstanceMotionTransforms;
 	descriptors[{ "mLightInstanceMap", 0u }]          = mLightInstanceMap;
+	descriptors[{ "mInstanceLightMap", 0u }]          = mInstanceLightMap;
 	descriptors[{ "mMaterialData", 0u }]              = mMaterialData;
 	for (uint32_t i = 0; i < mVertexBuffers.size(); i++)
 		descriptors[{ "mVertexBuffers", i }] = mVertexBuffers[i];
@@ -725,7 +729,7 @@ Descriptors Scene::FrameResources::getDescriptors() const {
 	for (const auto& [image, index] : mMaterialResources.mImage1s)
 		descriptors[{"mImage1s", index}] = ImageDescriptor{ image, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
 	for (const auto& [vol, index] : mMaterialResources.mVolumeDataMap)
-		descriptors[{"mVolumes", index}] = vol;
+		descriptors[{"mVolumes", index}] = vol.first;
 	return descriptors;
 }
 
@@ -750,7 +754,7 @@ void ImageValue<N>::drawGui(const string& label) {
 void Scene::drawGui() {
 	if (mResources) {
 		ImGui::Text("%llu instances", mResources->mInstances.size());
-		ImGui::Text("%llu light instances", mResources->mLightInstanceMap.size());
+		ImGui::Text("%u lights", mResources->mLightCount);
 		ImGui::Text("%u emissive primitives", mResources->mEmissivePrimitiveCount);
 		ImGui::Text("%u materials", mResources->mMaterialCount);
 	}
@@ -937,4 +941,5 @@ void Medium::drawGui(Node& node) {
 			scene->markDirty();
 	}
 }
+
 }

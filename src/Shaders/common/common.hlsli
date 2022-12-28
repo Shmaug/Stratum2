@@ -34,6 +34,7 @@ float3x3 makeOrthonormal(const float3 N) {
     return r;
 }
 
+
 float2 sampleUniformTriangle(const float u1, const float u2) {
     const float a = sqrt(u1);
     return float2(1 - a, a * u2);
@@ -47,6 +48,7 @@ float3 sampleUniformSphereCartesian(const float u1, const float u2) {
     const float phi = 2 * M_PI * u2;
     return float3(r * cos(phi), r * sin(phi), z);
 }
+
 float3 sampleCosHemisphere(const float u1, const float u2) {
 	const float phi = (2*M_PI) * u2;
 	float2 xy = sqrt(u1) * float2(cos(phi), sin(phi));
@@ -55,6 +57,41 @@ float3 sampleCosHemisphere(const float u1, const float u2) {
 float cosHemispherePdfW(const float cosTheta) {
 	return max(cosTheta, 0.f) / M_PI;
 }
+
+float2 sampleConcentricDisc(const float u1, const float u2) {
+	const float a = 2 * u1 - 1; /* (a,b) is now on [-1,1]^2 */
+    const float b = 2 * u2 - 1;
+
+    float phi, r;
+
+    if (a > -b) { /* region 1 or 2 */
+        if (a > b) { /* region 1, also |a| > |b| */
+            r = a;
+            phi = (M_PI / 4.f) * (b / a);
+        } else { /* region 2, also |b| > |a| */
+            r = b;
+            phi = (M_PI / 4.f) * (2.f - (a / b));
+        }
+    } else { /* region 3 or 4 */
+
+        if (a < b) { /* region 3, also |a| >= |b|, a != 0 */
+            r = -a;
+            phi = (M_PI / 4.f) * (4.f + (b / a));
+        } else { /* region 4, |b| >= |a|, but a==0 and b==0 could occur. */
+            r = -b;
+            if (b != 0)
+                phi = (M_PI / 4.f) * (6.f - (a / b));
+            else
+                phi = 0;
+        }
+    }
+
+    return r * float2(cos(phi), sin(phi));
+}
+float concentricDiscPdfA() {
+    return 1.0 / M_PI;
+}
+
 
 float2 sampleTexel(Texture2D<float4> image, float2 rnd, out float pdf, const uint maxIterations = 10) {
  	uint2 imageExtent;

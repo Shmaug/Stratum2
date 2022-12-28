@@ -16,7 +16,7 @@ struct Medium : BSDF {
 	float3 mAlbedoScale;
 	float mAttenuationUnit;
 	uint mDensityVolumeIndex;
-	uint mAlbedoVolumeIndex;
+    uint mAlbedoVolumeIndex;
 
 	__init(uint address) {
 		mDensityScale		= gScene.mMaterialData.Load<float3>(address); address += 12;
@@ -27,10 +27,12 @@ struct Medium : BSDF {
 		mAlbedoVolumeIndex  = gScene.mMaterialData.Load(address); address += 4;
 	}
 
-	float3 emission() { return 0; }
+    float3 emission() { return 0; }
+    float emissionPdf() { return 0; }
 	float3 albedo() { return mAlbedoScale; }
-	bool canEvaluate() { return any(mDensityScale > 0); }
-	bool isSingular() { return abs(mAnisotropy) > 0.999; }
+    bool canEvaluate() { return any(mDensityScale > 0); }
+    bool isSingular() { return abs(mAnisotropy) > 0.999; }
+    float continuationProb() { return saturate(luminance(mAlbedoScale * mDensityScale)); }
 
 	MaterialEvalRecord evaluate<let Adjoint : bool>(const float3 dirIn, const float3 dirOut) {
 		const float v = 1/(4*M_PI) * (1 - mAnisotropy * mAnisotropy) / pow(1 + mAnisotropy * mAnisotropy + 2 * mAnisotropy * dot(dirIn, dirOut), 1.5);
@@ -50,8 +52,9 @@ struct Medium : BSDF {
 			const float tmp = (mAnisotropy * mAnisotropy - 1) / (2 * rnd.x * mAnisotropy - (mAnisotropy + 1));
 			const float cos_elevation = (tmp * tmp - (1 + mAnisotropy * mAnisotropy)) / (2 * mAnisotropy);
 			const float sin_elevation = sqrt(max(1 - cos_elevation * cos_elevation, 0));
-			const float azimuth = 2 * M_PI * rnd.y;
-			r.mDirection = mul(makeOrthonormal(dirIn), float3(sin_elevation * cos(azimuth), + sin_elevation * sin(azimuth), cos_elevation));
+            const float azimuth = 2 * M_PI * rnd.y;
+            const float3x3 frame = makeOrthonormal(dirIn);
+			r.mDirection = frame[0] * sin_elevation * cos(azimuth) + frame[1] * sin_elevation * sin(azimuth) + dirIn * cos_elevation;
 		}
 		const float v = 1/(4*M_PI) * (1 - mAnisotropy * mAnisotropy) / pow(1 + mAnisotropy * mAnisotropy + 2 * mAnisotropy * dot(dirIn, r.mDirection), 1.5);
 		r.mFwdPdfW = v;
@@ -77,54 +80,33 @@ struct Medium : BSDF {
 			return readAlbedo(albedo_accessor, pnanovdb_readaccessor_get_value_address(PNANOVDB_GRID_TYPE_FLOAT, gScene.mVolumes[mAlbedoVolumeIndex], albedo_accessor, (int3)floor(pos_index)));
 	}
 
+    property StructuredBuffer<uint> densityVolume { get { return gScene.mVolumes[mDensityVolumeIndex]; } }
+    property StructuredBuffer<uint> albedoVolume { get { return gScene.mVolumes[mAlbedoVolumeIndex]; } }
+
 	// returns hit position inside medium. multiplies beta by transmittance*sigma_s
-	float3 deltaTrack(inout RandomSampler rng, float3 origin, float3 direction, float tmax, inout float3 beta, out float3 dirPdf, out float3 neePdf, const bool scatter = true) {
+    float3 deltaTrack<let Scattering : bool>(inout RandomSampler rng, float3 origin, float3 direction, float tmax, inout float3 beta, out float3 dirPdf, out float3 neePdf, out bool scattered) {
+		pnanovdb_grid_handle_t gridHandle = { 0 };
+		scattered = false;
+
 		pnanovdb_readaccessor_t density_accessor, albedo_accessor;
-		pnanovdb_grid_handle_t grid_handle = { 0 };
-		pnanovdb_readaccessor_init(density_accessor, pnanovdb_tree_get_root(gScene.mVolumes[mDensityVolumeIndex], pnanovdb_grid_get_tree(gScene.mVolumes[mDensityVolumeIndex], grid_handle)));
-		if (mAlbedoVolumeIndex != -1)
-			pnanovdb_readaccessor_init(albedo_accessor, pnanovdb_tree_get_root(gScene.mVolumes[mAlbedoVolumeIndex], pnanovdb_grid_get_tree(gScene.mVolumes[mAlbedoVolumeIndex], grid_handle)));
+		pnanovdb_readaccessor_init(density_accessor, pnanovdb_tree_get_root(densityVolume, pnanovdb_grid_get_tree(densityVolume, gridHandle)));
+        if (mAlbedoVolumeIndex != -1)
+            pnanovdb_readaccessor_init(albedo_accessor, pnanovdb_tree_get_root(albedoVolume, pnanovdb_grid_get_tree(albedoVolume, gridHandle)));
 
 		dirPdf = 1;
 		neePdf = 1;
 
-		const float3 majorant = mDensityScale * readDensity(density_accessor, pnanovdb_root_get_max_address(PNANOVDB_GRID_TYPE_FLOAT, gScene.mVolumes[mDensityVolumeIndex], density_accessor.root));
-		const uint channel = rng.next() % 3;
-		if (majorant[channel] < 1e-6) return POS_INFINITY;
+		const float3 majorant = mDensityScale * readDensity(density_accessor, pnanovdb_root_get_max_address(PNANOVDB_GRID_TYPE_FLOAT, densityVolume, density_accessor.root));
+        const uint channel = rng.next() % 3;
+        if (majorant[channel] < 1e-6) return 0;
 
-		origin    = pnanovdb_grid_world_to_indexf    (gScene.mVolumes[mDensityVolumeIndex], grid_handle, origin);
-		direction = pnanovdb_grid_world_to_index_dirf(gScene.mVolumes[mDensityVolumeIndex], grid_handle, direction);
+		origin    = pnanovdb_grid_world_to_indexf    (densityVolume, gridHandle, origin);
+		direction = pnanovdb_grid_world_to_index_dirf(densityVolume, gridHandle, direction);
 
 		for (uint iteration = 0; iteration < gMaxNullCollisions && any(beta > 0); iteration++) {
-			const float2 rnd = float2(rng.nextFloat(), rng.nextFloat());
-			const float t = mAttenuationUnit * -log(1 - rnd.x) / majorant[channel];
-			if (t < tmax) {
-				origin += direction*t;
-				tmax -= t;
+            const float t = mAttenuationUnit * -log(1 - rng.nextFloat()) / majorant[channel];
 
-				const float3 local_density = mDensityScale * readDensity(density_accessor, origin);
-				const float3 local_albedo  = mAlbedoScale * readAlbedo(albedo_accessor, origin);
-
-				const float3 local_sigma_s = local_density * local_albedo;
-				const float3 local_sigma_a = local_density * (1 - local_albedo);
-				const float3 local_sigma_t = local_sigma_s + local_sigma_a;
-
-				const float3 real_prob = local_sigma_t / majorant;
-				const float3 tr = exp(-majorant * t) / max3(majorant);
-
-				if (scatter && rnd.y < real_prob[channel]) {
-					// real particle
-					beta *= tr * local_sigma_s;
-					dirPdf *= tr * majorant * real_prob;
-					return pnanovdb_grid_index_to_worldf(gScene.mVolumes[mDensityVolumeIndex], grid_handle, origin);
-				} else {
-					// fake particle
-					beta *= tr * (majorant - local_sigma_t);
-					dirPdf *= tr * majorant * (1 - real_prob);
-					neePdf *= tr * majorant;
-					return POS_INFINITY;
-				}
-			} else {
+			if (t >= tmax) {
 				// transmitted without scattering
 				const float3 tr = exp(-majorant * tmax);
 				beta *= tr;
@@ -132,9 +114,33 @@ struct Medium : BSDF {
 				dirPdf *= tr;
 				break;
 			}
+
+			origin += direction*t;
+			tmax -= t;
+
+            const float3 localSigmaS = mAlbedoScale * readAlbedo(albedo_accessor, origin);
+            const float3 localSigmaA = 1 - localSigmaS;
+			const float3 localDensity = mDensityScale * readDensity(density_accessor, origin);
+			const float3 localSigmaT = localDensity * (localSigmaS + localSigmaA);
+
+			const float3 tr = exp(-majorant * t) / max3(majorant);
+			const float3 realProb = localSigmaT / majorant;
+
+            if (Scattering && rng.nextFloat() < realProb[channel]) {
+				// real particle
+                beta *= tr * localSigmaS; // note: multiplication by localSigmaS is really part of BSDF computation
+                dirPdf *= tr * majorant * realProb;
+                scattered = true;
+				return pnanovdb_grid_index_to_worldf(densityVolume, gridHandle, origin);
+			} else {
+				// fake particle
+				beta *= tr * (majorant - localSigmaT);
+				dirPdf *= tr * majorant * (1 - realProb);
+                neePdf *= tr * majorant;
+			}
 		}
 
-		return POS_INFINITY;
+        return 0;
 	}
 };
 

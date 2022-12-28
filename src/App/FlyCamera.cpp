@@ -12,7 +12,7 @@ namespace stm2 {
 
 FlyCamera::FlyCamera(Node& node) : mNode(node) {
 	if (shared_ptr<Inspector> inspector = mNode.root()->findDescendant<Inspector>())
-		inspector->setTypeCallback<FlyCamera>();
+		inspector->setInspectCallback<FlyCamera>();
 }
 
 void FlyCamera::drawGui() {
@@ -28,20 +28,19 @@ void FlyCamera::drawGui() {
 void FlyCamera::update(const float deltaTime) {
 	ProfilerScope ps("FlyCamera::update");
 
-	const float fwd = 1;
+	const float fwd = mNode.getComponent<Camera>()->mProjection.mNearPlane > 0 ? 1 : -1;
 
 	TransformData& transform = *mNode.findAncestor<TransformData>();
 
-	if (!ImGui::GetIO().WantCaptureMouse) {
-		if (ImGui::IsMouseDown(ImGuiMouseButton_Right) && ImGui::IsMouseDragging(ImGuiMouseButton_Right)) {
-			if (ImGui::GetIO().MouseWheel != 0)
-				mMoveSpeed *= (1 + ImGui::GetIO().MouseWheel / 8);
+	const ImGuiIO& io = ImGui::GetIO();
 
-			const ImVec2 delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Right);
-			ImGui::ResetMouseDragDelta(ImGuiMouseButton_Right);
+	if (!io.WantCaptureMouse) {
+		if (ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+			if (io.MouseWheel != 0)
+				mMoveSpeed *= (1 + io.MouseWheel / 8);
 
-			mRotation[1] += delta[0] * fwd * mRotateSpeed;
-			mRotation[0] = clamp(mRotation[0] + delta[1] * mRotateSpeed, -((float)M_PI) / 2, ((float)M_PI) / 2);
+			mRotation[1] += io.MouseDelta.x * fwd * mRotateSpeed;
+			mRotation[0] = clamp(mRotation[0] + io.MouseDelta.y * mRotateSpeed, -((float)M_PI) / 2, ((float)M_PI) / 2);
 
 			const quatf r = qmul(
 				quatf::angleAxis(mRotation.y(), float3(0, 1, 0)),
@@ -49,7 +48,7 @@ void FlyCamera::update(const float deltaTime) {
 			transform.m.block<3, 3>(0, 0) = Eigen::Quaternionf(r.w, r.xyz[0], r.xyz[1], r.xyz[2]).matrix();
 		}
 	}
-	if (!ImGui::GetIO().WantCaptureKeyboard) {
+	if (!io.WantCaptureKeyboard) {
 		float3 mv = float3(0, 0, 0);
 		if (ImGui::IsKeyDown(ImGuiKey_D))     mv += float3(1, 0, 0);
 		if (ImGui::IsKeyDown(ImGuiKey_A))     mv += float3(-1, 0, 0);

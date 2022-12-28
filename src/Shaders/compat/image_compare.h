@@ -1,5 +1,4 @@
-#ifndef IMAGE_COMPARE_H
-#define IMAGE_COMPARE_H
+#pragma once
 
 #include "hlslcompat.h"
 
@@ -25,6 +24,4 @@ inline string to_string(const stm2::ImageCompareMode& m) {
 	}
 };
 }
-#endif
-
 #endif

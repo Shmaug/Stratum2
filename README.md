@@ -26,12 +26,16 @@ Stratum stores commandline arguments in the `Instance` class and can be queried 
 * --presentMode=`string`
 ## Scene arguments
 * --scene=`path`
+* --cameraPosition=`x,y,z`
+* --cameraOrientation=`x,y`
 
 ## Path tracer arguments
-* --minBounces=`int`
-* --maxBounces=`int`
-* --maxDiffuseBounces=`int`
+* --minPathLength=`int`
+* --maxPathLength=`int`
 * --exposure=`float`
+* --noReprojection
+* --noNormalCheck
+* --noDepthCheck
 
 # Required arguments
 Currently, Stratum requires the following arguments in order to function:

@@ -1,5 +1,4 @@
-#ifndef DENOISER_H
-#define DENOISER_H
+#pragma once
 
 #include "common.h"
 
@@ -37,8 +36,8 @@ inline string to_string(const stm2::DenoiserDebugMode& m) {
 struct DenoiserParameters {
 	StructuredBuffer<ViewData> mViews;
 	StructuredBuffer<uint> mInstanceIndexMap;
-	Texture2D<float2> mVisibility;
-	Texture2D<float2> mPrevVisibility;
+	Texture2D<uint2> mVisibility;
+	Texture2D<uint2> mPrevVisibility;
 	Texture2D<float4> mDepth;
 	Texture2D<float4> mPrevDepth;
 	Texture2D<float2> mPrevUVs;
@@ -53,7 +52,5 @@ struct DenoiserParameters {
 
 	SamplerState mStaticSampler;
 };
-
-#endif
 
 #endif

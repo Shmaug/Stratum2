@@ -34,10 +34,6 @@ float Gc(const float3 w_l) {
 
 #include "compat/disney_data.h"
 
-extension DisneyMaterialData {
-
-};
-
 #include "disney_diffuse.hlsli"
 #include "disney_metal.hlsli"
 #include "disney_glass.hlsli"
@@ -56,7 +52,7 @@ struct DisneyMaterial : BSDF {
             bsdf.data[i] = ImageValue4(gScene.mMaterialData, address + i * ImageValue4::PackedSize).eval(uv, uvScreenSize);
 
         // normal map
-        if (CHECK_FEATURE(NormalMaps)) {
+        if (gNormalMaps) {
             const uint2 p = gScene.mMaterialData.Load<uint2>(address + (ImageValue4::PackedSize * DisneyMaterialData::gDataCount) + 4);
             ImageValue3 bump_img = { 1, p.x };
             if (bump_img.hasImage() && asfloat(p.y) > 0) {
@@ -88,12 +84,12 @@ struct DisneyMaterial : BSDF {
 		load(sd);
 	}
 
-
-	float3 emission() { return bsdf.baseColor()*bsdf.emission(); }
+    float3 emission() { return bsdf.baseColor() * bsdf.emission(); }
+    float emissionPdf() { return any(bsdf.emission() > 0) ? 1 : 0; }
 	float3 albedo() { return bsdf.baseColor(); }
-	bool canEvaluate() { return bsdf.emission() <= 0 && any(bsdf.baseColor() > 0); }
-
-	bool isSingular() { return (bsdf.metallic() > 0.999 || bsdf.transmission() > 0.999) && bsdf.roughness() <= 1e-2; }
+    bool canEvaluate() { return bsdf.emission() <= 0 && any(bsdf.baseColor() > 0); }
+    bool isSingular() { return (bsdf.metallic() > 0.999 || bsdf.transmission() > 0.999) && bsdf.roughness() <= 1e-2; }
+    float continuationProb() { return saturate(luminance(bsdf.baseColor()) * (1.5 - bsdf.roughness())); }
 
     MaterialEvalRecord evaluate<let Adjoint : bool>(const float3 dirIn, const float3 dirOut) {
 		MaterialEvalRecord r;

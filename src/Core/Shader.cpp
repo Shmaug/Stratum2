@@ -1,7 +1,7 @@
 #include "Shader.hpp"
 #include "Instance.hpp"
 
-#include <Utils/hash.hpp>
+#include "hash.hpp"
 
 #include <slang/slang.h>
 
@@ -50,7 +50,10 @@ Shader::Shader(Device& device, const filesystem::path& sourceFile, const string&
 
 	SlangResult r = request->compile();
 	const char* msg = request->getDiagnosticOutput();
-	cout << "Compiled " << sourceFile << " " << entryPoint << endl << msg;
+	cout << "Compiled " << sourceFile << " " << entryPoint;
+	for (const auto&[d,v] : defines)
+		cout << " -D" << d << "=" << v;
+	cout << endl << msg;
 	if (SLANG_FAILED(r))
 		throw runtime_error(msg);
 

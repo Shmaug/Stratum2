@@ -1,5 +1,4 @@
-#ifndef SCENE_H
-#define SCENE_H
+#pragma once
 
 #include "bitfield.h"
 #include "transform.h"
@@ -149,12 +148,12 @@ struct ViewData {
 		clip_pos.y = -clip_pos.y;
 		return normalize(mProjection.backProject(clip_pos));
 	}
-	inline bool toRaster(const float3 pos, out float2 uv) {
+	inline bool toRaster(const float3 pos, out float2 pixelCoord) {
+        if (sign(pos.z) != sign(mProjection.mNearPlane))
+            return false;
 		float4 screen_pos = mProjection.projectPoint(pos);
-		screen_pos.y = -screen_pos.y;
-		screen_pos.xyz /= screen_pos.w;
-		if (any(abs(screen_pos.xyz) >= 1) || screen_pos.z <= 0) return false;
-		uv = mImageMin + extent() * (screen_pos.xy*.5 + .5);
+        if (any(abs(screen_pos.xyz) >= abs(screen_pos.w))) return false;
+        pixelCoord = mImageMin + extent() * (float2(screen_pos.x, -screen_pos.y) / screen_pos.w * .5 + .5);
 		return true;
 	}
 #endif
@@ -176,10 +175,23 @@ struct DepthData {
 	float2 mDepthDerivative;
 };
 
+// 48 bytes
+struct ShadingData {
+    float3 mPosition;
+    uint mFlagsMaterialAddress;
+
+    uint mPackedGeometryNormal;
+    uint mPackedShadingNormal;
+    uint mPackedTangent;
+    float mShapeArea;
+
+    float2 mTexcoord;
+    float mTexcoordScreenSize;
+    float mMeanCurvature;
+};
+
 STM_NAMESPACE_END
 
 #ifdef __HLSL__
 #include "../common/scene.hlsli"
 #endif // __HLSL__
-
-#endif

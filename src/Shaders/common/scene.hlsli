@@ -9,7 +9,8 @@ struct SceneParameters {
 	StructuredBuffer<TransformData> mInstanceInverseTransforms;
 	StructuredBuffer<TransformData> mInstanceMotionTransforms;
 
-    StructuredBuffer<uint> mLightInstanceMap; // mLightInstanceMap[light] -> instance
+    StructuredBuffer<uint> mLightInstanceMap; // light index -> instance index
+    StructuredBuffer<uint> mInstanceLightMap; // instance index -> light index
 
 	ByteAddressBuffer mMaterialData;
 	ByteAddressBuffer mVertexBuffers[gVertexBufferCount];

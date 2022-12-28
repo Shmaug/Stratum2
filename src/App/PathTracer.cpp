@@ -15,15 +15,20 @@ namespace stm2 {
 
 PathTracer::PathTracer(Node& node) : mNode(node) {
 	if (shared_ptr<Inspector> inspector = mNode.root()->findDescendant<Inspector>())
-		inspector->setTypeCallback<PathTracer>();
+		inspector->setInspectCallback<PathTracer>();
 
 	Device& device = *mNode.findAncestor<Device>();
 	createPipelines(device);
 
+	mPushConstants.mMinPathLength = 0;
+	mPushConstants.mMaxPathLength = 5;
+	mPushConstants.mRadiusAlpha = 0.5f;
+	mPushConstants.mRadiusFactor = 0.5f;
+	mPushConstants.mEnvironmentSampleProbability = 0.5f;
+
 	// initialize constants
-	if (auto arg = device.mInstance.findArgument("minBounces"); arg)        mPushConstants.mMinBounces        = atoi(arg->c_str());
-	if (auto arg = device.mInstance.findArgument("maxBounces"); arg)        mPushConstants.mMaxBounces        = atoi(arg->c_str());
-	if (auto arg = device.mInstance.findArgument("maxDiffuseBounces"); arg) mPushConstants.mMaxDiffuseBounces = atoi(arg->c_str());
+	if (auto arg = device.mInstance.findArgument("minPathLength"); arg) mPushConstants.mMinPathLength = atoi(arg->c_str());
+	if (auto arg = device.mInstance.findArgument("maxPathLength"); arg) mPushConstants.mMaxPathLength = atoi(arg->c_str());
 }
 
 void PathTracer::createPipelines(Device& device) {
@@ -48,8 +53,9 @@ void PathTracer::createPipelines(Device& device) {
 		"-capability", "spirv_1_5",
 		"-capability", "GL_EXT_ray_tracing"
 	};
-	const filesystem::path kernelPath = shaderPath / "path_tracer.slang";
-	mRenderPipelines[RenderPipelineIndex::eTraceViewPaths] = ComputePipelineCache(kernelPath, "sampleViewPaths", "sm_6_6", args, md);
+	const filesystem::path kernelPath = shaderPath / "vcm.slang";
+	mRenderPipelines[RenderPipelineIndex::eGenerateLightPaths]  = ComputePipelineCache(kernelPath, "GenerateLightPaths" , "sm_6_6", args, md);
+	mRenderPipelines[RenderPipelineIndex::eGenerateCameraPaths] = ComputePipelineCache(kernelPath, "GenerateCameraPaths", "sm_6_6", args, md);
 
 	mPerformanceCounters = make_shared<Buffer>(device, "mPerformanceCounters", 4*sizeof(uint32_t), vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
 	mPrevPerformanceCounters.resize(mPerformanceCounters.size());
@@ -57,14 +63,6 @@ void PathTracer::createPipelines(Device& device) {
 	ranges::fill(mPerformanceCounters, 0);
 	ranges::fill(mPrevPerformanceCounters, 0);
 	mPerformanceCounterTimer = 0;
-
-	mPushConstants.mMinBounces = 1;
-	mPushConstants.mMaxBounces = 3;
-	mPushConstants.mMaxDiffuseBounces = 2;
-	mPushConstants.mEnvironmentSampleProbability = 0.5f;
-
-	mPushConstants.mDebugViewVertices = 2;
-	mPushConstants.mDebugLightVertices = 1;
 }
 
 void PathTracer::drawGui() {
@@ -85,48 +83,41 @@ void PathTracer::drawGui() {
 
 	ImGui::PopID();
 
-	if (Gui::enumDropdown<PathTracerDebugMode>("Debug mode", mDebugMode, (uint32_t)PathTracerDebugMode::eNumPathTracerDebugMode)) changed = true;
-
-	if (mDebugMode == PathTracerDebugMode::ePathTypeContribution) {
-		if (ImGui::DragScalar("Debug view vertices" , ImGuiDataType_U32, &mPushConstants.mDebugViewVertices, 0.2f)) changed = true;
-		if (ImGui::DragScalar("Debug light vertices", ImGuiDataType_U32, &mPushConstants.mDebugLightVertices, 0.2f)) changed = true;
-	}
-
-	if (ImGui::CollapsingHeader("Feature flags")) {
-		for (uint32_t i = 0; i < (uint32_t)PathTracerFeatureFlagBits::eNumPathTracerFeatureFlagBits; i++)
-			if (ImGui::CheckboxFlags(std::to_string((PathTracerFeatureFlagBits)i).c_str(), &mFeatureFlags, BIT(i)))
-				changed = true;
-	}
-
 	if (changed && mDenoise) {
 		if (auto denoiser = mNode.getComponent<Denoiser>(); denoiser)
 			denoiser->resetAccumulation();
 	}
 
 	if (ImGui::CollapsingHeader("Configuration")) {
-		ImGui::Checkbox("Random frame seed", &mRandomPerFrame);
-		ImGui::Checkbox("Half precision", &mHalfColorPrecision);
+		bool changed = false;
+		if (Gui::enumDropdown<VcmAlgorithmType>("Algorithm", mAlgorithm, VcmAlgorithmType::kNumVcmAlgorithmType)) changed = true;
+		if (ImGui::Checkbox("Random frame seed", &mRandomPerFrame)) changed = true;
+		if (ImGui::Checkbox("Half precision", &mHalfColorPrecision)) changed = true;
+		if (ImGui::Checkbox("Performance counters", &mUsePerformanceCounters)) changed = true;
+		if (ImGui::DragScalar("LightTraceQuantization", ImGuiDataType_U32, &mLightTraceQuantization)) changed = true;
 
-		if (auto denoiser = mNode.getComponent<Denoiser>(); denoiser)
+		ImGui::PushItemWidth(60);
+		if (ImGui::DragScalar("Max path length", ImGuiDataType_U32, &mPushConstants.mMaxPathLength)) changed = true;
+		if (ImGui::DragScalar("Min path length", ImGuiDataType_U32, &mPushConstants.mMinPathLength)) changed = true;
+		if (mPushConstants.mEnvironmentMaterialAddress != -1 && mPushConstants.mLightCount > 0)
+			if (ImGui::SliderFloat("Environment sample probability", &mPushConstants.mEnvironmentSampleProbability, 0, 1)) changed = true;
+		if (ImGui::SliderFloat("Radius alpha", &mPushConstants.mRadiusAlpha, 0, 1)) changed = true;
+		if (ImGui::SliderFloat("Radius factor", &mPushConstants.mRadiusFactor, 0, 1)) changed = true;
+		ImGui::PopItemWidth();
+
+		if (auto denoiser = mNode.getComponent<Denoiser>(); denoiser) {
 			if (ImGui::Checkbox("Enable denoiser", &mDenoise))
+				changed = true;
+
+			if (changed)
 				denoiser->resetAccumulation();
+		}
 
 		if (auto tonemapper = mNode.getComponent<Tonemapper>(); tonemapper)
 			ImGui::Checkbox("Enable tonemapper", &mTonemap);
 	}
 
-	if (ImGui::CollapsingHeader("Path tracing")) {
-		ImGui::PushItemWidth(60);
-		ImGui::DragScalar("Max bounces", ImGuiDataType_U32, &mPushConstants.mMaxBounces);
-		ImGui::DragScalar("Min bounces", ImGuiDataType_U32, &mPushConstants.mMinBounces);
-		ImGui::DragScalar("Max diffuse bounces", ImGuiDataType_U32, &mPushConstants.mMaxDiffuseBounces);
-		if (mFeatureFlags & BIT((uint32_t)PathTracerFeatureFlagBits::eNee) && mPushConstants.mEnvironmentMaterialAddress != -1 && mPushConstants.mLightCount > 0)
-			ImGui::SliderFloat("Environment sample probability", &mPushConstants.mEnvironmentSampleProbability, 0, 1);
-
-		ImGui::PopItemWidth();
-	}
-
-	if (mFeatureFlags & BIT((uint32_t)PathTracerFeatureFlagBits::ePerformanceCounters)) {
+	if (mUsePerformanceCounters) {
 		const auto [rps, ext] = formatNumber(mPerformanceCounterPerSecond[0]);
 		ImGui::Text("%.2f%s Rays/second (%u%% visibility)", rps, ext, mPerformanceCounterPerSecond[0] == 0 ? 0 : (uint32_t)(100*mPerformanceCounterPerSecond[1] / mPerformanceCounterPerSecond[0]));
 	}
@@ -174,7 +165,8 @@ void PathTracer::drawGui() {
 }
 
 void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
-	auto sceneResources = mNode.findAncestor<Scene>()->resources();
+	auto scene = mNode.findAncestor<Scene>();
+	auto sceneResources = scene->resources();
 	if (!sceneResources) {
 		renderTarget.clearColor(commandBuffer, vk::ClearColorValue(array<uint32_t, 4>{ 0, 0, 0, 0 }));
 		return;
@@ -193,14 +185,12 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		ProfilerScope ps("Object picking");
 		if (frame && frame->mSelectionData && frame->mSelectionDataValid) {
 			const uint32_t selectedInstance = frame->mSelectionData.data()->instanceIndex();
-			if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-				if (shared_ptr<Inspector> inspector = mNode.findAncestor<Inspector>()) {
-					if (selectedInstance == INVALID_INSTANCE || selectedInstance >= frame->mSceneData->mInstanceNodes.size())
-						inspector->select(nullptr);
-					else {
-						if (shared_ptr<Node> selected = frame->mSceneData->mInstanceNodes[selectedInstance].lock())
-							inspector->select(selected);
-					}
+			if (shared_ptr<Inspector> inspector = mNode.findAncestor<Inspector>()) {
+				if (selectedInstance == INVALID_INSTANCE || selectedInstance >= frame->mSceneData->mInstanceNodes.size())
+					inspector->select(nullptr);
+				else {
+					if (shared_ptr<Node> selected = frame->mSceneData->mInstanceNodes[selectedInstance].lock())
+						inspector->select(selected);
 				}
 			}
 		}
@@ -243,11 +233,13 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		}
 
 		// upload viewdata
-		auto viewsBuffer                 = frame->getBuffer<ViewData>     ("mViews"         , frame->mViews.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
-		auto viewTransformsBuffer        = frame->getBuffer<TransformData>("mViewTransforms", frame->mViews.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+		auto viewsBuffer                 = frame->getBuffer<ViewData>     ("mViews"                , frame->mViews.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+		auto viewTransformsBuffer        = frame->getBuffer<TransformData>("mViewTransforms"       , frame->mViews.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+		auto viewInverseTransformsBuffer = frame->getBuffer<TransformData>("mViewInverseTransforms", frame->mViews.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
 		for (uint32_t i = 0; i < frame->mViews.size(); i++) {
 			viewsBuffer[i] = frame->mViews[i].first;
 			viewTransformsBuffer[i] = frame->mViews[i].second;
+			viewInverseTransformsBuffer[i] = frame->mViews[i].second.inverse();
 		}
 
 		auto prevViews                 = frame->getBuffer<ViewData>     ("mPrevViews"                , frame->mViews.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
@@ -259,9 +251,11 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 			}
 		}
 
+
 		// find if views are inside a volume
 		auto viewMediumIndicesBuffer = frame->getBuffer<uint32_t>("mViewMediumInstances", frame->mViews.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
 		ranges::fill(viewMediumIndicesBuffer, INVALID_INSTANCE);
+
 		mNode.forEachDescendant<Medium>([&](Node& node, const shared_ptr<Medium>& vol) {
 			has_volumes = true;
 			for (uint32_t i = 0; i < frame->mViews.size(); i++) {
@@ -276,10 +270,7 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 	mPushConstants.mEnvironmentMaterialAddress = frame->mSceneData->mEnvironmentMaterialAddress;
 	mPushConstants.mLightCount = frame->mSceneData->mLightCount;
 
-	const Defines defines {
-		{ string("gDebugMode"), "(PathTracerDebugMode)" + to_string((uint32_t)mDebugMode) },
-		{ string("gFeatureFlags"), to_string(mFeatureFlags) }
-	};
+	mPushConstants.mSceneSphere = float4(0,0,0,100);
 
 	const vk::Extent3D extent = renderTarget.extent();
 
@@ -292,17 +283,56 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		auto format = mHalfColorPrecision ? vk::Format::eR16G16B16A16Sfloat : vk::Format::eR32G32B32A32Sfloat;
 		auto usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst;
 
-		frame->getImage("mOutput",   extent, format, usage);
-		frame->getImage("mAlbedo",   extent, format, usage);
-		frame->getImage("mPrevUVs",  extent, vk::Format::eR32G32Sfloat, usage);
-		frame->getImage("mVisibility",  extent, vk::Format::eR32G32Sfloat, usage);
-		frame->getImage("mDepth",  extent, vk::Format::eR32G32B32A32Sfloat, usage);
+		frame->getImage("mOutput",     extent, format, usage);
+		frame->getImage("mAlbedo",     extent, format, usage);
+		frame->getImage("mPrevUVs",    extent, vk::Format::eR32G32Sfloat, usage);
+		frame->getImage("mVisibility", extent, vk::Format::eR32G32Uint, usage);
+		frame->getImage("mDepth" ,     extent, vk::Format::eR32G32B32A32Sfloat, usage);
+
+		frame->getBuffer<uint4>("mLightImage", pixelCount*sizeof(uint4), vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
+		frame->getBuffer<VcmVertex>("mLightVertices", pixelCount*mPushConstants.mMaxPathLength);
+		frame->getBuffer<uint32_t>("mLightPathLengths", pixelCount);
 
 		if (!frame->mSelectionData)
 			frame->mSelectionData = make_shared<Buffer>(commandBuffer.mDevice, "mSelectionData", sizeof(VisibilityData), vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
 	}
 
-	// create descriptorsets
+
+	Defines defines {
+		{ "gHasMedia", to_string(has_volumes) },
+		{ "gLightTraceQuantization", to_string(mLightTraceQuantization) },
+		{ "gPerformanceCounters", to_string(mUsePerformanceCounters) },
+	};
+
+	{
+		switch (mAlgorithm) {
+		case VcmAlgorithmType::kPathTrace:
+			defines["gPathTraceOnly"] = "true";
+			break;
+		case VcmAlgorithmType::kLightTrace:
+			defines["gLightTraceOnly"] = "true";
+			break;
+		case VcmAlgorithmType::kPpm:
+			defines["gPpm"] = "true";
+			defines["gUseVM"] = "true";
+			break;
+		case VcmAlgorithmType::kBpm:
+			defines["gUseVM"] = "true";
+			break;
+		case VcmAlgorithmType::kBpt:
+			defines["gUseVC"] = "true";
+			break;
+		case VcmAlgorithmType::kVcm:
+			defines["gUseVC"] = "true";
+			defines["gUseVM"] = "true";
+			break;
+		default:
+			printf("Unknown algorithm type\n");
+			break;
+		}
+	}
+
+	// create mDescriptorSets
 	{
 		ProfilerScope ps("Assign descriptors", &commandBuffer);
 
@@ -317,21 +347,42 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		for (const auto&[name, image] : frame->mImages)
 			descriptors[{ "gRenderParams." + name, 0 }] = image;
 
-		frame->mDescriptorSets = mRenderPipelines[eTraceViewPaths].get(commandBuffer.mDevice, defines)->getDescriptorSets(descriptors);
+		frame->mDescriptorSets = mRenderPipelines[eGenerateLightPaths].get(commandBuffer.mDevice, defines)->getDescriptorSets(descriptors);
 	}
 
-	// trace view paths
+	frame->mBuffers.at("mLightImage").fill(commandBuffer, 0);
+	frame->mBuffers.at("mLightImage").barrier(commandBuffer,
+		vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
+		vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
+
+	// generate light paths
+	if (mAlgorithm != VcmAlgorithmType::kPathTrace) {
+		ProfilerScope ps("Generate light paths", &commandBuffer);
+		mRenderPipelines[eGenerateLightPaths].get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, extent, frame->mDescriptorSets, {}, { { "", PushConstantValue(mPushConstants) } });
+		frame->mBuffers.at("mLightImage").barrier(commandBuffer,
+			vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
+			vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
+	}
+
+
+	// generate camera paths
 	{
-		ProfilerScope ps("Sample visibility", &commandBuffer);
-		mRenderPipelines[eTraceViewPaths].get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, extent, frame->mDescriptorSets, {}, { { "", PushConstantValue(mPushConstants) } });
+		ProfilerScope ps("Generate camera paths", &commandBuffer);
+		mRenderPipelines[eGenerateCameraPaths].get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, extent, frame->mDescriptorSets, {}, { { "", PushConstantValue(mPushConstants) } });
 	}
 
 
-	Image::View renderResult = get<Image::View>(frame->mImages.at((mDebugMode == PathTracerDebugMode::eAlbedo) ? "mAlbedo" : "mOutput"));
+	Image::View renderResult = get<Image::View>(frame->mImages.at("mOutput"));
 
 	shared_ptr<Denoiser> denoiser = mNode.findDescendant<Denoiser>();
 	if (mDenoise && denoiser) {
-		const bool changed = mPrevFrame && (frame->mBuffers.at("mViewTransforms").cast<TransformData>()[0].m != mPrevFrame->mBuffers.at("mViewTransforms").cast<TransformData>()[0].m).any();
+		bool changed = mPrevFrame && (frame->mBuffers.at("mViewTransforms").cast<TransformData>()[0].m != mPrevFrame->mBuffers.at("mViewTransforms").cast<TransformData>()[0].m).any();
+
+		if (scene->lastUpdate() > mLastSceneUpdateTime) {
+			changed = true;
+			mLastSceneUpdateTime = scene->lastUpdate();
+		}
+
 		if (changed && !denoiser->reprojection())
 			denoiser->resetAccumulation();
 
@@ -364,11 +415,10 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		const Image::View v = get<Image::View>(frame->mImages.at("mVisibility"));
 		v.barrier(commandBuffer, vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferRead);
 
-		const ImVec2 c = ImGui::GetCursorPos();
-		const int2 ci(c.x, c.y);
+		const ImVec2 c = ImGui::GetIO().MousePos;
 		for (const auto&[view, transform] : frame->mViews)
-			if (view.isInside(ci)) {
-				frame->mSelectionData.copyFromImage(commandBuffer, v.image(), v.subresourceLayer(), vk::Offset3D{ci[0], ci[1], 0}, vk::Extent3D{1,1,1});
+			if (view.isInside(int2(c.x, c.y))) {
+				frame->mSelectionData.copyFromImage(commandBuffer, v.image(), v.subresourceLayer(), vk::Offset3D{int(c.x), int(c.y), 0}, vk::Extent3D{1,1,1});
 				frame->mSelectionDataValid = true;
 			}
 	}

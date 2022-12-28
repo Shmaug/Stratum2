@@ -22,7 +22,8 @@ public:
 
 private:
 	enum RenderPipelineIndex {
-		eTraceViewPaths,
+		eGenerateLightPaths,
+		eGenerateCameraPaths,
 		ePipelineCount
 	};
 	array<ComputePipelineCache, RenderPipelineIndex::ePipelineCount> mRenderPipelines;
@@ -34,11 +35,9 @@ private:
 	bool mDenoise = true;
 	bool mTonemap = true;
 
-	PathTracerDebugMode mDebugMode = PathTracerDebugMode::eNone;
-	uint32_t mFeatureFlags =
-		BIT((uint32_t)PathTracerFeatureFlagBits::ePerformanceCounters) |
-		BIT((uint32_t)PathTracerFeatureFlagBits::eNee) |
-		BIT((uint32_t)PathTracerFeatureFlagBits::eNeeMis);
+	VcmAlgorithmType mAlgorithm = VcmAlgorithmType::kBpt;
+	bool mUsePerformanceCounters = false;
+	uint32_t mLightTraceQuantization = 16384;
 
 	Buffer::View<uint32_t> mPerformanceCounters;
 	vector<uint32_t> mPrevPerformanceCounters;
@@ -63,7 +62,7 @@ private:
 		unordered_map<string, Buffer::View<byte>> mBuffers;
 
 		template<typename T>
-		inline Buffer::View<T> getBuffer(const string& name, const vk::DeviceSize count, const vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eStorage, const vk::MemoryPropertyFlags memoryProperties = vk::MemoryPropertyFlagBits::eDeviceLocal) {
+		inline Buffer::View<T> getBuffer(const string& name, const vk::DeviceSize count, const vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eStorageBuffer, const vk::MemoryPropertyFlags memoryProperties = vk::MemoryPropertyFlagBits::eDeviceLocal) {
 			if (auto it = mBuffers.find(name); it != mBuffers.end())
 				if (it->second.sizeBytes() >= sizeof(T)*count)
 					return it->second.cast<T>();
@@ -93,6 +92,7 @@ private:
 	DeviceResourcePool<FrameResources> mFrameResourcePool;
 	shared_ptr<FrameResources> mPrevFrame;
 	Image::View mLastResultImage;
+	chrono::high_resolution_clock::time_point mLastSceneUpdateTime;
 };
 
 }

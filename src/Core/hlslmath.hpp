@@ -53,9 +53,9 @@ using std::max;
 using std::abs;
 using std::clamp;
 
- template <typename T> inline constexpr T sign(const T x, std::false_type is_signed) { return (T)(T(0) < x); }
- template <typename T> inline constexpr T sign(const T x, std::true_type is_signed) { return (T)((T(0) < x) - (x < T(0))); }
- template <typename T> inline constexpr T sign(const T x) { return sign(x, std::is_signed<T>()); }
+template <typename T> inline constexpr T sign(const T x, std::false_type is_signed) { return (T)(T(0) < x); }
+template <typename T> inline constexpr T sign(const T x, std::true_type is_signed) { return (T)((T(0) < x) - (x < T(0))); }
+template <typename T> inline constexpr T sign(const T x) { return sign(x, std::is_signed<T>()); }
 
 template<typename T,int M, int N> inline MatrixType<T,M,N> max(const T& a, const MatrixType<T,M,N>& b) { return MatrixType<T,M,N>::Constant(a).max(b); }
 template<typename T,int M, int N> inline MatrixType<T,M,N> max(const MatrixType<T,M,N>& a, T& b) { return a.max(MatrixType<T,M,N>::Constant(b)); }

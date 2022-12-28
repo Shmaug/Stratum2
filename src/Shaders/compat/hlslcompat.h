@@ -1,5 +1,4 @@
-#ifndef HLSLCOMPAT_H
-#define HLSLCOMPAT_H
+#pragma once
 
 #if defined(__HLSL_VERSION) && !defined(__HLSL__)
 #define __HLSL__
@@ -45,7 +44,5 @@
 
 #define POS_INFINITY asfloat(0x7F800000)
 #define NEG_INFINITY asfloat(0xFF800000)
-
-#endif
 
 #endif

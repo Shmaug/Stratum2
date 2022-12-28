@@ -16,10 +16,19 @@ namespace stm2 {
 
 Denoiser::Denoiser(Node& node) : mNode(node) {
 	if (shared_ptr<Inspector> inspector = mNode.root()->findDescendant<Inspector>())
-		inspector->setTypeCallback<Denoiser>();
+		inspector->setInspectCallback<Denoiser>();
 
 	Device& device = *mNode.findAncestor<Device>();
 	createPipelines(device);
+
+	mReprojection = true;
+	mCheckNormal = true;
+	mCheckDepth = true;
+
+	const auto instance = mNode.findAncestor<Instance>();
+	if (instance->findArgument("noReprojection")) mReprojection = false;
+	if (instance->findArgument("noNormalCheck")) mCheckNormal = false;
+	if (instance->findArgument("noDepthCheck")) mCheckDepth = false;
 }
 
 

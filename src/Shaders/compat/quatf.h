@@ -1,5 +1,4 @@
-#ifndef QUATF_H
-#define QUATF_H
+#pragma once
 
 #include "common.h"
 
@@ -102,5 +101,3 @@ inline quatf slerp(const quatf a, quatf b, const float t) {
 }
 
 STM_NAMESPACE_END
-
-#endif

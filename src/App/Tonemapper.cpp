@@ -14,7 +14,7 @@ namespace stm2 {
 
 Tonemapper::Tonemapper(Node& node) : mNode(node) {
 	if (shared_ptr<Inspector> inspector = mNode.root()->findDescendant<Inspector>())
-		inspector->setTypeCallback<Tonemapper>();
+		inspector->setInspectCallback<Tonemapper>();
 	createPipelines(*mNode.findAncestor<Device>());
 }
 

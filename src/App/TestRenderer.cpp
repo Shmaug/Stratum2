@@ -11,7 +11,7 @@ namespace stm2 {
 
 TestRenderer::TestRenderer(Node& node) : mNode(node) {
 	if (shared_ptr<Inspector> inspector = mNode.root()->findDescendant<Inspector>())
-		inspector->setTypeCallback<TestRenderer>();
+		inspector->setInspectCallback<TestRenderer>();
 
 	Device& device = *mNode.findAncestor<Device>();
 	createPipelines(device);

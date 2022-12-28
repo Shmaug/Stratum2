@@ -1,9 +1,10 @@
-#ifndef DISNEYDATA_H
-#define DISNEYDATA_H
+#pragma once
 
 #ifdef __cplusplus
-#include <Utils/hlslmath.hpp>
+#include <Core/hlslmath.hpp>
 #endif
+
+#include "common.h"
 
 STM_NAMESPACE_BEGIN
 
@@ -54,5 +55,3 @@ struct DisneyMaterialData {
 };
 
 STM_NAMESPACE_END
-
-#endif

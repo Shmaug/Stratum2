@@ -9,7 +9,7 @@ namespace stm2 {
 
 ImageComparer::ImageComparer(Node& node) : mNode(node) {
 	if (shared_ptr<Inspector> inspector = mNode.root()->findDescendant<Inspector>())
-		inspector->setTypeCallback<ImageComparer>();
+		inspector->setInspectCallback<ImageComparer>();
 
 	const filesystem::path shaderPath(*mNode.root()->findDescendant<Instance>()->findArgument("shaderKernelPath"));
 	mPipeline = ComputePipelineCache(shaderPath / "image_compare.slang");
@@ -74,7 +74,7 @@ void ImageComparer::update(CommandBuffer& commandBuffer) {
 					}
 				}
 
-				if (resultBuffer && !resultBuffer.buffer()->inFlight()) {
+				if (resultBuffer) {
 					ImGui::SameLine();
 					if (resultBuffer[1])
 						ImGui::Text("OVERFLOW");
@@ -97,11 +97,10 @@ void ImageComparer::update(CommandBuffer& commandBuffer) {
 			mZoom = clamp(mZoom, 0.f, 1.f);
 			mOffset[0] = clamp(mOffset[0], 0.f, 1 - mZoom);
 			mOffset[1] = clamp(mOffset[1], 0.f, 1 - mZoom);
-			if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
-				const ImVec2 delta = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
-				ImGui::ResetMouseDragDelta(ImGuiMouseButton_Left);
-				mOffset[0] -= (uvMax.x - uvMin.x) * delta[0] / w;
-				mOffset[1] -= (uvMax.y - uvMin.y) * delta[1] / (w*aspect);
+			if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+				const ImGuiIO& io = ImGui::GetIO();
+				mOffset[0] -= (uvMax.x - uvMin.x) * io.MouseDelta.x / w;
+				mOffset[1] -= (uvMax.y - uvMin.y) * io.MouseDelta.y / (w*aspect);
 				mOffset[0] = clamp(mOffset[0], 0.f, 1 - mZoom);
 				mOffset[1] = clamp(mOffset[1], 0.f, 1 - mZoom);
 			}

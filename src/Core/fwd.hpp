@@ -4,13 +4,14 @@ namespace stm2 {
 	using namespace std;
 	using byte = std::byte;
 
+	class Buffer;
 	class CommandBuffer;
 	class Device;
-	class Buffer;
 	class Image;
 	class Instance;
 	class Mesh;
 	class ComputePipeline;
+	class ComputePipelineCache;
 	class Profiler;
 	class Shader;
 	class Swapchain;

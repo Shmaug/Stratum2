@@ -19,6 +19,24 @@
 
 namespace stm2 {
 
+
+
+template<int N>
+inline VectorType<float, N> parseFloatVector(const string& arg) {
+	VectorType<float, N> result;
+	istringstream ss(arg);
+	for (int i = 0; i < N; i++) {
+		if (!ss.good()) {
+			cerr << "Failed to parse float" + to_string(N) + ": " + arg << endl;
+			throw runtime_error("Failed to parse float" + to_string(N) + ": " + arg);
+		}
+		string str;
+		getline(ss, str, ',');
+		result[i] = stof(str);
+	}
+	return result;
+}
+
 struct App {
 	shared_ptr<Node> mRootNode;
 
@@ -30,7 +48,6 @@ struct App {
 
 	vector<shared_ptr<CommandBuffer>> mCommandBuffers;
 
-	shared_ptr<Node> mSwapchainNode;
 	shared_ptr<Swapchain> mSwapchain;
 	shared_ptr<Gui> mGui;
 	shared_ptr<Inspector> mInspector;
@@ -58,8 +75,8 @@ struct App {
 		mDevice       = deviceNode->makeComponent<Device>(*mInstance, physicalDevice);
 		mPresentQueue = vk::raii::Queue(**mDevice, mPresentQueueFamily, 0);
 
-		mSwapchainNode = deviceNode->addChild("Swapchain");
-		mSwapchain     = mSwapchainNode->makeComponent<Swapchain>(*mDevice, "Swapchain", *mWindow, 2);
+		auto swapchainNode = deviceNode->addChild("Swapchain");
+		mSwapchain = swapchainNode->makeComponent<Swapchain>(*mDevice, "Swapchain", *mWindow, 2);
 
 		mCommandBuffers.resize(mSwapchain->imageCount());
 		for (auto& cb : mCommandBuffers) {
@@ -69,15 +86,24 @@ struct App {
 		mDevice->updateLastFrameDone(0);
 
 		mGui = make_shared<Gui>(*mSwapchain, mPresentQueue, mPresentQueueFamily, vk::ImageLayout::ePresentSrcKHR, false);
-		mInspector = mSwapchainNode->makeComponent<Inspector>(*mSwapchainNode);
+		mInspector = swapchainNode->makeComponent<Inspector>(*swapchainNode);
 
 		auto sceneNode = deviceNode->addChild("Scene");
 		mScene = sceneNode->makeComponent<Scene>(*sceneNode);
 
 		auto cameraNode = sceneNode->addChild("Camera");
-		cameraNode->makeComponent<TransformData>( float3(0,1.5f,0), quatf::identity(), float3::Ones() );
+		float3 pos = float3(0, 1.5f, 0);
+		quatf rot = quatf::identity();
+		if (auto arg = mInstance->findArgument("cameraPosition")) {
+			pos = parseFloatVector<3>(*arg);
+		}
+		if (auto arg = mInstance->findArgument("cameraOrientation")) {
+			const float4 q = parseFloatVector<4>(*arg);
+			rot = quatf(q[0], q[1], q[2], q[3]);
+		}
+		cameraNode->makeComponent<TransformData>(pos, rot, float3::Ones());
 		mFlyCamera = cameraNode->makeComponent<FlyCamera>(*cameraNode);
-		mCamera = cameraNode->makeComponent<Camera>(ProjectionData::makePerspective(radians(70.f), mSwapchain->extent().width / mSwapchain->extent().height, float2::Zero(), .001f));
+		mCamera = cameraNode->makeComponent<Camera>(ProjectionData::makePerspective(radians(70.f), mSwapchain->extent().width / mSwapchain->extent().height, float2::Zero(), -.001f));
 
 		auto pathTracerNode = sceneNode->addChild("Path tracer");
 		mInspector->select(pathTracerNode);

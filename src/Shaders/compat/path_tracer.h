@@ -1,77 +1,80 @@
-#ifndef PATHTRACER_H
-#define PATHTRACER_H
+#pragma once
 
-#include "common.h"
+#include "scene.h"
 
 STM_NAMESPACE_BEGIN
 
+// 80 bytes
+struct VcmVertex {
+    ShadingData mShadingData; // Position of the vertex
+    float3 mThroughput;       // Path throughput (including emission)
+    uint mPathLength;         // Number of segments between source and vertex
+
+    float dVCM; // MIS quantity used for vertex connection and merging
+    float dVC;  // MIS quantity used for vertex connection
+    float dVM;  // MIS quantity used for vertex merging
+    uint mLocalDirectionIn;
+};
+
+
 struct PathTracerPushConstants {
-    uint mDebugViewVertices;
-    uint mDebugLightVertices;
-
-	uint mRandomSeed;
+    float4 mSceneSphere;
+    float mRadiusAlpha;
+    float mRadiusFactor;
 	uint mViewCount;
-
+	uint mLightCount;
     uint mEnvironmentMaterialAddress;
     float mEnvironmentSampleProbability;
-	uint mLightCount;
-
-	uint mMinBounces;
-	uint mMaxBounces;
-	uint mMaxDiffuseBounces;
+	uint mMinPathLength;
+    uint mMaxPathLength;
+    uint mRandomSeed;
+    uint pad0;
+    uint pad1;
+    uint pad2;
 };
 
-enum class PathTracerFeatureFlagBits {
-	ePerformanceCounters = 0,
-	eMedia,
-	eAlphaTest,
-	eNormalMaps,
-	eNee,
-	eNeeMis,
-	eNumPathTracerFeatureFlagBits
-};
-enum class PathTracerDebugMode {
-	eNone = 0,
-	eAlbedo,
-	eDepth,
-	eGeometryNormal,
-	eShadingNormal,
-    eTextureCoordinate,
-    eMaterialAddress,
-    ePrevUV,
-    ePathTypeContribution,
-	eNumPathTracerDebugMode
+enum VcmAlgorithmType {
+	// unidirectional path tracing from the camera, with next event estimation
+    kPathTrace = 0,
+
+    // unidirectional path tracing from light sources
+    // No MIS weights (dVCM, dVM, dVC all ignored)
+    kLightTrace,
+
+    // Camera and light vertices merged on first non-specular surface from camera.
+    // Cannot handle mixed specular + non-specular materials.
+    // No MIS weights (dVCM, dVM, dVC all ignored)
+    kPpm,
+
+    // Camera and light vertices merged on along full path.
+    // dVCM and dVM used for MIS
+    kBpm,
+
+    // Standard bidirectional path tracing
+    // dVCM and dVC used for MIS
+    kBpt,
+
+    // Vertex connection and mering
+    // dVCM, dVM, and dVC used for MIS
+    kVcm,
+
+	kNumVcmAlgorithmType
 };
 
 STM_NAMESPACE_END
 
 #ifdef __cplusplus
 namespace std {
-inline string to_string(const stm2::PathTracerFeatureFlagBits featureFlag) {
-	switch (featureFlag) {
-	default: return "";
-	case stm2::PathTracerFeatureFlagBits::ePerformanceCounters: return "Performance counters";
-	case stm2::PathTracerFeatureFlagBits::eMedia: return "Media";
-	case stm2::PathTracerFeatureFlagBits::eAlphaTest: return "Alpha test";
-    case stm2::PathTracerFeatureFlagBits::eNormalMaps: return "Normal maps";
-    case stm2::PathTracerFeatureFlagBits::eNee: return "Next event estimation";
-    case stm2::PathTracerFeatureFlagBits::eNeeMis: return "Next event estimation MIS";
-	}
-}
-inline string to_string(const stm2::PathTracerDebugMode debugMode) {
-	switch (debugMode) {
-	default: return "None";
-	case stm2::PathTracerDebugMode::eAlbedo: return "Albedo";
-	case stm2::PathTracerDebugMode::eDepth: return "Depth";
-	case stm2::PathTracerDebugMode::eGeometryNormal: return "Geometry normal";
-	case stm2::PathTracerDebugMode::eShadingNormal: return "Shading normal";
-    case stm2::PathTracerDebugMode::eTextureCoordinate: return "Texture coordinate";
-    case stm2::PathTracerDebugMode::eMaterialAddress: return "Material address";
-    case stm2::PathTracerDebugMode::ePrevUV: return "Prev UV";
-    case stm2::PathTracerDebugMode::ePathTypeContribution: return "Path type contribution";
+inline string to_string(const stm2::VcmAlgorithmType algorithm) {
+	switch (algorithm) {
+    default: return "";
+    case stm2::VcmAlgorithmType::kPathTrace: return "Path tracing";
+    case stm2::VcmAlgorithmType::kLightTrace: return "Light tracing";
+	case stm2::VcmAlgorithmType::kPpm: return "Progressive photon mapping";
+	case stm2::VcmAlgorithmType::kBpm: return "Bidirectional photon mapping";
+    case stm2::VcmAlgorithmType::kBpt: return "Bidirectional path tracing";
+    case stm2::VcmAlgorithmType::kVcm: return "Vertex connection and merging";
 	}
 }
 }
-#endif
-
 #endif

@@ -16,7 +16,6 @@
 
 namespace stm2 {
 
-
 inline vk::Format dxgiToVulkan(tinyddsloader::DDSFile::DXGIFormat format, const bool alphaFlag) {
 	switch (format) {
 		case tinyddsloader::DDSFile::DXGIFormat::BC1_UNorm: {
@@ -231,8 +230,8 @@ void Image::barrier(CommandBuffer& commandBuffer, const vk::ImageSubresourceRang
 		vk::AccessFlagBits::eMemoryWrite |
 		vk::AccessFlagBits::eAccelerationStructureWriteKHR;
 
-	const uint32_t maxLayer = min(mMetadata.mLayers, subresource.baseArrayLayer+subresource.layerCount);
-	const uint32_t maxLevel = min(mMetadata.mLevels, subresource.baseMipLevel+subresource.levelCount);
+	const uint32_t maxLayer = min(mMetadata.mLayers, subresource.baseArrayLayer + subresource.layerCount);
+	const uint32_t maxLevel = min(mMetadata.mLevels, subresource.baseMipLevel   + subresource.levelCount);
 
 	for (uint32_t arrayLayer = subresource.baseArrayLayer; arrayLayer < maxLayer; arrayLayer++) {
 		for (uint32_t level = subresource.baseMipLevel; level < maxLevel; level++) {

@@ -1,5 +1,4 @@
-#ifndef SHADER_COMMON_H
-#define SHADER_COMMON_H
+#pragma once
 
 #include "hlslcompat.h"
 
@@ -158,5 +157,3 @@ inline float pdfAtoW(const float pdfA, const float G) {
 #endif
 
 STM_NAMESPACE_END
-
-#endif

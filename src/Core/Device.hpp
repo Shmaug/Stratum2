@@ -4,8 +4,8 @@
 
 #include <vk_mem_alloc.h>
 
-#include <Utils/fwd.hpp>
-#include <Utils/utils.hpp>
+#include "fwd.hpp"
+#include "utils.hpp"
 
 namespace stm2 {
 

@@ -1,5 +1,4 @@
-#ifndef FILTER_KERNEL_TYPE_H
-#define FILTER_KERNEL_TYPE_H
+#pragma once
 
 STM_NAMESPACE_BEGIN
 
@@ -29,6 +28,4 @@ inline string to_string(const stm2::FilterKernelType& t) {
   }
 }
 }
-#endif
-
 #endif

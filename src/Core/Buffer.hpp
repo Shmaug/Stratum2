@@ -2,7 +2,7 @@
 
 #include "CommandBuffer.hpp"
 
-#include <Utils/hash.hpp>
+#include "hash.hpp"
 
 namespace stm2 {
 

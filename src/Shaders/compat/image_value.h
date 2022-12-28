@@ -1,5 +1,4 @@
-#ifndef IMAGE_VALUE_H
-#define IMAGE_VALUE_H
+#pragma once
 
 #include "common.h"
 
@@ -44,5 +43,3 @@ using ImageValue4 = ImageValue<4>;
 #endif
 
 STM_NAMESPACE_END
-
-#endif

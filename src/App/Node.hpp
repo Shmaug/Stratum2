@@ -1,8 +1,8 @@
 #pragma once
 
 #include <memory>
-#include <vector>
 #include <stack>
+#include <unordered_set>
 #include <unordered_map>
 #include <typeindex>
 #include <ranges>
@@ -20,7 +20,7 @@ private:
 	unordered_map<type_index, shared_ptr<void>> mComponents;
 
 	weak_ptr<Node> mParent;
-	vector<shared_ptr<Node>> mChildren;
+	unordered_set<shared_ptr<Node>> mChildren;
 
 	Node(const string& name) : mName(name) {}
 
@@ -38,13 +38,55 @@ public:
 	inline const string& name() const { return mName; }
 	inline shared_ptr<Node> getPtr() { return shared_from_this(); }
 
+	// Parent/child functions
+
+	inline shared_ptr<Node> parent() const { return mParent.lock(); }
+	inline const auto& children() const { return mChildren; }
+
+	inline shared_ptr<Node> root() {
+		shared_ptr<Node> n = shared_from_this();
+		while (shared_ptr<Node> p = n->parent()) {
+			n = p;
+		}
+		return n;
+	}
+
+	inline void addChild(const shared_ptr<Node>& c) {
+		if (!c) return;
+		c->removeParent();
+		c->mParent = shared_from_this();
+		mChildren.emplace(c);
+	}
+	inline shared_ptr<Node> addChild(const string& name) {
+		const shared_ptr<Node> c = create(name);
+		addChild(c);
+		return c;
+	}
+	inline void removeChild(const shared_ptr<Node>& c) {
+		if (auto it = mChildren.find(c); it != mChildren.end()) {
+			mChildren.erase(it);
+			c->mParent.reset();
+		}
+	}
+	inline void removeParent() {
+		if (auto p = parent()) {
+			p->removeChild(shared_from_this());
+		}
+	}
+
 	// Components
 
 	inline auto components() const { return mComponents | views::keys; }
+	inline bool hasComponent(const type_index type) const { return mComponents.find(type) != mComponents.end(); }
+	template<typename T>
+	inline bool hasComponent() const { return hasComponent(typeid(T)); }
 
+	inline void addComponent(const type_index type, const shared_ptr<void>& v) {
+		mComponents.emplace(type, v);
+	}
 	template<typename T>
 	inline void addComponent(const shared_ptr<T>& v) {
-		mComponents.emplace(typeid(T), v);
+		addComponent(typeid(T), v);
 	}
 
 	template<typename T>
@@ -72,44 +114,6 @@ public:
 		if (it == mComponents.end())
 			return nullptr;
 		return static_pointer_cast<T>(it->second);
-	}
-
-	// Relations
-
-	inline shared_ptr<Node> parent() const { return mParent.lock(); }
-	inline const auto& children() const { return mChildren; }
-
-	inline shared_ptr<Node> root() {
-		shared_ptr<Node> n = shared_from_this();
-		while (shared_ptr<Node> p = n->parent()) {
-			n = p;
-		}
-		return n;
-	}
-
-	inline void addChild(const shared_ptr<Node>& c) {
-		if (!c) return;
-		c->removeParent();
-		c->mParent = shared_from_this();
-		mChildren.emplace_back(c);
-	}
-	inline shared_ptr<Node> addChild(const string& name) {
-		const shared_ptr<Node> c = create(name);
-		addChild(c);
-		return c;
-	}
-	inline void removeChild(Node& c) {
-		for (auto it = mChildren.begin(); it != mChildren.end(); it++) {
-			if (it->get() == &c) {
-				c.mParent.reset();
-				mChildren.erase(it);
-				break;
-			}
-		}
-	}
-	inline void removeParent() {
-		if (auto p = parent())
-			p->removeChild(*this);
 	}
 
 	// forEach

@@ -44,8 +44,8 @@ struct ReservoirHashGrid<T> {
 					return bucket_index;
 			}
 			bucket_index++;
-		}
-		if (CHECK_FEATURE(PerformanceCounters) && inserting)
+        }
+        if (gPerformanceCounters && inserting)
 			InterlockedAdd(mStats[0], 1); // failed inserts
 		return -1;
 	}
@@ -56,7 +56,7 @@ struct ReservoirHashGrid<T> {
 		uint index_in_bucket;
 		InterlockedAdd(mCounters[bucket_index], 1, index_in_bucket);
 
-		if (CHECK_FEATURE(PerformanceCounters) && index_in_bucket == 0)
+        if (gPerformanceCounters && index_in_bucket == 0)
 			InterlockedAdd(mStats[1], 1); // buckets used
 
 		uint append_index;

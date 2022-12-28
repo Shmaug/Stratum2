@@ -1,5 +1,4 @@
-#ifndef RESERVOIR_H
-#define RESERVOIR_H
+#pragma once
 
 #include "hlslcompat.h"
 
@@ -24,5 +23,3 @@ struct Reservoir {
 };
 
 STM_NAMESPACE_END
-
-#endif

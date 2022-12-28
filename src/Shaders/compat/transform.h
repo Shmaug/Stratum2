@@ -1,5 +1,4 @@
-#ifndef TRANSFORM_H
-#define TRANSFORM_H
+#pragma once
 
 #include "quatf.h"
 
@@ -133,12 +132,13 @@ struct ProjectionData {
 	inline float4 projectPoint(const float3 v) CONST_CPP {
 		float4 r;
 		if (isOrthographic()) {
+			// orthographic
 			r[0] = v[0] * mScale[0] + mOffset[0];
 			r[1] = v[1] * mScale[1] + mOffset[1];
 			r[2] = (v[2] - mFarPlane) / (mNearPlane - mFarPlane);
 			r[3] = 1;
-		} else { // perspective
-			// infinite far plane
+		} else {
+			// perspective, infinite far plane
 			r[0] = v[0] * mScale[0] + v[2] * mOffset[0];
 			r[1] = v[1] * mScale[1] + v[2] * mOffset[1];
 			r[2] = abs(mNearPlane);
@@ -181,5 +181,3 @@ struct ProjectionData {
 };
 
 STM_NAMESPACE_END
-
-#endif

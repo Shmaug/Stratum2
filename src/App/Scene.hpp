@@ -63,8 +63,9 @@ public:
 		Buffer::View<TransformData> mInstanceTransforms;
 		Buffer::View<TransformData> mInstanceInverseTransforms;
 		Buffer::View<TransformData> mInstanceMotionTransforms;
-		Buffer::View<uint32_t> mLightInstanceMap;
-		Buffer::View<uint32_t> mInstanceIndexMap;
+		Buffer::View<uint32_t> mLightInstanceMap; // light index -> instance index
+		Buffer::View<uint32_t> mInstanceLightMap; // instance index -> light index
+		Buffer::View<uint32_t> mInstanceIndexMap; // current frame instance index -> previous frame instance index
 		uint32_t mLightCount;
 
 		MaterialResources mMaterialResources;
@@ -98,6 +99,7 @@ public:
 	void drawGui();
 
 	inline void markDirty() { mUpdateOnce = true; }
+	inline chrono::high_resolution_clock::time_point lastUpdate() const { return mLastUpdate; }
 	void update(CommandBuffer& commandBuffer, const float deltaTime);
 
 	shared_ptr<Node> loadEnvironmentMap(CommandBuffer& commandBuffer, const filesystem::path& filename);
@@ -146,7 +148,7 @@ public:
 		else if (ext == ".stl") return loadAssimp(commandBuffer, filename);
 	#endif
 	#ifdef ENABLE_OPENVDB
-		else if (ext == ".vdb") return loadVdb(commandBuffer, filename)
+		else if (ext == ".vdb") return loadVdb(commandBuffer, filename);
 	#endif
 		else
 			throw runtime_error("unknown extension:" + ext);
@@ -175,6 +177,7 @@ private:
 
 	bool mAlwaysUpdate = false;
 	bool mUpdateOnce = false;
+	chrono::high_resolution_clock::time_point mLastUpdate;
 
 
 	// HACK: animation

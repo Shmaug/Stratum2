@@ -35,7 +35,7 @@ private:
 		unordered_map<string, Buffer::View<byte>> mBuffers;
 
 		template<typename T>
-		inline Buffer::View<T> getBuffer(const string& name, const vk::DeviceSize count, const vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eStorage, const vk::MemoryPropertyFlags memoryProperties = vk::MemoryPropertyFlags::eDeviceLocal) {
+		inline Buffer::View<T> getBuffer(const string& name, const vk::DeviceSize count, const vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eStorageBuffer, const vk::MemoryPropertyFlags memoryProperties = vk::MemoryPropertyFlags::eDeviceLocal) {
 			if (auto it = mBuffers.find(name); it != mBuffers.end())
 				if (it->second.sizeBytes() >= sizeof(T)*count)
 					return it->second.cast<T>();

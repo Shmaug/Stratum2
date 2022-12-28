@@ -8,8 +8,8 @@
 #include <string>
 #include <chrono>
 
-#include <Utils/fwd.hpp>
-#include <Utils/hlslmath.hpp>
+#include "fwd.hpp"
+#include "hlslmath.hpp"
 
 namespace stm2 {
 

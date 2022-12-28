@@ -1,52 +1,4 @@
-#ifndef gMaxNullCollisions
-#define gMaxNullCollisions 128
-#endif
-
-#ifndef gDebugMode
-#define gDebugMode PathTracerDebugMode::eNone
-#endif
-#ifndef gFeatureFlags
-#define gFeatureFlags 0
-#endif
-#define CHECK_FEATURE(feature) (bool)(gFeatureFlags & BIT((uint)PathTracerFeatureFlagBits::e ## feature ))
-
-#include "compat/scene.h"
-ParameterBlock<SceneParameters> gScene;
-
-#include "compat/path_tracer.h"
-[[vk::push_constant]] ConstantBuffer<PathTracerPushConstants> gPushConstants;
-
-#include "common/intersection.hlsli"
-#include "common/rng.hlsli"
-#include "compat/environment.h"
-#include "materials/disney.hlsli"
-
-#define Material DisneyMaterial
-
-struct RenderParams {
-	StructuredBuffer<ViewData> mViews;
-	StructuredBuffer<TransformData> mViewTransforms;
-	StructuredBuffer<uint> mViewMediumInstances;
-
-	StructuredBuffer<ViewData> mPrevViews;
-	StructuredBuffer<TransformData> mPrevInverseViewTransforms;
-
-	RWTexture2D<float4> mOutput;
-	RWTexture2D<float4> mAlbedo;
-	RWTexture2D<float2> mPrevUVs;
-	RWTexture2D<float2> mVisibility;
-	RWTexture2D<float4> mDepth;
-};
-
-ParameterBlock<RenderParams> gRenderParams;
-
-
-float3 randomColor(const uint idx) {
-	uint r = pcg(idx);
-	uint g = pcg(r);
-	uint b = pcg(g);
-	return unorm32ToFloat(uint3(r, g, b));
-}
+#include "common/path.hlsli"
 
 float mis(const float a) {
 	return a * a;
@@ -62,107 +14,84 @@ float neeMis(const float a, const float b) {
 		return 0.5;
 }
 
-
-struct EmissionVertex {
-	float3 mPosition;
-	uint mPackedGeometryNormal;
-	float3 mEmission;
-	float mPdfA;
-	bool mIsEnvironment;
-
-	property float3 geometryNormal { get { return unpackNormal(mPackedGeometryNormal); } }
-};
-
-extension SceneParameters {
-	EmissionVertex sampleEmission(const float4 rnd) {
-		if (gPushConstants.mEnvironmentMaterialAddress != -1) {
-			if (gPushConstants.mLightCount == 0 || rnd.w < gPushConstants.mEnvironmentSampleProbability) {
-				EmissionVertex v;
-				v.mEmission = Environment(gPushConstants.mEnvironmentMaterialAddress).sample(rnd.xy, v.mPosition, v.mPdfA);
-				if (gPushConstants.mLightCount > 0)
-					v.mPdfA *= gPushConstants.mEnvironmentSampleProbability;
-				v.mIsEnvironment = true;
-				return v;
-			}
-		}
-
-		if (gPushConstants.mLightCount == 0)
-			return { 0, 0, 0, 0 };
-
-        float pickPdf = 1 / (float)gPushConstants.mLightCount;
-
-		if (gPushConstants.mEnvironmentMaterialAddress != -1)
-			pickPdf *= 1 - gPushConstants.mEnvironmentSampleProbability;
-
-        const uint lightInstanceIndex = mLightInstanceMap[uint(rnd.z * gPushConstants.mLightCount) % gPushConstants.mLightCount];
-		const InstanceData instance = mInstances[lightInstanceIndex];
-		const TransformData transform = mInstanceTransforms[lightInstanceIndex];
-
-		ShadingData shadingData;
-
-		if (instance.type() == InstanceType::eMesh) {
-			const MeshInstanceData mesh = reinterpret<MeshInstanceData>(instance);
-			shadingData = makeTriangleShadingData(mesh, transform, uint(rnd.w * mesh.primitiveCount()) % mesh.primitiveCount(), sampleUniformTriangle(rnd.x, rnd.y));
-			pickPdf /= mesh.primitiveCount();
-		} else if (instance.type() == InstanceType::eSphere) {
-			const SphereInstanceData sphere = reinterpret<SphereInstanceData>(instance);
-			shadingData = makeSphereShadingData(sphere, transform, sphere.radius() * sampleUniformSphereCartesian(rnd.x, rnd.y));
-		} else
-			return { 0, 0, 0, 0 };
-
-		EmissionVertex v;
-		v.mPosition = shadingData.mPosition;
-		v.mPackedGeometryNormal = shadingData.mPackedGeometryNormal;
-		v.mEmission = Material(shadingData).emission();
-		v.mPdfA = pickPdf / shadingData.mShapeArea;
-		v.mIsEnvironment = false;
-		return v;
-	}
+float3 randomColor(const uint idx) {
+	uint r = pcg(idx);
+	uint g = pcg(r);
+	uint b = pcg(g);
+	return unorm32ToFloat(uint3(r, g, b));
 }
 
-struct PathVertex {
-	ShadingData mShadingData;
-	uint mMediumInstance;
-
-	property float3 position       { get { return mShadingData.mPosition; } }
-	property float3 geometryNormal { get { return mShadingData.geometryNormal; } }
-	property float3 shadingNormal  { get { return mShadingData.shadingNormal; } }
-
-	float3 toLocal(const float3 v) { return mShadingData.toLocal(v); }
-	float3 toWorld(const float3 v) { return mShadingData.toWorld(v); }
-};
 
 struct PathIntegrator<let Adjoint : bool> {
-	RandomSampler mRNG;
-
 	uint2 mOutputIndex;
+	uint mOutputIndex1d;
+	uint mOutputStride;
 
 	uint mBounces;
 	uint mDiffuseBounces;
 
+	RandomSampler mRNG;
 
 	PathVertex mVertex;
 
-	float3 mBeta;
-	float3 mDirection;
-	float mDirFwdPdfW;
-	float mTransmitDistance, mTransmitDirPdf, mTransmitNeePdf;
-	float mSurfaceEmissionPdfA; // probability of sampling the current point when sampling emission
+	float3 mDirection; // assigned in sampleDirection()
+	float mDirPdfW; // assigned in sampleDirection()
+	float mRevG; // assigned in step()
+	float mTransmitNeePdf; // assigned in step()
+	float mTransmitDistance; // assigned in step()
+	float mIntersectionLightPickPdf; // assigned in step()
 
-	__init(const uint2 index, const PathVertex v, const float3 direction) {
-		mRNG = RandomSampler(gPushConstants.mRandomSeed, index);
+	[mutating]
+	void initializeViewVertex(const uint viewIndex) {
+		// initialize view vertex
+		const ViewData view = gRenderParams.mViews[viewIndex];
+		const TransformData t = gRenderParams.mViewTransforms[viewIndex];
 
+		mVertex.mShadingData.mPosition = float3(t.m[0][3], t.m[1][3], t.m[2][3]);
+		mVertex.mShadingData.mFlagsMaterialAddress = 0;
+		mVertex.mShadingData.mPackedGeometryNormal = mVertex.mShadingData.mPackedShadingNormal = packNormal(t.transformVector(float3(0, 0, sign(view.mProjection.mNearPlane))));
+		mVertex.mShadingData.mShapeArea = view.mProjection.mSensorArea;
+		mVertex.mMediumInstance = gRenderParams.mViewMediumInstances[viewIndex];
+		mVertex.mPathPdfFwdA = 1;
+		mVertex.mPathPdfRevA = 1;
+		mVertex.mBeta = 1;
+
+		// generate eye ray
+		float2 uv;
+		mDirection = normalize(t.transformVector(view.toWorld(mOutputIndex + 0.5, /*out*/ uv)));
+		mDirPdfW = 1;
+
+		gRenderParams.mOutput[mOutputIndex] = float4(0, 0, 0, 1);
+	}
+
+	[mutating]
+	void initializeLightVertex() {
+		// initialize emissive vertex
+		mVertex = gScene.sampleEmission(float4(mRNG.nextFloat(), mRNG.nextFloat(), mRNG.nextFloat(), mRNG.nextFloat()));
+
+		if (CHECK_FEATURE(ReferenceBDPT))
+			gRenderParams.mLightPathVertices[mOutputIndex1d] = mVertex;
+
+		mDirection = sampleCosHemisphere(mRNG.nextFloat(), mRNG.nextFloat());
+		mDirPdfW = cosHemispherePdfW(mDirection.z);
+		mVertex.mPathPdfFwdA *= mDirPdfW;
+		mDirection = mVertex.mShadingData.toWorld(mDirection);
+	}
+
+	__init(const uint2 index, const uint2 extent) {
 		mOutputIndex = index;
+		mOutputIndex1d = mOutputIndex.y * extent.x + mOutputIndex.x;
+		mOutputStride = extent.x + extent.y;
 
 		mBounces = 0;
 		mDiffuseBounces = 0;
-		mBeta = 1;
 
-		mVertex = v;
-		mDirection = direction;
-		mDirFwdPdfW = 0;
+		mRNG = RandomSampler(gPushConstants.mRandomSeed, mOutputIndex);
 
-		gRenderParams.mOutput[mOutputIndex] = float4(0, 0, 0, 1);
+		if (Adjoint)
+			initializeLightVertex();
+		else
+			initializeViewVertex(getViewIndex(mOutputIndex, extent, gPushConstants.mViewCount));
 	}
 
 	void addDebugContribution(const PathTracerDebugMode debugMode, const float3 contrib) {
@@ -178,272 +107,348 @@ struct PathIntegrator<let Adjoint : bool> {
 			gRenderParams.mOutput[mOutputIndex].rgb += contrib;
 	}
 
-
 	[mutating]
 	void evalDirectLight(BSDF bsdf, const float3 localDirIn, const float3 L, const float G, const float3 toLight, const float dist, const float pdfA) {
-		const MaterialEvalRecord r = bsdf.evaluate<Adjoint>(localDirIn, mVertex.toLocal(toLight));
+		const float3 localToLight = mVertex.mShadingData.toLocal(toLight);
+
+		MaterialEvalRecord r = bsdf.evaluate<Adjoint>(localDirIn, localToLight);
+		r.mReflectance *= mVertex.mShadingData.correctShadingNormal<Adjoint>(localDirIn, localToLight);
 		if (r.mFwdPdfW <= 0 || all(r.mReflectance <= 0))
 			return;
 
 		// trace shadow ray
 		RayDesc ray;
-		ray.Origin = mVertex.mShadingData.isSurface ? rayOffset(mVertex.position, mVertex.geometryNormal, toLight) : mVertex.position;
+		ray.Origin = mVertex.mShadingData.isSurface ? rayOffset(mVertex.mShadingData.mPosition, mVertex.mShadingData.geometryNormal, toLight) : mVertex.mShadingData.mPosition;
 		ray.TMin = 0;
 		ray.Direction = toLight;
 		ray.TMax = dist*0.99;
 
 		float3 transmitBeta;
 		float transmitDirPdf, transmitNeePdf;
-		gScene.traceVisibilityRay(mRNG, ray, mVertex.mMediumInstance, /*out*/ transmitBeta, /*out*/ transmitDirPdf, /*out*/ transmitNeePdf);
+		gScene.traceVisibilityRay(ray, mRNG, mVertex.mMediumInstance, /*out*/ transmitBeta, /*out*/ transmitDirPdf, /*out*/ transmitNeePdf);
 		if (all(transmitBeta <= 0))
 			return;
 
 		const float w = neeMis(pdfA * transmitNeePdf, pdfWtoA(r.mFwdPdfW, G) * transmitDirPdf);
 
-		addContribution(mBeta * transmitBeta * G * r.mReflectance * L / pdfA, w, mBounces + 1, 1);
+		addContribution(mVertex.mBeta * transmitBeta * G * r.mReflectance * L / pdfA, w, mBounces + 2, 1);
 	}
 	[mutating]
-    void sampleDirectLight(BSDF bsdf, const float3 localDirIn) {
-        const EmissionVertex lightVertex = gScene.sampleEmission(float4(mRNG.nextFloat(), mRNG.nextFloat(), mRNG.nextFloat(), mRNG.nextFloat()));
-		if (lightVertex.mPdfA <= 0 || all(lightVertex.mEmission <= 0))
+	void sampleDirectLight(BSDF bsdf, const float3 localDirIn) {
+		const PathVertex lightVertex = gScene.sampleEmission(float4(mRNG.nextFloat(), mRNG.nextFloat(), mRNG.nextFloat(), mRNG.nextFloat()));
+		if (lightVertex.mPathPdfFwdA <= 0 || all(lightVertex.mBeta <= 0))
 			return;
 
-		if (lightVertex.mIsEnvironment) {
-			evalDirectLight(bsdf, localDirIn, lightVertex.mEmission, 1, lightVertex.mPosition, POS_INFINITY, lightVertex.mPdfA);
+		// environment emission
+		if (lightVertex.mShadingData.isEnvironment) {
+			evalDirectLight(bsdf, localDirIn, lightVertex.mBeta, 1, lightVertex.mShadingData.mPosition, POS_INFINITY, lightVertex.mPathPdfFwdA);
 			return;
 		}
 
-		float3 toLight = lightVertex.mPosition - mVertex.position;
+		float3 toLight = lightVertex.mShadingData.mPosition - mVertex.mShadingData.mPosition;
 		const float dist = length(toLight);
 		toLight /= dist;
 
-		const float cosLight = -dot(lightVertex.geometryNormal, toLight);
+		const float cosLight = -dot(lightVertex.mShadingData.geometryNormal, toLight);
 		if (cosLight < 0)
 			return;
 
 		const float G = cosLight / (dist * dist);
-		evalDirectLight(bsdf, localDirIn, lightVertex.mEmission, G, toLight, dist, lightVertex.mPdfA);
-	}
-
-
-	[mutating]
-	void addEmission(const float3 L, const float dirPdf, const float lightPdf) {
-		float w;
-		if (mDirFwdPdfW > 0 && CHECK_FEATURE(Nee))
-			// MIS with NEE
-			w = neeMis(dirPdf * mTransmitDirPdf, lightPdf * mTransmitNeePdf);
-		else
-			w = 1;
-
-		addContribution(mBeta * L, w, mBounces + 2, 0);
+		evalDirectLight(bsdf, localDirIn, lightVertex.mBeta, G, toLight, dist, lightVertex.mPathPdfFwdA);
 	}
 
 	[mutating]
 	bool sampleDirection(BSDF bsdf, const float3 localDirIn) {
 		// sample BSDF
 		const MaterialSampleRecord r = bsdf.sample<Adjoint>(float3(mRNG.nextFloat(), mRNG.nextFloat(), mRNG.nextFloat()), localDirIn);
-		if (r.mFwdPdfW <= 0)
+		if (r.mFwdPdfW <= 0) {
+			mVertex.mBeta = 0;
 			return false;
+		}
 
 		// eval BSDF
-		mBeta *= bsdf.evaluate<Adjoint>(localDirIn, r.mDirection).mReflectance / r.mFwdPdfW;
+		mVertex.mBeta *= bsdf.evaluate<Adjoint>(localDirIn, r.mDirection).mReflectance / r.mFwdPdfW;
+		mVertex.mBeta *= mVertex.mShadingData.correctShadingNormal<Adjoint>(localDirIn, r.mDirection);
+		mVertex.mPathPdfFwdA *= r.mFwdPdfW;
+		mVertex.mPathPdfRevA *= pdfWtoA(r.mRevPdfW, mRevG);
 
-		mDirection = mVertex.toWorld(r.mDirection);
-		mDirFwdPdfW = r.mFwdPdfW;
+		mDirection = mVertex.mShadingData.toWorld(r.mDirection);
+		mDirPdfW = r.mFwdPdfW;
 		return true;
 	}
 
 
-	[mutating]
-	bool russianRoullette() {
-		const float rr_prob = 2*luminance(mBeta);
-        if (rr_prob < 1) {
-            if (mRNG.nextFloat() >= rr_prob) {
-                mBeta = 0;
-                return true;
-            } else
-				mBeta /= rr_prob;
+	void storeAuxillaryData(const RayDesc ray, const bool hit, const IntersectionResult isect) {
+		addDebugContribution(PathTracerDebugMode::eDepth,             mTransmitDistance.xxx / 10);
+		addDebugContribution(PathTracerDebugMode::eGeometryNormal,    mVertex.mShadingData.geometryNormal * .5 + .5);
+		addDebugContribution(PathTracerDebugMode::eShadingNormal,     mVertex.mShadingData.shadingNormal * .5 + .5);
+		addDebugContribution(PathTracerDebugMode::eTextureCoordinate, float3(mVertex.mShadingData.mTexcoord, 0));
+		addDebugContribution(PathTracerDebugMode::eMaterialAddress, randomColor(mVertex.mShadingData.materialAddress));
+
+		VisibilityData v;
+		v.mInstancePrimitiveIndex = isect.mInstancePrimitiveIndex;
+		v.mPackedNormal = mVertex.mShadingData.mPackedShadingNormal;
+		gRenderParams.mVisibility[mOutputIndex] = reinterpret<float2>(v);
+
+		DepthData d;
+		d.mDepth = mTransmitDistance;
+
+		if (hit) {
+			uint2 extent;
+			gRenderParams.mOutput.GetDimensions(extent.x, extent.y);
+			const uint viewIndex = getViewIndex(mOutputIndex, extent, gPushConstants.mViewCount);
+
+			const float3 prevWorldPos = gScene.mInstanceMotionTransforms[isect.instanceIndex].transformPoint(mVertex.mShadingData.mPosition);
+			const float3 prevViewPos  = gRenderParams.mPrevInverseViewTransforms[viewIndex].transformPoint(prevWorldPos);
+			d.mPrevDepth = length(prevViewPos);
+
+			const ViewData view = gRenderParams.mViews[viewIndex];
+			const TransformData t = gRenderParams.mViewTransforms[viewIndex];
+			const float3 ng = mVertex.mShadingData.geometryNormal;
+			float2 uv;
+			d.mDepthDerivative.x = rayPlane(ray.Origin - mVertex.mShadingData.mPosition, normalize(t.transformVector(view.toWorld(mOutputIndex + 0.5 + uint2(1, 0), /*out*/ uv))), ng) - mTransmitDistance;
+			d.mDepthDerivative.y = rayPlane(ray.Origin - mVertex.mShadingData.mPosition, normalize(t.transformVector(view.toWorld(mOutputIndex + 0.5 + uint2(0, 1), /*out*/ uv))), ng) - mTransmitDistance;
+
+			gRenderParams.mPrevViews[viewIndex].toRaster(prevViewPos, /*out*/ gRenderParams.mPrevUVs[mOutputIndex]);
+			addDebugContribution(PathTracerDebugMode::ePrevUV, float3(gRenderParams.mPrevUVs[mOutputIndex], 0));
+		} else {
+			d.mDepthDerivative = 0;
+			d.mPrevDepth = POS_INFINITY;
 		}
-		return false;
+
+		gRenderParams.mDepth[mOutputIndex] = reinterpret<float4>(d);
 	}
 
-	// samples direct lighting, samples mDirection and mBeta
+
+	// stores auxillary data, stores path vertex, samples direct lighting and next direction, does russian roullette
 	[mutating]
-	bool integrateVertex<let StoreAlbedo : bool>(BSDF bsdf) {
+	void integrateVertex<let StoreAlbedo : bool>(BSDF bsdf) {
 		if (StoreAlbedo)
 			gRenderParams.mAlbedo[mOutputIndex] = float4(bsdf.albedo(), 1);
 
 		// evaluate BSDF emission
-		const float3 L = bsdf.emission();
-		if (any(L > 0)) {
-			const float cosTheta = mVertex.mShadingData.isSurface ? -dot(mDirection, mVertex.geometryNormal) : 1;
-			if (cosTheta > 0) {
-				const float dirPdfA = pdfWtoA(mDirFwdPdfW, cosTheta / pow2(mTransmitDistance));
-				addEmission(L, dirPdfA, mSurfaceEmissionPdfA);
+		if (!Adjoint && !CHECK_FEATURE(ReferenceBDPT)) {
+			const float3 L = bsdf.emission();
+			if (any(L > 0)) {
+				const float cosTheta = mVertex.mShadingData.isSurface ? -dot(mDirection, mVertex.mShadingData.geometryNormal) :  1;
+				if (cosTheta > 0) {
+					float w = 1;
+
+					if (mDirPdfW > 0 && mBounces > 0 && CHECK_FEATURE(Nee)) {
+						// MIS with NEE
+
+						// compute probability of sampling this point with NEE
+						float lightPdfA;
+						if (mVertex.mShadingData.isEnvironment) {
+							if (gPushConstants.mLightCount == 0) {
+								lightPdfA = 1;
+							} else {
+								lightPdfA = gPushConstants.mEnvironmentSampleProbability;
+							}
+						} else {
+							if (gPushConstants.mLightCount == 0) {
+								lightPdfA = 0;
+							} else {
+								lightPdfA = mIntersectionLightPickPdf / (mVertex.mShadingData.mShapeArea * gPushConstants.mLightCount);
+								if (gHasEnvironment)
+									lightPdfA *= 1 - gPushConstants.mEnvironmentSampleProbability;
+							}
+						}
+
+						const float G = mVertex.mShadingData.isEnvironment ? 1 : (cosTheta / pow2(mTransmitDistance));
+						w = neeMis(pdfWtoA(mDirPdfW, G), lightPdfA * bsdf.emissionPdf() * mTransmitNeePdf);
+					}
+
+					addContribution(mVertex.mBeta * L, w, mBounces + 2, 0);
+				}
 			}
 		}
 
-        if (!bsdf.canEvaluate() || mBounces >= gPushConstants.mMaxBounces) {
-			mBeta = 0;
-			return false;
+		if (!bsdf.canEvaluate() || mBounces >= gPushConstants.mMaxBounces || mDiffuseBounces >= gPushConstants.mMaxDiffuseBounces) {
+			mVertex.mBeta = 0;
+			return;
 		}
 
-		if (mBounces >= gPushConstants.mMinBounces) {
-			if (russianRoullette())
-				return false;
+		if (mBounces >= gPushConstants.mMinBounces)
+			if (mVertex.russianRoullette(mRNG.nextFloat()))
+				return;
+
+		const bool singular = bsdf.isSingular();
+
+		if (!singular && CHECK_FEATURE(ReferenceBDPT)) {
+			if (Adjoint)
+				gRenderParams.mLightPathVertices[mOutputIndex1d + (mDiffuseBounces+1) * mOutputStride] = mVertex;
+			else
+				gRenderParams.mViewPathVertices[mOutputIndex1d + mDiffuseBounces * mOutputStride] = mVertex;
 		}
 
-		const float3 localDirIn = mVertex.toLocal(-mDirection);
+		const float3 localDirIn = mVertex.mShadingData.toLocal(-mDirection);
 
-		mBounces++;
+		if (!singular && !Adjoint && CHECK_FEATURE(Nee) && !CHECK_FEATURE(ReferenceBDPT))
+			sampleDirectLight(bsdf, localDirIn);
 
-		if (!bsdf.isSingular()) {
-			if (mDiffuseBounces >= gPushConstants.mMaxDiffuseBounces) {
-				mBeta = 0;
-				return false;
-			}
-
-			mDiffuseBounces++;
-
-			if (!Adjoint && CHECK_FEATURE(Nee))
-				sampleDirectLight(bsdf, localDirIn);
+		if (sampleDirection(bsdf, localDirIn)) {
+			mBounces++;
+			if (!singular)
+				mDiffuseBounces++;
 		}
-
-		return sampleDirection(bsdf, localDirIn);
 	}
-
 
 	// traces a ray in mDirection to find the next vertex, then samples the next direction
 	// returns true if the next vertex is valid
 	[mutating]
-	bool step<let StoreAuxillaryData : bool>() {
+	void step<let StoreAuxillaryData : bool>() {
+		if (mVertex.mShadingData.isSurface)
+			mRevG = dot(mVertex.mShadingData.geometryNormal, mDirection);
+		else
+			mRevG = 1;
+
 		RayDesc ray;
-		ray.Origin = rayOffset(mVertex.position, mVertex.geometryNormal, mDirection);
+		ray.Origin = rayOffset(mVertex.mShadingData.mPosition, mVertex.mShadingData.geometryNormal, mDirection);
 		ray.TMin = 0;
 		ray.Direction = mDirection;
 		ray.TMax = POS_INFINITY;
 
 		IntersectionResult isect;
-		float3 transmitBeta;
-		const bool hit = gScene.traceScatteringRay(mRNG, ray, mVertex.mMediumInstance, transmitBeta, mTransmitDirPdf, mTransmitNeePdf, isect, mVertex.mShadingData);
-
-		mBeta *= transmitBeta;
+		float transmitDirPdf;
+		const bool hit = gScene.traceScatteringRay(
+			ray,
+			mRNG,
+			mVertex.mMediumInstance,
+			/*inout*/ mVertex.mBeta,
+			/*out*/ transmitDirPdf,
+			/*out*/ mTransmitNeePdf,
+			/*out*/ isect,
+			/*out*/ mVertex.mShadingData);
+		mVertex.mInstancePrimitiveIndex = isect.mInstancePrimitiveIndex;
+		mVertex.directionIn = -mDirection;
 		mTransmitDistance = isect.mDistance;
+		mIntersectionLightPickPdf = isect.mLightPickPdf;
 
-		if (gPushConstants.mLightCount > 0) {
-			mSurfaceEmissionPdfA = isect.mLightPickPdf / (mVertex.mShadingData.mShapeArea * gPushConstants.mLightCount);
-			if (gPushConstants.mEnvironmentMaterialAddress != -1)
-				mSurfaceEmissionPdfA *= 1 - gPushConstants.mEnvironmentSampleProbability;
-		} else
-			mSurfaceEmissionPdfA = 0;
+		mDirPdfW *= transmitDirPdf;
+		mVertex.mPathPdfFwdA *= transmitDirPdf;
+		// convert bsdf sample pdf to area measure
+		mVertex.mPathPdfFwdA *= abs(dot(mVertex.mShadingData.geometryNormal, mDirection)) / pow2(mTransmitDistance);
+		mRevG /= pow2(mTransmitDistance);
 
-
-		// store meta information
-		if (!Adjoint && StoreAuxillaryData) {
-			addDebugContribution(PathTracerDebugMode::eDepth,             mTransmitDistance.xxx / 10);
-			addDebugContribution(PathTracerDebugMode::eGeometryNormal,    mVertex.mShadingData.geometryNormal * .5 + .5);
-			addDebugContribution(PathTracerDebugMode::eShadingNormal,     mVertex.mShadingData.shadingNormal * .5 + .5);
-			addDebugContribution(PathTracerDebugMode::eTextureCoordinate, float3(mVertex.mShadingData.mTexcoord, 0));
-			addDebugContribution(PathTracerDebugMode::eMaterialAddress,   randomColor(mVertex.mShadingData.materialAddress));
-
-			VisibilityData v;
-			v.mInstancePrimitiveIndex = isect.mInstancePrimitiveIndex;
-			v.mPackedNormal = mVertex.mShadingData.mPackedShadingNormal;
-			gRenderParams.mVisibility[mOutputIndex] = reinterpret<float2>(v);
-
-			if (hit) {
-				uint2 extent;
-				gRenderParams.mOutput.GetDimensions(extent.x, extent.y);
-				const uint viewIndex = getViewIndex(mOutputIndex, extent, gPushConstants.mViewCount);
-
-				const float3 prevWorldPos = gScene.mInstanceMotionTransforms[isect.instanceIndex].transformPoint(mVertex.position);
-				const float3 prevViewPos  = gRenderParams.mPrevInverseViewTransforms[viewIndex].transformPoint(prevWorldPos);
-
-				gRenderParams.mPrevViews[viewIndex].toRaster(prevViewPos, /*out*/ gRenderParams.mPrevUVs[mOutputIndex]);
-				addDebugContribution(PathTracerDebugMode::ePrevUV, float3(gRenderParams.mPrevUVs[mOutputIndex], 0));
-
-				DepthData d;
-				d.mDepth = mTransmitDistance;
-				d.mPrevDepth = length(prevViewPos);
-
-				const ViewData view = gRenderParams.mViews[viewIndex];
-				const TransformData t = gRenderParams.mViewTransforms[viewIndex];
-				const float3 ng = mVertex.geometryNormal;
-				float2 uv;
-				d.mDepthDerivative.x = rayPlane(ray.Origin - mVertex.position, normalize(t.transformVector(view.toWorld(mOutputIndex + 0.5 + uint2(1, 0), /*out*/ uv))), ng) - mTransmitDistance;
-				d.mDepthDerivative.y = rayPlane(ray.Origin - mVertex.position, normalize(t.transformVector(view.toWorld(mOutputIndex + 0.5 + uint2(0, 1), /*out*/ uv))), ng) - mTransmitDistance;
-
-				gRenderParams.mDepth[mOutputIndex] = reinterpret<float4>(d);
-			}
-		}
+		// TODO: transmit/scattering reverse pdf?
 
 		mVertex.mShadingData.mTexcoordScreenSize = 0;
 
-		if (hit) {
-			if (mVertex.mShadingData.isSurface)
-				return integrateVertex<StoreAuxillaryData>(Material(mVertex.mShadingData));
-			else if (mVertex.mShadingData.isMedium)
-				return integrateVertex<StoreAuxillaryData>(Medium(mVertex.mShadingData.materialAddress));
-			else
-				return false;
-		}
+		if (StoreAuxillaryData && !Adjoint)
+			storeAuxillaryData(ray, hit, isect);
 
-		// hit background
-		if (!Adjoint) {
-			if (StoreAuxillaryData)
-				gRenderParams.mAlbedo[mOutputIndex] = float4(1, 1, 1, 1);
+		if (mVertex.mShadingData.isSurface)
+			integrateVertex<StoreAuxillaryData>(Material(mVertex.mShadingData));
+		else if (mVertex.mShadingData.isMedium)
+			integrateVertex<StoreAuxillaryData>(Medium(mVertex.mShadingData.materialAddress));
+		else if (!hit)
+			integrateVertex<StoreAuxillaryData>(EnvironmentBSDF(mVertex.mShadingData));
+		else
+			mVertex.mBeta = 0;
+	}
 
-			if (gPushConstants.mEnvironmentMaterialAddress != -1) {
-				const Environment environment = Environment(gPushConstants.mEnvironmentMaterialAddress);
-				const float3 L = environment.evaluate(mDirection);
-				const float pickPdf = gPushConstants.mLightCount > 0 ? gPushConstants.mEnvironmentSampleProbability : 1;
-				addEmission(L, mDirFwdPdfW, environment.evaluatePdfW(mDirection) * pickPdf);
-			}
-		}
-
-		mBeta = 0;
-		return false;
+	[mutating]
+	void integrate() {
+		step<!Adjoint>();
+		while (any(mVertex.mBeta > 0) && !any(isnan(mVertex.mBeta)))
+			step<false>();
 	}
 };
 
-PathVertex generateEyeRay(const uint viewIndex, const uint2 index, out float3 direction) {
-	const ViewData view = gRenderParams.mViews[viewIndex];
-	float2 uv;
-	const float3 localDir = view.toWorld(index + 0.5, /*out*/ uv);
-	const TransformData t = gRenderParams.mViewTransforms[viewIndex];
-	direction = normalize(t.transformVector(localDir));
 
-	PathVertex v;
-	v.mShadingData.mPosition = float3(t.m[0][3], t.m[1][3], t.m[2][3]);
-	v.mShadingData.mFlagsMaterialAddress = 0;
-	v.mShadingData.mPackedGeometryNormal = v.mShadingData.mPackedShadingNormal = packNormal(t.transformVector(float3(0,0,1)));
-	v.mShadingData.mShapeArea = view.mProjection.mSensorArea;
-	v.mMediumInstance = gRenderParams.mViewMediumInstances[viewIndex];
-	return v;
+void connectPaths(const uint2 index, const uint2 extent, const uint viewVertexCount, const uint lightVertexCount) {
+	const uint index1d = index.y * extent.x + index.x;
+	const uint stride = extent.x * extent.y;
+
+	gRenderParams.mOutput[index] = float4(0, 0, 0, 1);
+
+	for (uint curVertexCount = 1; curVertexCount <= viewVertexCount + lightVertexCount; curVertexCount++) {
+		float4 contribution = 0;
+
+		// consider all techniques which result in paths with curVertexCount vertices
+		for (uint t = 0; t < min(lightVertexCount, curVertexCount); t++) {
+			const uint s = curVertexCount - t;
+			if (s == 0 || s >= viewVertexCount)
+				continue;
+
+			PathVertex viewVertex  = gRenderParams.mViewPathVertices [index1d + stride * (s-1)];
+			PathVertex lightVertex = gRenderParams.mLightPathVertices[index1d + stride * t];
+
+			float3 toLight = lightVertex.mShadingData.mPosition - viewVertex.mShadingData.mPosition;
+			const float dist = length(toLight);
+			toLight /= dist;
+
+			const float3 c =
+				viewVertex.mBeta * viewVertex.evaluateBsdf<false>(viewVertex.directionIn, toLight) *
+				(1 / pow2(dist)) *
+				lightVertex.mBeta * lightVertex.evaluateBsdf<true>(lightVertex.directionIn, -toLight);
+
+			const float w = mis(viewVertex.mPathPdfFwdA * lightVertex.mPathPdfFwdA);
+
+			if (all(c <= 0) || any(isnan(c)) || w <= 0 || isnan(w))
+				continue;
+
+			contribution += float4(c * w, w);
+		}
+
+		gRenderParams.mOutput[index].rgb += contribution.rgb / contribution.w;
+	}
 }
 
-/*
-uint mapPixelCoord(const uint2 pixel_coord, const uint2 groupId, const uint groupThreadIndex) {
-	const uint dispatch_w = (gOutputExtent.x + GROUPSIZE_X - 1) / GROUPSIZE_X;
-	const uint group_index = groupId.y*dispatch_w + groupId.x;
-	return group_index*GROUPSIZE_X*GROUPSIZE_Y + groupThreadIndex;
-}
-*/
 
 [shader("compute")]
 [numthreads(8, 8, 1)]
-void sampleViewPaths(uint3 index: SV_DispatchThreadID, uint group_index: SV_GroupIndex) {
+void integratePaths(uint3 index: SV_DispatchThreadID) {
 	uint2 extent;
 	gRenderParams.mOutput.GetDimensions(extent.x, extent.y);
 	if (any(index.xy >= extent)) return;
 
-	float3 direction;
-	PathVertex v = generateEyeRay(getViewIndex(index.xy, extent, gPushConstants.mViewCount), index.xy, /*out*/ direction);
+	uint viewVertexCount, lightVertexCount;
 
-	PathIntegrator<false> path = PathIntegrator<false>(index.xy, v, direction);
+	{
+		PathIntegrator<false> path = PathIntegrator<false>(index.xy, extent);
+		path.integrate();
+		viewVertexCount = path.mDiffuseBounces + 1;
+	}
 
-	if (!path.step<true>()) return;
-	for (uint i = 0; i < 8; i++)
-		if (!path.step<false>())
-			return;
+	if (CHECK_FEATURE(ReferenceBDPT)) {
+		{
+			PathIntegrator<true> path = PathIntegrator<true>(index.xy, extent);
+			path.integrate();
+			lightVertexCount = path.mDiffuseBounces + 2;
+		}
+
+		connectPaths(index.xy, extent, viewVertexCount, lightVertexCount);
+	}
 }
+
+#if 0
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void bdpt(uint3 index: SV_DispatchThreadID) {
+	uint2 extent;
+	gRenderParams.mOutput.GetDimensions(extent.x, extent.y);
+	if (any(index.xy >= extent)) return;
+
+	// initialize view vertex
+	const ViewData view = gRenderParams.mViews[viewIndex];
+	const TransformData t = gRenderParams.mViewTransforms[viewIndex];
+
+	const float3 position = float3(t.m[0][3], t.m[1][3], t.m[2][3]);
+	const float3 sensorNormal = packNormal(t.transformVector(float3(0, 0, sign(view.mProjection.mNearPlane))));
+	uint curMedium = gRenderParams.mViewMediumInstances[viewIndex];
+
+	// generate eye ray
+	float2 uv;
+	const float3 direction = normalize(t.transformVector(view.toWorld(mOutputIndex + 0.5, /*out*/ uv)));
+
+	float3 beta = 1;
+	float3 radiance = 0;
+
+	for (uint vertexCount = 1; vertexCount < gPushConstants.mMaxBounces + 1; vertexCount++) {
+
+	}
+	gRenderParams.mOutput[index.xy] = float4(radiance, 1);
+}
+#endif

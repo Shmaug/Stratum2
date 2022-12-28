@@ -51,11 +51,35 @@ struct RandomSampler {
 	[mutating]
 	uint next() {
 		mState.w++;
-		return pcg4d(mState).x;
-	}
+        return pcg4d(mState).x;
+    }
+    [mutating]
+    uint2 next2() {
+        return uint2(next(), next());
+    }
+    [mutating]
+    uint3 next3() {
+        return uint3(next(), next(), next());
+    }
+    [mutating]
+    uint4 next4() {
+        return uint4(next(), next(), next(), next());
+    }
 
 	[mutating]
     float nextFloat() {
         return unorm32ToFloat(next());
-	}
+    }
+    [mutating]
+    float2 nextFloat2() {
+        return unorm32ToFloat(next2());
+    }
+    [mutating]
+    float3 nextFloat3() {
+        return unorm32ToFloat(next3());
+    }
+    [mutating]
+    float4 nextFloat4() {
+        return unorm32ToFloat(next4());
+    }
 };

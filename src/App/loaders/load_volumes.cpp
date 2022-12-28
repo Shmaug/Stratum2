@@ -14,24 +14,26 @@
 
 namespace stm2 {
 
+// Create transform which places the volume at the origin and scales it to be 1 unit
 void createTransform(Node& dst, Medium& h) {
 	const nanovdb::Vec3R bboxMax = h.mDensityGrid->grid<float>()->worldBBox().max();
 	const nanovdb::Vec3R bboxMin = h.mDensityGrid->grid<float>()->worldBBox().min();
 	const nanovdb::Vec3R center = (bboxMax + bboxMin) / 2;
-	const nanovdb::Vec3R extent = bboxMax - bboxMin;
 	const float scale = 1 / (float)(bboxMax - bboxMin).max();
 	dst.makeComponent<TransformData>(
-		-VectorType<nanovdb::Vec3R::ValueType, 3>::Map(&center[0]).cast<float>() * scale,
+		-float3(center[0], center[1], center[2]) * scale,
 		quatf::identity(),
 		float3::Constant(scale));
 }
 
-Medium createVolume(CommandBuffer& commandBuffer, const string& name, const shared_ptr<nanovdb::GridHandle<nanovdb::HostBuffer>>& density = {}, const shared_ptr<nanovdb::GridHandle<nanovdb::HostBuffer>>& albedo = {}) {
+using VolumeHandle = nanovdb::GridHandle<nanovdb::HostBuffer>;
+
+Medium createMedium(CommandBuffer& commandBuffer, const string& name, const shared_ptr<VolumeHandle>& density = {}, const shared_ptr<VolumeHandle>& albedo = {}) {
 	Medium h;
 	h.mDensityScale = float3::Ones();
 	h.mAnisotropy = 0.f;
 	h.mAlbedoScale = float3::Ones();
-	h.mAttenuationUnit = 0.1f;
+	h.mAttenuationUnit = 0.5f;
 	h.mDensityGrid = density;
 	h.mAlbedoGrid = albedo;
 	if (density) {
@@ -49,7 +51,7 @@ Medium createVolume(CommandBuffer& commandBuffer, const string& name, const shar
 	return h;
 }
 
-nanovdb::GridHandle<nanovdb::HostBuffer> loadVol(const filesystem::path& filename) {
+VolumeHandle loadVol(const filesystem::path& filename) {
 	// code from https://github.com/mitsuba-renderer/mitsuba/blob/master/src/volume/gridvolume.cpp#L217
 	enum EVolumeType {
 		EFloat32 = 1,
@@ -96,28 +98,23 @@ nanovdb::GridHandle<nanovdb::HostBuffer> loadVol(const filesystem::path& filenam
 }
 
 shared_ptr<Node> Scene::loadVol(CommandBuffer& commandBuffer, const filesystem::path& filename) {
-	nanovdb::GridHandle<nanovdb::HostBuffer> densityHandle = stm2::loadVol(filename);
-	if (densityHandle) {
-		// create nvdb so the file can be loaded faster next time
-		if (!filesystem::exists(filename.string() + ".nvdb"))
-			nanovdb::io::writeGrid(filename.string() + ".nvdb", densityHandle);
-		const shared_ptr<Node> node = Node::create(filename.stem().string());
-		Medium& h = *node->makeComponent<Medium>(createVolume(commandBuffer, filename.stem().string(), node->makeComponent<nanovdb::GridHandle<nanovdb::HostBuffer>>(move(densityHandle))));
-		createTransform(*node, h);
-		return node;
-	}
-	return nullptr;
+	VolumeHandle densityHandle = stm2::loadVol(filename);
+	if (!densityHandle) return nullptr;
+	const shared_ptr<Node> node = Node::create(filename.stem().string());
+	const shared_ptr<VolumeHandle> vol = node->makeComponent<VolumeHandle>(move(densityHandle));
+	Medium& h = *node->makeComponent<Medium>(createMedium(commandBuffer, filename.stem().string(), vol));
+	createTransform(*node, h);
+	return node;
 }
 
 shared_ptr<Node> Scene::loadNvdb(CommandBuffer& commandBuffer, const filesystem::path& filename) {
-	nanovdb::GridHandle<nanovdb::HostBuffer> densityHandle = nanovdb::io::readGrid(filename.string().c_str());
-	if (densityHandle) {
-		const shared_ptr<Node> node = Node::create(filename.stem().string());
-		Medium& h = *node->makeComponent<Medium>(createVolume(commandBuffer, filename.stem().string(), node->makeComponent<nanovdb::GridHandle<nanovdb::HostBuffer>>(move(densityHandle))));
-		createTransform(*node, h);
-		return node;
-	}
-	return nullptr;
+	VolumeHandle densityHandle = nanovdb::io::readGrid(filename.string().c_str());
+	if (!densityHandle) return nullptr;
+	const shared_ptr<Node> node = Node::create(filename.stem().string());
+	const shared_ptr<VolumeHandle> vol = node->makeComponent<VolumeHandle>(move(densityHandle));
+	Medium& h = *node->makeComponent<Medium>(createMedium(commandBuffer, filename.stem().string(), vol));
+	createTransform(*node, h);
+	return node;
 }
 
 #ifdef ENABLE_OPENVDB
@@ -130,22 +127,19 @@ shared_ptr<Node> Scene::loadVdb(CommandBuffer& commandBuffer, const filesystem::
 	openvdb::io::File file(filename.string().c_str());
 	if (!file.open()) return nullptr;
 
-	unordered_map<string, shared_ptr<nanovdb::GridHandle<nanovdb::HostBuffer>>> grids;
-	for (auto it = file.beginName(); name_it != file.endName(); ++it) {
-		auto grid = root.addChild(*name_it).makeComponent<nanovdb::GridHandle<nanovdb::HostBuffer>>(nanovdb::openToNanoVDB(file.readGrid(*it)));
-		grids.emplace(*it, grid);
-		// cache NVDB
-		if (!filesystem::exists(filename.string() + *it + ".nvdb"))
-			nanovdb::io::writeGrid(filename.string() + *it + ".nvdb", *grid);
+	shared_ptr<Node> rootNode = Node::create(filename.stem().string());
+
+	for (auto it = file.beginName(); it != file.endName(); ++it) {
+		VolumeHandle densityHandle = nanovdb::openToNanoVDB(file.readGrid(*it));
+		if (!densityHandle) continue;
+		const shared_ptr<Node> node = rootNode->addChild(*it);
+		const shared_ptr<VolumeHandle> vol = node->makeComponent<VolumeHandle>(move(densityHandle));
+		Medium& h = *node->makeComponent<Medium>(createMedium(commandBuffer, filename.stem().string(), vol));
+		createTransform(*node, h);
 	}
 	file.close();
 
-	if (grids.empty()) return nullptr;
-
-	if (auto grid = grids.begin()->second)
-		return createVolume(commandBuffer, filename.stem().string(), grid);
-
-	return nullptr;
+	return rootNode->children().size() == 0 ? nullptr : rootNode;
 }
 #endif
 

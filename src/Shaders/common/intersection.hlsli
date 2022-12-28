@@ -6,22 +6,10 @@
 
 #define SHADING_FLAG_FLIP_BITANGENT BIT(0)
 
-// 48 bytes
-struct ShadingData {
-	float3 mPosition;
-	uint mFlagsMaterialAddress;
-
-	uint mPackedGeometryNormal;
-	uint mPackedShadingNormal;
-	uint mPackedTangent;
-	float mShapeArea;
-
-	float2 mTexcoord;
-	float mTexcoordScreenSize;
-	float mMeanCurvature;
-
-	property bool isSurface    { get { return mShapeArea > 0; } }
-	property bool isMedium     { get { return mShapeArea == 0; } }
+extension ShadingData {
+	property bool isSurface       { get { return mShapeArea > 0; } }
+	property bool isMedium        { get { return mShapeArea == 0; } }
+	property bool isEnvironment   { get { return mShapeArea < 0; } }
 	property uint materialAddress { get { return BF_GET(mFlagsMaterialAddress, 4, 28); } }
 
 	property bool isBitangentFlipped { get { return (bool)(mFlagsMaterialAddress & SHADING_FLAG_FLIP_BITANGENT); } }
@@ -44,8 +32,11 @@ struct ShadingData {
 };
 
 struct IntersectionResult {
-	float mDistance;
 	uint mInstancePrimitiveIndex;
+	float mPrimitivePickPdf;
+	float mDistance;
+	ShadingData mShadingData;
+
 	property uint instanceIndex {
         get { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
         set { BF_SET(mInstancePrimitiveIndex, newValue, 0, 16); }
@@ -54,9 +45,9 @@ struct IntersectionResult {
 		get { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
 		set { BF_SET(mInstancePrimitiveIndex, newValue, 16, 16); }
 	}
-	property InstanceData instance { get { return gScene.mInstances[instanceIndex]; } }
+	property InstanceData  instance  { get { return gScene.mInstances[instanceIndex]; } }
 	property TransformData transform { get { return gScene.mInstanceTransforms[instanceIndex]; } }
-	float mLightPickPdf;
+	property uint lightIndex         { get { return gScene.mInstanceLightMap[instanceIndex]; } }
 };
 
 float3 rayOffset(const float3 P, const float3 Ng) {
@@ -64,7 +55,7 @@ float3 rayOffset(const float3 P, const float3 Ng) {
 	// rays leaving from a surface. This is from "A Fast and Robust Method for Avoiding
 	// Self-Intersection" see https://research.nvidia.com/publication/2019-03_A-Fast-and
   float int_scale = 256.0;
-  int3 of_i = int_scale * Ng;
+  int3 of_i = int3(int_scale * Ng);
 
   float origin = 1.0 / 32.0;
   float float_scale = 1.0 / 65536.0;
@@ -74,6 +65,15 @@ float3 rayOffset(const float3 P, const float3 Ng) {
 }
 float3 rayOffset(const float3 P, const float3 Ng, float3 dir) {
 	return rayOffset(P, dot(Ng, dir) < 0 ? -Ng : Ng);
+}
+
+RayDesc makeRay(const float3 origin, const float3 direction, const float tmin = 0, const float tmax = POS_INFINITY) {
+	RayDesc ray;
+	ray.Origin = origin;
+	ray.TMin = tmin;
+	ray.Direction = direction;
+	ray.TMax = tmax;
+	return ray;
 }
 
 uint3 loadTriangleIndices(ByteAddressBuffer indices, const uint offset, const uint indexStride, const uint primitiveIndex) {
@@ -98,9 +98,9 @@ uint3 loadTriangleIndices(ByteAddressBuffer indices, const uint offset, const ui
 }
 
 void loadTriangleAttribute<T>(const ByteAddressBuffer vertexBuffer, const uint offset, const uint stride, const uint3 tri, out T v0, out T v1, out T v2) {
-	v0 = vertexBuffer.Load<T>(offset + stride*tri[0]);
-	v1 = vertexBuffer.Load<T>(offset + stride*tri[1]);
-	v2 = vertexBuffer.Load<T>(offset + stride*tri[2]);
+	v0 = vertexBuffer.Load<T>(int(offset + stride*tri[0]));
+	v1 = vertexBuffer.Load<T>(int(offset + stride*tri[1]));
+	v2 = vertexBuffer.Load<T>(int(offset + stride*tri[2]));
 }
 
 extension SceneParameters {
@@ -228,9 +228,9 @@ extension SceneParameters {
 		r.mTexcoordScreenSize = 1/max(length(dpdu), length(dpdv));
 		return r;
 	}
-	ShadingData makeVolumeShadingData  (const VolumeInstanceData instance, const TransformData transform, const float3 localPosition) {
+	ShadingData makeVolumeShadingData  (const VolumeInstanceData instance, const float3 position) {
 		ShadingData r;
-		r.mPosition = transform.transformPoint(localPosition);
+		r.mPosition = position;
 		r.mFlagsMaterialAddress = 0;
 		BF_SET(r.mFlagsMaterialAddress, instance.materialAddress(), 4, 28);
 		r.mShapeArea = 0;
@@ -238,9 +238,11 @@ extension SceneParameters {
 		return r;
 	}
 
-    bool traceRay(const RayDesc ray, const bool closest, out IntersectionResult isect, out ShadingData shadingData) {
-        if (CHECK_FEATURE(PerformanceCounters))
+    bool traceRay(const RayDesc ray, const bool closest, out IntersectionResult isect) {
+        if (gPerformanceCounters)
 			InterlockedAdd(mPerformanceCounters[0], 1);
+
+		// trace ray
 
 		RayQuery<RAY_FLAG_NONE> rayQuery;
 		rayQuery.TraceRayInline(mAccelerationStructure, closest ? RAY_FLAG_NONE : RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, ~0, ray);
@@ -274,7 +276,7 @@ extension SceneParameters {
 							const float t = st.x > rayQuery.RayTMin() ? st.x : st.y;
 							if (t < rayQuery.CommittedRayT() && t > rayQuery.RayTMin()) {
 								const float3 normal = normalize(mInstanceTransforms[instanceIndex].transformVector(pnanovdb_grid_index_to_world_dirf(volumeBuffer, gridHandle, float3(t1 == t) - float3(t0 == t))));
-								shadingData.mPackedGeometryNormal = shadingData.mPackedShadingNormal = packNormal(normal);
+								isect.mShadingData.mPackedGeometryNormal = isect.mShadingData.mPackedShadingNormal = packNormal(normal);
 								rayQuery.CommitProceduralPrimitiveHit(t);
 							}
 							break;
@@ -282,7 +284,7 @@ extension SceneParameters {
 					}
 				}
 				case CANDIDATE_NON_OPAQUE_TRIANGLE: {
-					if (!CHECK_FEATURE(AlphaTest)) {
+					if (!gAlphaTest) {
 						rayQuery.CommitNonOpaqueTriangleHit();
 						break;
 					}
@@ -301,83 +303,99 @@ extension SceneParameters {
 					break;
 				}
 			}
-		}
+        }
 
-		if (rayQuery.CommittedStatus() == COMMITTED_NOTHING)
-			return false;
+		// create IntersectionResult
 
-		isect.mDistance = rayQuery.CommittedRayT();
-		isect.instanceIndex = rayQuery.CommittedInstanceID();
-		isect.mLightPickPdf = 1;
+		switch (rayQuery.CommittedStatus()) {
+			case COMMITTED_NOTHING: {
+				// ray missed scene
+				isect.mDistance = ray.TMax;
+                isect.instanceIndex = INVALID_INSTANCE;
+                isect.mShadingData.mPosition = ray.Direction;
+                isect.mShadingData.mPackedGeometryNormal = isect.mShadingData.mPackedShadingNormal = packNormal(ray.Direction);
+				isect.mShadingData.mShapeArea = -1;
+				isect.mShadingData.mTexcoord = cartesianToSphericalUv(ray.Direction);
+				return false;
+			}
+			case COMMITTED_TRIANGLE_HIT: {
+				isect.mDistance = rayQuery.CommittedRayT();
+				isect.instanceIndex = rayQuery.CommittedInstanceID();
+				isect.primitiveIndex = rayQuery.CommittedPrimitiveIndex();
 
-		if (rayQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
-			isect.primitiveIndex = rayQuery.CommittedPrimitiveIndex();
-
-			MeshInstanceData meshInstance = reinterpret<MeshInstanceData>(isect.instance);
-			isect.mLightPickPdf /= meshInstance.primitiveCount();
-            shadingData = makeTriangleShadingData(meshInstance, isect.transform, rayQuery.CommittedPrimitiveIndex(), rayQuery.CommittedTriangleBarycentrics());
-
-		} else if (rayQuery.CommittedStatus() == COMMITTED_PROCEDURAL_PRIMITIVE_HIT) {
-			isect.primitiveIndex = INVALID_PRIMITIVE;
-
-			const float3 localPosition = rayQuery.CommittedObjectRayOrigin() + rayQuery.CommittedObjectRayDirection()*rayQuery.CommittedRayT();
-
-			switch (isect.instance.type()) {
-				case InstanceType::eSphere:
-                    shadingData = makeSphereShadingData(reinterpret<SphereInstanceData>(isect.instance), isect.transform, localPosition);
-					break;
-				case InstanceType::eVolume:
-					const uint n = shadingData.mPackedGeometryNormal; // assigned in the rayQuery loop above
-                    shadingData = makeVolumeShadingData(reinterpret<VolumeInstanceData>(isect.instance), isect.transform, localPosition);
-					shadingData.mPackedGeometryNormal = n;
-					break;
+                MeshInstanceData meshInstance = reinterpret<MeshInstanceData>(isect.instance);
+                isect.mPrimitivePickPdf = 1.0/meshInstance.primitiveCount();
+				isect.mShadingData = makeTriangleShadingData(meshInstance, isect.transform, rayQuery.CommittedPrimitiveIndex(), rayQuery.CommittedTriangleBarycentrics());
+				break;
+			}
+			case COMMITTED_PROCEDURAL_PRIMITIVE_HIT: {
+				isect.mDistance = rayQuery.CommittedRayT();
+				isect.instanceIndex = rayQuery.CommittedInstanceID();
+                isect.primitiveIndex = INVALID_PRIMITIVE;
+                isect.mPrimitivePickPdf = 1;
+				switch (isect.instance.type()) {
+					case InstanceType::eSphere:
+						isect.mShadingData = makeSphereShadingData(reinterpret<SphereInstanceData>(isect.instance), isect.transform, rayQuery.CommittedObjectRayOrigin() + rayQuery.CommittedObjectRayDirection() * rayQuery.CommittedRayT());
+						break;
+					case InstanceType::eVolume: {
+						const uint n = isect.mShadingData.mPackedGeometryNormal; // assigned in the rayQuery loop above
+						isect.mShadingData = makeVolumeShadingData(reinterpret<VolumeInstanceData>(isect.instance), ray.Origin + ray.Direction * rayQuery.CommittedRayT());
+						isect.mShadingData.mPackedGeometryNormal = n;
+						break;
+					}
+				}
+				break;
 			}
 		}
-
 		return true;
 	}
 
-	bool traceScatteringRay(inout RandomSampler rng, RayDesc ray, inout uint curMediumInstance, out float3 beta, out float dirPdf, out float neePdf, out IntersectionResult isect, out ShadingData shadingData) {
+	bool traceScatteringRay(RayDesc ray, inout RandomSampler rng, inout uint curMediumInstance, inout float3 beta, out float dirPdf, out float neePdf, out IntersectionResult isect) {
 		dirPdf = 1;
 		neePdf = 1;
-		beta = 1;
 
-        if (!CHECK_FEATURE(Media))
-            return traceRay(ray, true, /*out*/ isect, /*out*/ shadingData);
+        if (!gHasMedia)
+            return traceRay(ray, true, /*out*/ isect);
 
 		// load medium
 		Medium medium;
 		if (curMediumInstance != INVALID_INSTANCE)
 			medium = Medium(mInstances[curMediumInstance].materialAddress());
 
+        const float3 origin_ = ray.Origin;
+
+        ray.Origin += ray.Direction * ray.TMin;
+		ray.TMin = 0;
+
         while (ray.TMax > 1e-6) {
-            const bool hit = traceRay(ray, true, /*out*/ isect, /*out*/ shadingData);
+            const bool hit = traceRay(ray, true, /*out*/ isect);
 
 			// delta track through current medium
 			if (curMediumInstance != INVALID_INSTANCE) {
 				const TransformData invTransform = mInstanceInverseTransforms[curMediumInstance];
 
-				float3 _dirPdf, _neePdf;
-				const float3 p = medium.deltaTrack(
+                float3 _dirPdf, _neePdf;
+                bool scattered;
+				const float3 p = medium.deltaTrack<true>(
 					rng,
-					invTransform.transformPoint(ray.Origin + ray.Direction*ray.TMin),
+					invTransform.transformPoint(ray.Origin),
 					invTransform.transformVector(ray.Direction),
-					isect.mDistance - ray.TMin,
+					isect.mDistance,
 					/*inout*/ beta,
 					/*out*/ _dirPdf,
 					/*out*/ _neePdf,
-					true);
+					/*out*/ scattered);
 
 				dirPdf *= average(_dirPdf);
 				neePdf *= average(_neePdf);
 
-				if (all(isfinite(p))) {
+				if (scattered) {
 					// medium scattering event
+                    isect.mShadingData = makeVolumeShadingData(reinterpret<VolumeInstanceData>(mInstances[curMediumInstance]), mInstanceTransforms[curMediumInstance].transformPoint(p));
+                    isect.mDistance = length(isect.mShadingData.mPosition - origin_);
 					isect.instanceIndex = curMediumInstance;
-					isect.primitiveIndex = INVALID_PRIMITIVE;
-					shadingData.mPosition = p;
-					shadingData.mShapeArea = 0;
-					isect.mDistance = length(p - ray.Origin);
+                    isect.primitiveIndex = INVALID_PRIMITIVE;
+                    isect.mPrimitivePickPdf = 0;
 					return true;
 				}
 			}
@@ -387,34 +405,34 @@ extension SceneParameters {
             if (isect.instance.type() != InstanceType::eVolume)
 				return true;
 
-			const float3 ng = shadingData.geometryNormal;
+			const float3 ng = isect.mShadingData.geometryNormal;
 			if (dot(ng, ray.Direction) < 0) {
-				// entering volume
+				// entering medium
 				curMediumInstance = isect.instanceIndex;
-				medium = Medium(isect.instance.materialAddress());
-				ray.Origin = rayOffset(shadingData.mPosition, -ng);
+				medium = Medium(isect.mShadingData.materialAddress);
+				ray.Origin = rayOffset(isect.mShadingData.mPosition, -ng);
 			} else {
-				// leaving volume
+				// leaving medium
 				curMediumInstance = INVALID_INSTANCE;
-				ray.Origin = rayOffset(shadingData.mPosition, ng);
-			}
-			// TODO: ray.Origin shouldn't be modified, instead offset ray.TMin somehow
-			ray.TMin += isect.mDistance;
+				ray.Origin = rayOffset(isect.mShadingData.mPosition, ng);
+            }
+            ray.TMax -= isect.mDistance;
 		}
+
+        return false;
 	}
 
-    void traceVisibilityRay(inout RandomSampler rng, RayDesc ray, uint curMediumInstance, out float3 beta, out float dirPdf, out float neePdf) {
-        if (CHECK_FEATURE(PerformanceCounters))
+    void traceVisibilityRay(RayDesc ray, inout RandomSampler rng, uint curMediumInstance, out float3 beta, out float dirPdf, out float neePdf) {
+        if (gPerformanceCounters)
             InterlockedAdd(mPerformanceCounters[1], 1);
 
 		dirPdf = 1;
 		neePdf = 1;
 		beta = 1;
 
-		if (!CHECK_FEATURE(Media)) {
+		if (!gHasMedia) {
             IntersectionResult isect;
-            ShadingData shadingData;
-			if (traceRay(ray, false, /*out*/ isect, /*out*/ shadingData)) {
+			if (traceRay(ray, false, /*out*/ isect)) {
 				beta = 0;
 				dirPdf = 0;
 				neePdf = 0;
@@ -425,12 +443,14 @@ extension SceneParameters {
 		// load medium
 		Medium medium;
 		if (curMediumInstance != INVALID_INSTANCE)
-			medium = Medium(mInstances[curMediumInstance].materialAddress());
+            medium = Medium(mInstances[curMediumInstance].materialAddress());
+
+        ray.Origin += ray.Direction * ray.TMin;
+        ray.TMin = 0;
 
 		while (ray.TMax > 1e-6f) {
             IntersectionResult isect;
-            ShadingData shadingData;
-            const bool hit = traceRay(ray, true, /*out*/ isect, /*out*/ shadingData);
+            const bool hit = traceRay(ray, true, /*out*/ isect);
 
             if (hit && isect.instance.type() != InstanceType::eVolume) {
 				// hit a surface
@@ -444,36 +464,38 @@ extension SceneParameters {
 			if (curMediumInstance != INVALID_INSTANCE) {
 				const TransformData invTransform = mInstanceInverseTransforms[curMediumInstance];
 
-				float3 _dirPdf, _neePdf;
-				medium.deltaTrack(
+                float3 _dirPdf, _neePdf;
+                bool scattered;
+				medium.deltaTrack<false>(
 					rng,
-					invTransform.transformPoint(ray.Origin + ray.Direction*ray.TMin),
+					invTransform.transformPoint(ray.Origin),
 					invTransform.transformVector(ray.Direction),
-					isect.mDistance - ray.TMin,
+					isect.mDistance,
 					/*inout*/ beta,
 					/*out*/ _dirPdf,
 					/*out*/ _neePdf,
-					false);
+					/*out*/ scattered);
 
 				dirPdf *= average(_dirPdf);
 				neePdf *= average(_neePdf);
+                if (all(beta) <= 0)
+					return;
 			}
 
 			if (!hit) return; // successful transmission
 
 			// hit medium aabb
-			const float3 ng = shadingData.geometryNormal;
+			const float3 ng = isect.mShadingData.geometryNormal;
 			if (dot(ng, ray.Direction) < 0) {
 				// entering medium
 				curMediumInstance = isect.instanceIndex;
-				medium = Medium(shadingData.materialAddress);
-				ray.Origin = rayOffset(shadingData.mPosition, -ng);
+				medium = Medium(isect.mShadingData.materialAddress);
+				ray.Origin = rayOffset(isect.mShadingData.mPosition, -ng);
 			} else {
 				// leaving medium
 				curMediumInstance = INVALID_INSTANCE;
-				ray.Origin = rayOffset(shadingData.mPosition, ng);
+				ray.Origin = rayOffset(isect.mShadingData.mPosition, ng);
 			}
-			ray.TMin = 0;
 			ray.TMax -= isect.mDistance;
 		}
 	}
