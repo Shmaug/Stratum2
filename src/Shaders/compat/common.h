@@ -45,23 +45,23 @@ inline float4 degrees(const float4 x) { return x * 180/M_PI; }
 inline float luminance(const float3 color) { return dot(color, float3(0.2126, 0.7152, 0.0722)); }
 
 inline float3 hueToRgb(const float hue) {
-	float x = 6*hue;
+	const float x = 6*hue;
 	return saturate(float3(abs(x-3) - 1, 2 - abs(x-2), 2 - abs(x-4)));
 }
 inline float3 hsvToRgb(const float3 hsv) {
-	float3 rgb = hueToRgb(hsv[0]) - float3(1,1,1);
+	const float3 rgb = hueToRgb(hsv[0]) - float3(1,1,1);
 	return (rgb * hsv[1] + float3(1,1,1)) * hsv[2];
 }
 inline float3 rgbToHcv(const float3 rgb) {
 	// Based on work by Sam Hocevar and Emil Persson
-	float4 P = (rgb[1] < rgb[2]) ? float4(rgb[2], rgb[1], -1, 2.f/3.f) : float4(rgb[1], rgb[2], 0, -1.f/3.f);
-	float4 Q = (rgb[0] < P[0]) ? float4(P[0], P[1], P[3], rgb[0]) : float4(rgb[0], P[1], P[2], P[0]);
-	float C = Q[0] - min(Q[3], Q[1]);
-	float H = abs((Q[3] - Q[1]) / (6*C + 1e-6f) + Q[2]);
+	const float4 P = (rgb[1] < rgb[2]) ? float4(rgb[2], rgb[1], -1, 2.f/3.f) : float4(rgb[1], rgb[2], 0, -1.f/3.f);
+	const float4 Q = (rgb[0] < P[0]) ? float4(P[0], P[1], P[3], rgb[0]) : float4(rgb[0], P[1], P[2], P[0]);
+	const float C = Q[0] - min(Q[3], Q[1]);
+	const float H = abs((Q[3] - Q[1]) / (6*C + 1e-6f) + Q[2]);
 	return float3(H, C, Q[0]);
 }
 inline float3 rgbToHsv(const float3 rgb) {
-	float3 hcv = rgbToHcv(rgb);
+	const float3 hcv = rgbToHcv(rgb);
 	return float3(hcv[0], hcv[1] / (hcv[2] + 1e-6f), hcv[2]);
 }
 

@@ -1,7 +1,7 @@
 #ifdef ENABLE_ASSIMP
 
 #include <App/Scene.hpp>
-#include <COre/Profiler.hpp>
+#include <Core/Profiler.hpp>
 
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
@@ -172,7 +172,8 @@ shared_ptr<Node> Scene::loadAssimp(CommandBuffer& commandBuffer, const filesyste
 		}
 		cout << endl;
 
-		auto copyVertices = [&](uint32_t i) {
+		// copy vertex data to staging buffers
+		auto copyVertices = [&](const uint32_t i) {
 			const aiMesh* m = scene->mMeshes[i];
 			if (!(m->mPrimitiveTypes & aiPrimitiveType_TRIANGLE) || (m->mPrimitiveTypes & ~aiPrimitiveType_TRIANGLE) != 0)
 				return;
@@ -200,6 +201,8 @@ shared_ptr<Node> Scene::loadAssimp(CommandBuffer& commandBuffer, const filesyste
 		cout << "Copying vertex data...";
 		for (thread& t : threads) if (t.joinable()) t.join();
 		cout << endl;
+
+		// construct meshes
 
 		const shared_ptr<Node>& meshesNode = root->addChild("meshes");
 		for (int i = 0; i < scene->mNumMeshes; i++) {
@@ -236,6 +239,13 @@ shared_ptr<Node> Scene::loadAssimp(CommandBuffer& commandBuffer, const filesyste
 				Buffer::copy(commandBuffer, uvs_tmp[i], vertices.at(Mesh::VertexAttributeType::eTexcoord)[0].first);
 			}
 
+			vertices.mAabb.minX = (float)m->mAABB.mMin.x;
+			vertices.mAabb.minY = (float)m->mAABB.mMin.y;
+			vertices.mAabb.minZ = (float)m->mAABB.mMin.z;
+			vertices.mAabb.maxX = (float)m->mAABB.mMax.x;
+			vertices.mAabb.maxY = (float)m->mAABB.mMax.y;
+			vertices.mAabb.maxZ = (float)m->mAABB.mMax.z;
+
 			const shared_ptr<Node>& meshNode = meshesNode->addChild(m->mName.C_Str());
 			meshes.emplace_back( meshNode->makeComponent<Mesh>(vertices, indexBuffer, vk::PrimitiveTopology::eTriangleList) );
 		}
@@ -263,7 +273,6 @@ shared_ptr<Node> Scene::loadAssimp(CommandBuffer& commandBuffer, const filesyste
 	cout << "Loaded " << filename << endl;
 	return root;
 }
-
 
 }
 

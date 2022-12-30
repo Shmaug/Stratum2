@@ -46,7 +46,12 @@ struct TransformData {
 	}
 
 #ifdef __cplusplus
-	TransformData() = default;
+    TransformData() {
+        m <<
+			1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 0;
+	}
 	TransformData(TransformData&&) = default;
 	TransformData(const TransformData&) = default;
 	TransformData& operator=(TransformData&&) = default;
@@ -59,7 +64,9 @@ struct TransformData {
 	}
 
 	void drawGui(Node& node); // defined in Scene.cpp
+
 #else // __SLANG__
+
 	__init(const float3x4 t) {
 		m = t;
 	}

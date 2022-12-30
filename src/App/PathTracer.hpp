@@ -24,6 +24,8 @@ private:
 	enum RenderPipelineIndex {
 		eGenerateLightPaths,
 		eGenerateCameraPaths,
+		eHashGridComputeIndices,
+		eHashGridSwizzle,
 		ePipelineCount
 	};
 	array<ComputePipelineCache, RenderPipelineIndex::ePipelineCount> mRenderPipelines;
@@ -34,6 +36,7 @@ private:
 	bool mRandomPerFrame = true;
 	bool mDenoise = true;
 	bool mTonemap = true;
+	bool mDebugPaths = false;
 
 	VcmAlgorithmType mAlgorithm = VcmAlgorithmType::kBpt;
 	bool mUsePerformanceCounters = false;

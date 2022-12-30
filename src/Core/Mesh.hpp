@@ -52,6 +52,8 @@ public:
 		}
 
 		void bind(CommandBuffer& commandBuffer) const;
+
+		vk::AabbPositionsKHR mAabb;
 	};
 
 	Mesh() = default;

@@ -225,10 +225,19 @@ shared_ptr<Node> Scene::loadGltf(CommandBuffer& commandBuffer, const filesystem:
 				auto& attribs = vertexData[attributeType];
 				if (attribs.size() <= typeIndex) attribs.resize(typeIndex+1);
 				const tinygltf::BufferView& bv = model.bufferViews[accessor.bufferView];
-				uint32_t stride = accessor.ByteStride(bv);
+				const uint32_t stride = accessor.ByteStride(bv);
 				attribs[typeIndex] = {
 					Buffer::View<byte>(buffers[bv.buffer], bv.byteOffset + accessor.byteOffset, stride*accessor.count),
 					Mesh::VertexAttributeDescription(stride, attributeFormat, 0, vk::VertexInputRate::eVertex) };
+
+				if (attributeType == Mesh::VertexAttributeType::ePosition) {
+					vertexData.mAabb.minX = (float)accessor.minValues[0];
+					vertexData.mAabb.minY = (float)accessor.minValues[1];
+					vertexData.mAabb.minZ = (float)accessor.minValues[2];
+					vertexData.mAabb.maxX = (float)accessor.maxValues[0];
+					vertexData.mAabb.maxY = (float)accessor.maxValues[1];
+					vertexData.mAabb.maxZ = (float)accessor.maxValues[2];
+				}
 			}
 
 			meshes[i][j] = make_shared<Mesh>(vertexData, indexBuffer, topology);

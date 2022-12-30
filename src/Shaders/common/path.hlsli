@@ -3,6 +3,20 @@
 #include "compat/scene.h"
 #include "compat/path_tracer.h"
 
+// shader parameters
+
+[[vk::push_constant]] ConstantBuffer<PathTracerPushConstants> gPushConstants;
+
+float VcmMergeRadius() {
+    // Setup our radius, 1st iteration has aIteration == 0, thus offset
+    float radius = gPushConstants.mRadiusFactor * gPushConstants.mSceneSphere.w;
+    radius /= pow(float(gPushConstants.mVmIteration + 1), 0.5f * (1 - gPushConstants.mRadiusAlpha));
+    // Purely for numeric stability
+    return max(radius, 1e-7f);
+}
+
+#include "hashgrid.hlsli"
+
 struct RenderParams {
     StructuredBuffer<ViewData> mViews;
     StructuredBuffer<TransformData> mViewTransforms;
@@ -12,22 +26,20 @@ struct RenderParams {
 	StructuredBuffer<ViewData> mPrevViews;
 	StructuredBuffer<TransformData> mPrevInverseViewTransforms;
 
-    RWStructuredBuffer<VcmVertex> mLightVertices;
-    RWStructuredBuffer<uint> mLightPathLengths;
-
     RWByteAddressBuffer mLightImage;
     RWTexture2D<float4> mOutput;
 	RWTexture2D<float4> mAlbedo;
 	RWTexture2D<float2> mPrevUVs;
 	RWTexture2D<uint2> mVisibility;
     RWTexture2D<float4> mDepth;
-};
 
-// shader parameters
+    RWStructuredBuffer<VcmVertex> mLightVertices;
+    RWStructuredBuffer<uint> mLightPathLengths;
+	HashGrid<uint> mLightHashGrid;
+};
 
 ParameterBlock<SceneParameters> gScene;
 ParameterBlock<RenderParams> gRenderParams;
-[[vk::push_constant]] ConstantBuffer<PathTracerPushConstants> gPushConstants;
 
 
 // includes which reference shader parameters
@@ -211,3 +223,80 @@ extension SceneParameters {
         return r;
     }
 }
+
+struct LightRadianceRecord {
+	float3 mRadiance;
+    float mDirectPdfA;
+	float mEmissionPdfW;
+};
+LightRadianceRecord GetBackgroundRadiance(const float3 aDirection) {
+	if (!gHasEnvironment) return { 0 };
+
+    LightRadianceRecord r;
+    EnvironmentImage().evaluate(aDirection, cartesianToSphericalUv(aDirection), r.mRadiance, r.mDirectPdfA);
+    if (gPushConstants.mLightCount > 0)
+        r.mDirectPdfA *= gPushConstants.mEnvironmentSampleProbability;
+    r.mEmissionPdfW = r.mDirectPdfA * concentricDiscPdfA() / pow2(gPushConstants.mSceneSphere.w);
+	return r;
+}
+LightRadianceRecord GetSurfaceRadiance(const float3 aDirection, const IntersectionResult aIsect, const BSDF aBsdf) {
+    if (gPushConstants.mLightCount == 0) return { 0 };
+
+    const float cosTheta = -dot(aDirection, aIsect.mShadingData.geometryNormal);
+    if (cosTheta < 0) return { 0 };
+
+	LightRadianceRecord r;
+    r.mRadiance = aBsdf.emission();
+    r.mDirectPdfA = aBsdf.emissionPdf() * aIsect.mPrimitivePickPdf / (aIsect.mShadingData.mShapeArea * gPushConstants.mLightCount);
+    if (gHasEnvironment)
+        r.mDirectPdfA *= 1 - gPushConstants.mEnvironmentSampleProbability;
+    r.mEmissionPdfW = r.mDirectPdfA * cosHemispherePdfW(cosTheta);
+	return r;
+}
+
+float3 OffsetRayOrigin(const VcmVertex vertex, const float3 direction) {
+	return rayOffset(vertex.mShadingData.mPosition, vertex.mShadingData.geometryNormal, direction);
+}
+
+void AddColor(const uint2 index, const float3 color, const uint cameraVertices, const uint lightVertices) {
+    if (gDebugPaths) {
+        if (cameraVertices == gPushConstants.mDebugCameraPathLength && lightVertices == gPushConstants.mDebugLightPathLength)
+			gRenderParams.mOutput[index] += float4(color, 0);
+		return;
+    }
+	gRenderParams.mOutput[index] += float4(color, 0);
+}
+
+void InterlockedAddColor(const int2 ipos, const uint2 extent, const float3 color, const uint cameraVertices, const uint lightVertices) {
+    if (gDebugPaths) {
+        if (cameraVertices == gPushConstants.mDebugCameraPathLength && lightVertices == gPushConstants.mDebugLightPathLength)
+            gRenderParams.mOutput[ipos] += float4(color, 0);
+        return;
+    }
+
+    if (all(color <= 0) || any(ipos < 0) || any(ipos >= extent))
+        return;
+
+    const uint3 icolor = uint3(color * gLightTraceQuantization);
+
+    const uint address = 16 * (ipos.y * extent.x + ipos.x);
+    uint overflowed = 0;
+    uint3 prev;
+    gRenderParams.mLightImage.InterlockedAdd(address + 0, icolor[0], prev[0]);
+    gRenderParams.mLightImage.InterlockedAdd(address + 4, icolor[1], prev[1]);
+    gRenderParams.mLightImage.InterlockedAdd(address + 8, icolor[2], prev[2]);
+    for (uint i = 0; i < 3; i++) {
+        if (icolor[i] >= 0xFFFFFFFF - prev[i])
+            overflowed |= BIT(i);
+    }
+    gRenderParams.mLightImage.InterlockedOr(address + 12, overflowed);
+}
+
+struct AbstractCamera {
+    uint mViewIndex;
+
+    property ViewData view { get { return gRenderParams.mViews[mViewIndex]; } }
+    property TransformData transform { get { return gRenderParams.mViewTransforms[mViewIndex]; } }
+    property TransformData inverseTransform { get { return gRenderParams.mViewInverseTransforms[mViewIndex]; } }
+    property TransformData prevInverseTransform { get { return gRenderParams.mPrevInverseViewTransforms[mViewIndex]; } }
+};

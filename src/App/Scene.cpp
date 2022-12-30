@@ -334,9 +334,11 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 
 	// load input files
 
-	if (auto w = mNode.root()->findDescendant<Window>(); w)
-		for (const string& file : w->inputState().files())
+	if (auto w = mNode.root()->findDescendant<Window>()) {
+		for (const string& file : w->droppedFiles())
 			mToLoad.emplace_back(file);
+		w->droppedFiles().clear();
+	}
 
 	bool update = mAlwaysUpdate || mUpdateOnce;
 	bool loaded = false;
@@ -394,6 +396,9 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 	mMaterialResources.mVolumeDataMap.clear();
 
 	unordered_map<const void*, uint32_t> materialMap;
+
+	mAabbMin = float3::Constant( numeric_limits<float>::infinity());
+	mAabbMax = float3::Constant(-numeric_limits<float>::infinity());
 
 	if (prevFrame) {
 		instanceDatas.reserve(prevFrame->mInstances.size());
@@ -565,6 +570,17 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 			instance.mask = BVH_FLAG_TRIANGLES;
 			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**it->second.first);
 
+			const vk::AabbPositionsKHR& aabb = prim->mMesh->vertices().mAabb;
+			for (uint32_t i = 0; i < 8; i++) {
+				const int3 idx(i%2, (i%4)/2, i/4);
+				float3 corner(idx[0] == 0 ? aabb.minX : aabb.maxX,
+				              idx[1] == 0 ? aabb.minY : aabb.maxY,
+				              idx[2] == 0 ? aabb.minZ : aabb.maxZ);
+				corner = transform.transformPoint(corner);
+				mAabbMin = min(mAabbMin, corner);
+				mAabbMax = max(mAabbMax, corner);
+			}
+
 			meshInstanceIndices.emplace_back(prim.get(), (uint32_t)instance.instanceCustomIndex);
 		});
 	}
@@ -591,6 +607,10 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 			instance.instanceCustomIndex = appendInstanceData(primNode, prim.get(), SphereInstanceData(materialAddress, radius), transform, prim->mMaterial->emission() * (4 * M_PI * radius * radius));
 			instance.mask = BVH_FLAG_SPHERES;
 			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**as);
+
+			const float3 center = transform.transformPoint(float3::Zero());
+			mAabbMin = min<float,3>(mAabbMin, center - float3::Constant(radius));
+			mAabbMax = max<float,3>(mAabbMax, center + float3::Constant(radius));
 		});
 	}
 
@@ -643,6 +663,16 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 			instance.instanceCustomIndex = appendInstanceData(primNode, vol.get(), VolumeInstanceData(materialAddress, mMaterialResources.mVolumeDataMap.at({vol->mDensityBuffer.buffer(),vol->mDensityBuffer.offset()})), transform, 0);
 			instance.mask = BVH_FLAG_VOLUME;
 			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**aabb_it->second.first);
+
+			for (uint32_t i = 0; i < 8; i++) {
+				const int3 idx(i%2, (i%4)/2, i/4);
+				float3 corner(idx[0] == 0 ? mn[0] : mx[0],
+				              idx[1] == 0 ? mn[1] : mx[1],
+				              idx[2] == 0 ? mn[2] : mx[2]);
+				corner = transform.transformPoint(corner);
+				mAabbMin = min(mAabbMin, corner);
+				mAabbMax = max(mAabbMax, corner);
+			}
 		});
 	}
 

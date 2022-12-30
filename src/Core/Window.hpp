@@ -12,32 +12,6 @@ struct GLFWwindow;
 
 namespace stm2 {
 
-// GLFW_KEY_***
-typedef uint32_t KeyCode;
-
-class MouseKeyboardState {
-public:
-	inline float2& cursor_pos() { return mCursorPos; }
-	inline const unordered_set<KeyCode>& buttons() const { return mButtons; }
-	inline const float2& cursorPos() const { return mCursorPos; }
-	inline const string& inputCharacters() const { return mInputCharacters; };
-	inline bool held(const KeyCode key) const { return mButtons.count(key); }
-	inline const vector<string>& files() const { return mInputFiles; }
-
-private:
-	friend class Window;
-
-	float2 mCursorPos;
-	unordered_set<KeyCode> mButtons;
-	string mInputCharacters;
-	vector<string> mInputFiles;
-
-	inline void clear() {
-		mInputCharacters.clear();
-		mInputFiles.clear();
-	}
-};
-
 class Window {
 public:
 	Instance& mInstance;
@@ -62,11 +36,7 @@ public:
 
 	inline bool wantsRepaint() { return mRepaint; }
 
-	inline const MouseKeyboardState& inputState() const { return mInputState; }
-	inline const MouseKeyboardState& inputStatePrev() const { return mInputStatePrev; }
-	inline bool held    (const KeyCode& key) const { return  mInputState.held(key); }
-	inline bool pressed (const KeyCode& key) const { return  mInputState.held(key) && !mInputStatePrev.held(key); }
-	inline bool released(const KeyCode& key) const { return !mInputState.held(key) &&  mInputStatePrev.held(key); }
+	unordered_set<string>& droppedFiles() { return mDroppedFiles; }
 
 	void drawGui();
 
@@ -82,7 +52,7 @@ private:
 	bool mRecreateSwapchain = false;
 	bool mRepaint = false;
 
-	MouseKeyboardState mInputState, mInputStatePrev;
+	unordered_set<string> mDroppedFiles;
 
 	void createSwapchain();
 

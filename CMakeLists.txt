@@ -48,6 +48,7 @@ file(GLOB_RECURSE GLOBBED_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/src/**.cpp")
 list(APPEND STRATUM_SOURCE ${GLOBBED_SRCS})
 list(APPEND STRATUM_SOURCE
 	"${CMAKE_CURRENT_SOURCE_DIR}/extern/miniz.c"
+	"${CMAKE_CURRENT_SOURCE_DIR}/extern/pugixml.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/extern/imgui/imgui_draw.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/extern/imgui/imgui_widgets.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/extern/imgui/imgui_tables.cpp"

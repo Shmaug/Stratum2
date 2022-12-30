@@ -74,6 +74,7 @@ public:
 		uint32_t mEnvironmentMaterialAddress;
 		uint32_t mMaterialCount;
 		uint32_t mEmissivePrimitiveCount;
+		float3 mAabbMin, mAabbMax;
 
 		FrameResources() = default;
 		FrameResources(const FrameResources&) = default;
@@ -104,6 +105,7 @@ public:
 
 	shared_ptr<Node> loadEnvironmentMap(CommandBuffer& commandBuffer, const filesystem::path& filename);
 	shared_ptr<Node> loadGltf(CommandBuffer& commandBuffer, const filesystem::path& filename);
+	shared_ptr<Node> loadMitsuba(CommandBuffer& commandBuffer, const filesystem::path& filename);
 	shared_ptr<Node> loadVol(CommandBuffer& commandBuffer, const filesystem::path& filename);
 	shared_ptr<Node> loadNvdb(CommandBuffer& commandBuffer, const filesystem::path& filename);
 #ifdef ENABLE_ASSIMP
@@ -138,6 +140,7 @@ public:
 		else if (ext == ".exr") return loadEnvironmentMap(commandBuffer, filename);
 		else if (ext == ".gltf") return loadGltf(commandBuffer, filename);
 		else if (ext == ".glb") return loadGltf(commandBuffer, filename);
+		else if (ext == ".xml") return loadMitsuba(commandBuffer, filename);
 		else if (ext == ".vol") return loadVol(commandBuffer, filename);
 		else if (ext == ".nvdb") return loadNvdb(commandBuffer, filename);
 	#ifdef ENABLE_ASSIMP

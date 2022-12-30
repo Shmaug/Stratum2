@@ -21,7 +21,7 @@ struct quatf {
 		w = _w;
 	}
 
-	// a, b, c expected to be orthonormal
+	// a,b,c = right,up,fwd. expected to be orthonormal
 	SLANG_CTOR(quatf) (const float3 a, const float3 b, const float3 c) {
 		float T = a[0] + b[1] + c[2];
 		if (T > 0) {

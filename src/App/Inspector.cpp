@@ -87,7 +87,6 @@ bool Inspector::drawNodeGui(Node& n) {
 		for (const shared_ptr<Node>& c : n.children())
 			if (drawNodeGui(*c))
 				toErase.emplace(c.get());
-		ImGui::TreePop();
 
 		for (Node* c : toErase) {
 			c->removeParent();
@@ -96,6 +95,7 @@ bool Inspector::drawNodeGui(Node& n) {
 			}
 		}
 	}
+	ImGui::TreePop();
 	return erase;
 }
 

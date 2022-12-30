@@ -17,7 +17,7 @@ void Window::windowSizeCallback(GLFWwindow* window, int width, int height) {
 void Window::dropCallback(GLFWwindow* window, int count, const char** paths) {
 	Window* w = (Window*)glfwGetWindowUserPointer(window);
 	for (int i = 0; i < count; i++)
-		w->mInputState.mInputFiles.emplace_back(paths[i]);
+		w->mDroppedFiles.emplace(paths[i]);
 }
 
 void errorCallback(int code, const char* msg) {

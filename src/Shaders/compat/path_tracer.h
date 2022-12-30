@@ -19,18 +19,30 @@ struct VcmVertex {
 
 struct PathTracerPushConstants {
     float4 mSceneSphere;
-    float mRadiusAlpha;
-    float mRadiusFactor;
-	uint mViewCount;
-	uint mLightCount;
+
     uint mEnvironmentMaterialAddress;
     float mEnvironmentSampleProbability;
+
+	uint mViewCount;
+	uint mLightCount;
+
 	uint mMinPathLength;
     uint mMaxPathLength;
+
+	uint mScreenPixelCount;  // Number of pixels
+	uint mLightSubPathCount; // Number of light sub-paths
+
     uint mRandomSeed;
-    uint pad0;
-    uint pad1;
-    uint pad2;
+
+	float mRadiusAlpha;  // Radius reduction rate parameter
+	float mRadiusFactor; // Initial radius = scene radius * radius factor
+    uint mVmIteration;
+
+	uint mHashGridCellCount;
+	float pad;
+
+    uint mDebugCameraPathLength;
+    uint mDebugLightPathLength;
 };
 
 enum VcmAlgorithmType {

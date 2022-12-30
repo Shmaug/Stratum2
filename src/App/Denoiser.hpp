@@ -31,6 +31,7 @@ public:
 		mResetAccumulation = true;
 		mAccumulatedFrames = 0;
 	}
+	inline uint32_t accumulatedFrames() const { return mAccumulatedFrames; }
 	inline bool reprojection() const { return mReprojection; }
 	inline bool demodulateAlbedo() const { return mDemodulateAlbedo; }
 	inline void reprojection(const bool v) { mReprojection = v; }
