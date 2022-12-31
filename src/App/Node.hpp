@@ -208,10 +208,11 @@ public:
 	// component find functions
 
 	template<typename T>
-	inline shared_ptr<T> findDescendant() {
+	inline shared_ptr<T> findDescendant(shared_ptr<Node>* oNode = nullptr) {
 		shared_ptr<T> ptr;
 		findDescendant([&](Node& n) {
-			if (const shared_ptr<T> c = n.getComponent<T>(); c) {
+			if (const shared_ptr<T> c = n.getComponent<T>()) {
+				if (oNode) *oNode = n.getPtr();
 				ptr = c;
 				return false;
 			}
@@ -220,10 +221,11 @@ public:
 		return ptr;
 	}
 	template<typename T>
-	inline shared_ptr<T> findAncestor() {
+	inline shared_ptr<T> findAncestor(shared_ptr<Node>* oNode = nullptr) {
 		shared_ptr<T> ptr;
 		findAncestor([&](Node& n) {
-			if (const shared_ptr<T> c = n.getComponent<T>(); c) {
+			if (const shared_ptr<T> c = n.getComponent<T>()) {
+				if (oNode) *oNode = n.getPtr();
 				ptr = c;
 				return false;
 			}

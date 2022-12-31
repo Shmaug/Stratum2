@@ -41,6 +41,7 @@ private:
 	VcmAlgorithmType mAlgorithm = VcmAlgorithmType::kBpt;
 	bool mUsePerformanceCounters = false;
 	uint32_t mLightTraceQuantization = 16384;
+	float mLightPathPercent = 1;
 
 	Buffer::View<uint32_t> mPerformanceCounters;
 	vector<uint32_t> mPrevPerformanceCounters;

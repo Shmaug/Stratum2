@@ -529,7 +529,7 @@ shared_ptr<Material> parse_bsdf(Scene& scene, Node& dst, CommandBuffer& commandB
 	throw runtime_error("Unsupported BSDF type: \"" + type + "\" with IDs " + idstr);
 }
 
-void parse_shape(Scene& scene, CommandBuffer& commandBuffer, Node& dst, pugi::xml_node node, unordered_map<string, shared_ptr<Material>>& material_map, unordered_map<string, Image::View>& texture_map, unordered_map<string, shared_ptr<Mesh>>& obj_map) {
+void parse_shape(Scene& scene, CommandBuffer& commandBuffer, Node& dst, pugi::xml_node node, unordered_map<string, shared_ptr<Material>>& material_map, unordered_map<string, Image::View>& texture_map, unordered_map<string, shared_ptr<Mesh>>& obj_map, unordered_map<pair<string,uint32_t>, shared_ptr<Mesh>>& serialized_map) {
 	shared_ptr<Material> material;
 	string filename;
 	int shape_index = -1;
@@ -547,11 +547,15 @@ void parse_shape(Scene& scene, CommandBuffer& commandBuffer, Node& dst, pugi::xm
 			if (!material)
 				material = it->second;
 		} else if (name == "bsdf") {
+			// store previously-parsed emission
 			optional<float> emission;
 			if (material) emission = material->emission();
+			// parse material
 			material = parse_bsdf(scene, dst, commandBuffer, child, material_map, texture_map);
+			// override emission with previously parsed emission
 			if (emission) material->emission() = *emission;
 		} else if (name == "emitter") {
+			// make emission material
 			float3 radiance = float3::Ones();
 			for (auto grand_child : child.children()) {
 				string name = grand_child.attribute("name").value();
@@ -603,15 +607,23 @@ void parse_shape(Scene& scene, CommandBuffer& commandBuffer, Node& dst, pugi::xm
 	string type = node.attribute("type").value();
 	if (type == "obj") {
 		shared_ptr<Mesh> m;
-		if (auto m_it = obj_map.find(filename); m_it == obj_map.end()) {
+		if (auto m_it = obj_map.find(filename); m_it != obj_map.end()) {
+			m = m_it->second;
+		} else {
 			m = dst.makeComponent<Mesh>(loadObj(commandBuffer, filename));
 			obj_map.emplace(filename, m);
-		} else {
-			m = m_it->second;
 		}
 		dst.makeComponent<MeshPrimitive>(material, m);
 	} else if (type == "serialized") {
-		dst.makeComponent<MeshPrimitive>(material, dst.makeComponent<Mesh>(loadSerialized(commandBuffer, filename, shape_index)));
+		const auto key = make_pair(filename, shape_index);
+		shared_ptr<Mesh> m;
+		if (auto m_it = serialized_map.find(key); m_it != serialized_map.end()) {
+			m = m_it->second;
+		} else {
+			m = dst.makeComponent<Mesh>(loadSerialized(commandBuffer, filename, shape_index));
+			serialized_map.emplace(key, m);
+		}
+		dst.makeComponent<MeshPrimitive>(material, m);
 	} else if (type == "sphere") {
 		optional<float3> center;
 		float radius = 1;
@@ -693,6 +705,7 @@ shared_ptr<Node> parse_scene(Scene& scene, CommandBuffer& commandBuffer, pugi::x
 	unordered_map<string /* name id */, shared_ptr<Material>> material_map;
 	unordered_map<string /* name id */, Image::View> texture_map;
 	unordered_map<string /* filename */, shared_ptr<Mesh>> obj_map;
+	unordered_map<pair<string /* filename */, uint32_t /* shape index */>, shared_ptr<Mesh>> serialized_map;
 
 	int envmap_light_id = -1;
 
@@ -703,7 +716,7 @@ shared_ptr<Node> parse_scene(Scene& scene, CommandBuffer& commandBuffer, pugi::x
 		if (name == "bsdf") {
 			parse_bsdf(scene, *root, commandBuffer, child, material_map, texture_map);
 		} else if (name == "shape") {
-			parse_shape(scene, commandBuffer, *root->addChild("shape"), child, material_map, texture_map, obj_map);
+			parse_shape(scene, commandBuffer, *root->addChild("shape"), child, material_map, texture_map, obj_map, serialized_map);
 		} else if (name == "texture") {
 			string id = child.attribute("id").value();
 			if (texture_map.find(id) != texture_map.end()) throw runtime_error("Duplicate texture ID: " + id);

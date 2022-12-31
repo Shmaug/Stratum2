@@ -6,6 +6,7 @@
 #include <Core/Profiler.hpp>
 
 #include <imgui/imgui.h>
+#include <ImGuizmo.h>
 
 namespace stm2 {
 
@@ -26,10 +27,30 @@ bool Inspector::drawNodeGui(Node& n) {
 	if (mSelected && n.isDescendant(*mSelected))
 		ImGui::SetNextItemOpen(true, ImGuiCond_Once);
 
+
 	// tree menu item
 	ImGui::PushID(&n);
 	const bool open = ImGui::TreeNodeEx(n.name().c_str(), flags);
 	ImGui::PopID();
+
+	if (ImGui::BeginDragDropSource()) {
+		const Node* payload = &n;
+		ImGui::SetDragDropPayload("SceneNode", &payload, sizeof(Node*));
+		ImGui::Text(n.name().c_str());
+		ImGui::EndDragDropSource();
+	}
+	if (ImGui::BeginDragDropTarget()) {
+		const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SceneNode");
+		if (payload) {
+			Node* nodeptr = *(Node**)payload->Data;
+			if (nodeptr) {
+				n.addChild(nodeptr->getPtr());
+				if (auto s = n.findAncestor<Scene>())
+					s->markDirty();
+			}
+		}
+		ImGui::EndDragDropTarget();
+	}
 
 	bool erase = false;
 
@@ -40,7 +61,6 @@ bool Inspector::drawNodeGui(Node& n) {
 		}
 
 		if (ImGui::Button("Add child")) {
-			n.addChild("Child");
 			ImGui::OpenPopup("Add node");
 		}
 
@@ -94,8 +114,9 @@ bool Inspector::drawNodeGui(Node& n) {
 				select(nullptr);
 			}
 		}
+
+		ImGui::TreePop();
 	}
-	ImGui::TreePop();
 	return erase;
 }
 
@@ -152,6 +173,10 @@ void Inspector::draw() {
 				if (to_erase != typeid(nullptr_t)) {
 					mSelected->removeComponent(to_erase);
 					s->markDirty();
+				}
+
+				if (auto transform = mSelected->getComponent<TransformData>()) {
+					ImGuizmo::Enable(true);
 				}
 			}
 			ImGui::PopID();

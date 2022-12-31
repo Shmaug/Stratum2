@@ -6,6 +6,7 @@
 
 #include <imgui/imgui_impl_vulkan.h>
 #include <imgui/imgui_impl_glfw.h>
+#include <ImGuizmo.h>
 
 namespace stm2 {
 
@@ -30,11 +31,16 @@ Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily
 	mRenderPass = vk::raii::RenderPass(*swapchain.mDevice, vk::RenderPassCreateInfo({}, attachment, subpass, {}));
 	swapchain.mDevice.setDebugName(*mRenderPass, "Gui::mRenderPass");
 
+
 	ImGui::CreateContext();
 
 	// Setup Dear ImGui style
 	ImGui::StyleColorsDark();
+	ImGui::GetStyle().WindowRounding = 4.0f;
+	ImGui::GetStyle().GrabRounding = 4.0f;
 	ImGui::GetStyle().IndentSpacing *= 0.75f;
+
+	ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 	ImGui::GetIO().ConfigWindowsMoveFromTitleBarOnly = true;
 
 	ImGui_ImplGlfw_InitForVulkan(swapchain.mWindow.window(), true);
@@ -92,6 +98,7 @@ void Gui::newFrame() {
 	ImGui_ImplVulkan_NewFrame();
 	ImGui_ImplGlfw_NewFrame();
 	ImGui::NewFrame();
+	ImGuizmo::BeginFrame();
 }
 
 void Gui::render(CommandBuffer& commandBuffer, const Image::View& renderTarget, const vk::ClearValue& clearValue) {

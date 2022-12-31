@@ -5,6 +5,7 @@
 #include "Inspector.hpp"
 
 #include <stb_image_write.h>
+#include <ImGuizmo.h>
 #include <random>
 
 #include <Core/Instance.hpp>
@@ -102,6 +103,7 @@ void PathTracer::drawGui() {
 		if (ImGui::DragScalar("LightTraceQuantization", ImGuiDataType_U32, &mLightTraceQuantization)) changed = true;
 		if (ImGui::DragScalar("Max path length", ImGuiDataType_U32, &mPushConstants.mMaxPathLength)) changed = true;
 		if (ImGui::DragScalar("Min path length", ImGuiDataType_U32, &mPushConstants.mMinPathLength)) changed = true;
+		if (ImGui::SliderFloat("Light path count", &mLightPathPercent, 0, 1)) changed = true;
 		if (mPushConstants.mEnvironmentMaterialAddress != -1 && mPushConstants.mLightCount > 0)
 			if (ImGui::SliderFloat("Environment sample probability", &mPushConstants.mEnvironmentSampleProbability, 0, 1)) changed = true;
 		if (ImGui::DragScalar("Hash grid size", ImGuiDataType_U32, &mPushConstants.mHashGridCellCount)) changed = true;
@@ -200,7 +202,7 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		ProfilerScope ps("Object picking");
 		if (frame && frame->mSelectionData && frame->mSelectionDataValid) {
 			const uint32_t selectedInstance = frame->mSelectionData.data()->instanceIndex();
-			if (shared_ptr<Inspector> inspector = mNode.findAncestor<Inspector>()) {
+			if (shared_ptr<Inspector> inspector = mNode.root()->findDescendant<Inspector>()) {
 				if (selectedInstance == INVALID_INSTANCE || selectedInstance >= frame->mSceneData->mInstanceNodes.size())
 					inspector->select(nullptr);
 				else {
@@ -291,9 +293,9 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 	const vk::Extent3D extent = renderTarget.extent();
 
 	mPushConstants.mScreenPixelCount = extent.width * extent.height;
-	mPushConstants.mLightSubPathCount = mPushConstants.mScreenPixelCount;
+	mPushConstants.mLightSubPathCount = uint32_t(mPushConstants.mScreenPixelCount * mLightPathPercent);
 
-	const uint32_t maxLightVertices = mPushConstants.mScreenPixelCount*mPushConstants.mMaxPathLength;
+	const uint32_t maxLightVertices = mPushConstants.mLightSubPathCount*mPushConstants.mMaxPathLength;
 
 	// allocate data if needed
 	{
@@ -390,39 +392,28 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 	if (mAlgorithm != VcmAlgorithmType::kPathTrace) {
 		ProfilerScope ps("Generate light paths", &commandBuffer);
 
+		const vk::Extent3D lightExtent(extent.width, (mPushConstants.mLightSubPathCount + extent.width-1) / extent.width);
 		mRenderPipelines[eGenerateLightPaths].get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, extent, frame->mDescriptorSets, {}, { { "", PushConstantValue(mPushConstants) } });
 
-		vector<Buffer::View<byte>> barriers {
-			frame->mBuffers.at("mLightVertices"),
-			frame->mBuffers.at("mLightPathLengths"),
-			frame->mBuffers.at("mLightImage") };
-		if (defines.find("gUseVM") != defines.end()) {
-			barriers.emplace_back(frame->mBuffers.at("mLightHashGrid.mChecksums"));
-			barriers.emplace_back(frame->mBuffers.at("mLightHashGrid.mCounters"));
-			barriers.emplace_back(frame->mBuffers.at("mLightHashGrid.mAppendIndices"));
-			barriers.emplace_back(frame->mBuffers.at("mLightHashGrid.mAppendData"));
-		}
-		Buffer::barriers(commandBuffer, barriers,
+		commandBuffer->pipelineBarrier(
 			vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
-			vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
+			vk::DependencyFlagBits::eByRegion,
+			vk::MemoryBarrier(vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead), {}, {});
 
 		if (defines.find("gUseVM") != defines.end()) {
-			auto tile2D = [](uint32_t count) {
-				const uint32_t h = (uint32_t)sqrt(count);
-				return vk::Extent3D();
-			};
-
-			// Build HashGrid over light vertices
+			// Build hash grid over light vertices
 			{
 				ProfilerScope ps("Compute HashGrid indices", &commandBuffer);
-				mRenderPipelines[eHashGridComputeIndices].get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, vk::Extent3D(mPushConstants.mHashGridCellCount,1,1), frame->mDescriptorSets, {}, { { "", PushConstantValue(mPushConstants) } });
+				const vk::Extent3D indicesExtent(extent.width, (mPushConstants.mHashGridCellCount + extent.width-1) / extent.width);
+				mRenderPipelines[eHashGridComputeIndices].get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, indicesExtent, frame->mDescriptorSets, {}, { { "", PushConstantValue(mPushConstants) } });
 				frame->mBuffers.at("mLightHashGrid.mIndices").barrier(commandBuffer,
 					vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
 					vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
 			}
 			{
 				ProfilerScope ps("Swizzle HashGrid", &commandBuffer);
-				mRenderPipelines[eHashGridSwizzle].get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, vk::Extent3D(maxLightVertices,1,1), frame->mDescriptorSets, {}, { { "", PushConstantValue(mPushConstants) } });
+				const vk::Extent3D swizzleExtent(extent.width, (maxLightVertices + extent.width-1) / extent.width);
+				mRenderPipelines[eHashGridSwizzle].get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, swizzleExtent, frame->mDescriptorSets, {}, { { "", PushConstantValue(mPushConstants) } });
 				frame->mBuffers.at("mLightHashGrid.mData").barrier(commandBuffer,
 					vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
 					vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
@@ -477,7 +468,7 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 
 	// copy VisibilityData for selected pixel
 	frame->mSelectionDataValid = false;
-	if (!ImGui::GetIO().WantCaptureMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+	if (!ImGui::GetIO().WantCaptureMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsUsing()) {
 		const Image::View v = get<Image::View>(frame->mImages.at("mVisibility"));
 		v.barrier(commandBuffer, vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferRead);
 

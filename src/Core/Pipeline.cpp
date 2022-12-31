@@ -312,7 +312,7 @@ void ComputePipeline::dispatch(CommandBuffer& commandBuffer, const vk::Extent3D&
 shared_ptr<ComputePipeline> ComputePipelineCache::get(Device& device, const Defines& defines, const vector<shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts) {
 	size_t key = 0;
 	for (const auto& d : defines)
-		key = hashArgs(key, d);
+		key = hashArgs(key, d.first, d.second);
 	for (const auto& l : descriptorSetLayouts)
 		key = hashArgs(key, l);
 

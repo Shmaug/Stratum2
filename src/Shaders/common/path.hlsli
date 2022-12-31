@@ -269,9 +269,8 @@ void AddColor(const uint2 index, const float3 color, const uint cameraVertices, 
 
 void InterlockedAddColor(const int2 ipos, const uint2 extent, const float3 color, const uint cameraVertices, const uint lightVertices) {
     if (gDebugPaths) {
-        if (cameraVertices == gPushConstants.mDebugCameraPathLength && lightVertices == gPushConstants.mDebugLightPathLength)
-            gRenderParams.mOutput[ipos] += float4(color, 0);
-        return;
+        if (!(cameraVertices == gPushConstants.mDebugCameraPathLength && lightVertices == gPushConstants.mDebugLightPathLength))
+	        return;
     }
 
     if (all(color <= 0) || any(ipos < 0) || any(ipos >= extent))

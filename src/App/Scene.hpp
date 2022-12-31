@@ -187,13 +187,13 @@ private:
 
 	friend struct TransformData;
 
+	shared_ptr<Node> mAnimatedTransform;
 	float3 mAnimateTranslate = float3::Zero();
 	float3 mAnimateRotate = float3::Zero();
 	float3 mAnimateWiggleBase = float3::Zero();
 	float3 mAnimateWiggleOffset = float3::Zero();
 	float mAnimateWiggleSpeed = 1;
 	float mAnimateWiggleTime = 0;
-	shared_ptr<Node> mAnimatedTransform;
 };
 
 }

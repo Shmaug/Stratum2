@@ -181,7 +181,7 @@ struct ProjectionData {
 		r.mScale[0] = aspect * r.mScale[1];
 		r.mOffset = offset;
 		r.mNearPlane = znear;
-		r.mFarPlane = 0;
+		r.mFarPlane = 10000 * sign(znear);
 		r.mVerticalFoV = fovy;
 		return r;
 	}

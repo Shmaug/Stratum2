@@ -25,6 +25,14 @@ constexpr size_t hashArray(const T(& arr)[N]) {
 		return hashCombine(hashArray<T,N-1>(arr), hasher(arr[N-1]));
 }
 
+template<std::ranges::range R> requires(hashable<std::ranges::range_value_t<R>>)
+inline size_t hashRange(const R& r) {
+	size_t h = 0;
+	for (auto it = std::ranges::begin(r); it != std::ranges::end(r); ++it)
+		h = hashCombine(h, std::hash<std::ranges::range_value_t<R>>()(*it));
+	return h;
+}
+
 template<hashable Tx, hashable... Ty>
 inline size_t hashArgs(const Tx& x, const Ty&... y) {
 	if constexpr (sizeof...(Ty) == 0)
@@ -55,16 +63,6 @@ template<stm2::hashable T, size_t N>
 struct hash<std::array<T,N>> {
 	constexpr size_t operator()(const std::array<T,N>& a) const {
 		return stm2::hashArray<T,N>(a.data());
-	}
-};
-
-template<ranges::range R> requires(stm2::hashable<ranges::range_value_t<R>>)
-struct hash<R> {
-	inline size_t operator()(const R& r) const {
-		size_t h = 0;
-		for (auto it = ranges::begin(r); it != ranges::end(r); ++it)
-			h = stm2::hashCombine(h, hash<ranges::range_value_t<R>>()(*it));
-		return h;
 	}
 };
 

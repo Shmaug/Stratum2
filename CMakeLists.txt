@@ -49,13 +49,14 @@ list(APPEND STRATUM_SOURCE ${GLOBBED_SRCS})
 list(APPEND STRATUM_SOURCE
 	"${CMAKE_CURRENT_SOURCE_DIR}/extern/miniz.c"
 	"${CMAKE_CURRENT_SOURCE_DIR}/extern/pugixml.cpp"
-	"${CMAKE_CURRENT_SOURCE_DIR}/extern/imgui/imgui_draw.cpp"
-	"${CMAKE_CURRENT_SOURCE_DIR}/extern/imgui/imgui_widgets.cpp"
-	"${CMAKE_CURRENT_SOURCE_DIR}/extern/imgui/imgui_tables.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/extern/imgui/imgui_demo.cpp"
+	"${CMAKE_CURRENT_SOURCE_DIR}/extern/imgui/imgui_draw.cpp"
+	"${CMAKE_CURRENT_SOURCE_DIR}/extern/imgui/imgui_tables.cpp"
+	"${CMAKE_CURRENT_SOURCE_DIR}/extern/imgui/imgui_widgets.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/extern/imgui/imgui_impl_glfw.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/extern/imgui/imgui_impl_vulkan.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/extern/imgui/imgui.cpp"
+	"${CMAKE_CURRENT_SOURCE_DIR}/extern/ImGuizmo.cpp"
 )
 
 add_executable(${TARGET_NAME} ${STRATUM_SOURCE} src/main.cpp)

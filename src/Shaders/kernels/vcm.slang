@@ -821,7 +821,7 @@ struct VertexCM {
 void GenerateLightPaths(uint3 index: SV_DispatchThreadID) {
     uint2 extent;
     gRenderParams.mOutput.GetDimensions(extent.x, extent.y);
-    if (any(index.xy >= extent)) return;
+    if (index.y * extent.x + index.x >= gPushConstants.mLightSubPathCount) return;
 
     VertexCM pt = VertexCM(index.xy, extent, 0);
 
@@ -843,11 +843,15 @@ void GenerateCameraPaths(uint3 index: SV_DispatchThreadID) {
 [shader("compute")]
 [numthreads(128, 1, 1)]
 void ComputeHashGridIndices(uint3 index: SV_DispatchThreadID) {
-	gRenderParams.mLightHashGrid.ComputeIndices(index.x);
+    uint2 extent;
+    gRenderParams.mOutput.GetDimensions(extent.x, extent.y);
+    gRenderParams.mLightHashGrid.ComputeIndices(index.y * extent.x + index.x);
 }
 
 [shader("compute")]
 [numthreads(128, 1, 1)]
 void SwizzleHashGrid(uint3 index: SV_DispatchThreadID) {
-	gRenderParams.mLightHashGrid.Swizzle(index.x);
+    uint2 extent;
+    gRenderParams.mOutput.GetDimensions(extent.x, extent.y);
+    gRenderParams.mLightHashGrid.Swizzle(index.y * extent.x + index.x);
 }
