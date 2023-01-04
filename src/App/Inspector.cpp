@@ -108,6 +108,9 @@ bool Inspector::drawNodeGui(Node& n) {
 			if (drawNodeGui(*c))
 				toErase.emplace(c.get());
 
+		if (auto s = n.findAncestor<Scene>(); s && !toErase.empty())
+			s->markDirty();
+
 		for (Node* c : toErase) {
 			c->removeParent();
 			if (mSelected.get() == c) {
@@ -173,10 +176,6 @@ void Inspector::draw() {
 				if (to_erase != typeid(nullptr_t)) {
 					mSelected->removeComponent(to_erase);
 					s->markDirty();
-				}
-
-				if (auto transform = mSelected->getComponent<TransformData>()) {
-					ImGuizmo::Enable(true);
 				}
 			}
 			ImGui::PopID();

@@ -29,7 +29,7 @@ struct ImageValue {
 	}
 
 	// Implemented in Scene.cpp
-	void drawGui(const string& label);
+	bool drawGui(const string& label);
 };
 
 using ImageValue1 = ImageValue<1>;

@@ -11,10 +11,10 @@ struct EnvironmentImage {
 #ifdef __cplusplus
 	inline void store(MaterialResources& resources) const {
 		mEmission.store(resources);
-	}
-	inline void drawGui() {
-		mEmission.drawGui("Emission");
-	}
+    }
+
+	// implemented in Scene.cpp
+    void drawGui(Node &node);
 #endif
 };
 

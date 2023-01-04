@@ -39,10 +39,18 @@ struct PathTracerPushConstants {
     uint mVmIteration;
 
 	uint mHashGridCellCount;
-	float pad;
+	uint mLightImageQuantization;
 
     uint mDebugCameraPathLength;
     uint mDebugLightPathLength;
+
+    float VcmMergeRadius() {
+        // Setup our radius, 1st iteration has aIteration == 0, thus offset
+        float radius = mRadiusFactor * mSceneSphere[3];
+        radius /= pow(float(mVmIteration + 1), 0.5f * (1 - mRadiusAlpha));
+        // Purely for numeric stability
+        return max(radius, 1e-7f);
+    }
 };
 
 enum VcmAlgorithmType {

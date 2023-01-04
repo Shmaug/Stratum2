@@ -47,6 +47,7 @@ public:
 
 	inline const vk::PhysicalDeviceLimits& limits() const { return mLimits; }
 	inline const vk::PhysicalDeviceFeatures& features() const { return mFeatures; }
+	inline const vk::PhysicalDeviceVulkan13Features&                 vulkan13Features() const              { return get<vk::PhysicalDeviceVulkan13Features>(mFeatureChain); }
 	inline const vk::PhysicalDeviceDescriptorIndexingFeatures&       descriptorIndexingFeatures() const    { return get<vk::PhysicalDeviceDescriptorIndexingFeatures>(mFeatureChain); }
 	inline const vk::PhysicalDeviceBufferDeviceAddressFeatures&      bufferDeviceAddressFeatures() const   { return get<vk::PhysicalDeviceBufferDeviceAddressFeatures>(mFeatureChain); }
 	inline const vk::PhysicalDeviceAccelerationStructureFeaturesKHR& accelerationStructureFeatures() const { return get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>(mFeatureChain); }
@@ -97,6 +98,7 @@ private:
 	vk::PhysicalDeviceFeatures mFeatures;
 	vk::StructureChain<
 		vk::DeviceCreateInfo,
+		vk::PhysicalDeviceVulkan13Features,
 		vk::PhysicalDeviceDescriptorIndexingFeatures,
 		vk::PhysicalDeviceBufferDeviceAddressFeatures,
 		vk::PhysicalDeviceAccelerationStructureFeaturesKHR,

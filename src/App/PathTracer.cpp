@@ -9,6 +9,7 @@
 #include <random>
 
 #include <Core/Instance.hpp>
+#include <Core/Swapchain.hpp>
 #include <Core/CommandBuffer.hpp>
 #include <Core/Profiler.hpp>
 
@@ -22,11 +23,12 @@ PathTracer::PathTracer(Node& node) : mNode(node) {
 	createPipelines(device);
 
 	mPushConstants.mMinPathLength = 0;
-	mPushConstants.mMaxPathLength = 3;
-	mPushConstants.mRadiusAlpha = 0.5f;
-	mPushConstants.mRadiusFactor = 0.5f;
+	mPushConstants.mMaxPathLength = 6;
+	mPushConstants.mRadiusAlpha = 0.01f;
+	mPushConstants.mRadiusFactor = 0.05f;
 	mPushConstants.mEnvironmentSampleProbability = 0.5f;
-	mPushConstants.mHashGridCellCount = 65536;
+	mPushConstants.mHashGridCellCount = 131072;
+	mPushConstants.mLightImageQuantization = 16384;
 
 	// initialize constants
 	if (auto arg = device.mInstance.findArgument("minPathLength"); arg) mPushConstants.mMinPathLength = atoi(arg->c_str());
@@ -61,12 +63,81 @@ void PathTracer::createPipelines(Device& device) {
 	mRenderPipelines[RenderPipelineIndex::eHashGridComputeIndices] = ComputePipelineCache(kernelPath, "ComputeHashGridIndices", "sm_6_6", args, md);
 	mRenderPipelines[RenderPipelineIndex::eHashGridSwizzle]        = ComputePipelineCache(kernelPath, "SwizzleHashGrid"       , "sm_6_6", args, md);
 
+	createRasterPipeline(device);
+
 	mPerformanceCounters = make_shared<Buffer>(device, "mPerformanceCounters", 4*sizeof(uint32_t), vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
 	mPrevPerformanceCounters.resize(mPerformanceCounters.size());
 	mPerformanceCounterPerSecond.resize(mPerformanceCounters.size());
 	ranges::fill(mPerformanceCounters, 0);
 	ranges::fill(mPrevPerformanceCounters, 0);
 	mPerformanceCounterTimer = 0;
+}
+
+void PathTracer::createRasterPipeline(Device& device) {
+	GraphicsPipeline::GraphicsMetadata gmd;
+	gmd.mColorBlendState = GraphicsPipeline::ColorBlendState();
+	gmd.mColorBlendState->mAttachments = { vk::PipelineColorBlendAttachmentState(
+		false,
+		vk::BlendFactor::eZero,
+		vk::BlendFactor::eZero,
+		vk::BlendOp::eAdd,
+		vk::BlendFactor::eZero,
+		vk::BlendFactor::eZero,
+		vk::BlendOp::eAdd,
+		vk::ColorComponentFlags{vk::FlagTraits<vk::ColorComponentFlagBits>::allFlags}) };
+
+	gmd.mDynamicStates = { vk::DynamicState::eViewport, vk::DynamicState::eScissor };
+
+	auto swapchain = mNode.root()->findDescendant<Swapchain>();
+
+	gmd.mDynamicRenderingState = GraphicsPipeline::DynamicRenderingState();
+	gmd.mDynamicRenderingState->mColorFormats = { swapchain->format().format };
+	gmd.mDynamicRenderingState->mDepthFormat = vk::Format::eD32Sfloat;
+
+	gmd.mViewports = { vk::Viewport(0, 0, swapchain->extent().width, swapchain->extent().height, 0, 1) };
+	gmd.mScissors = { vk::Rect2D({0,0}, {swapchain->extent().width, swapchain->extent().height}) };
+
+	gmd.mVertexInputState   = vk::PipelineVertexInputStateCreateInfo();
+	gmd.mInputAssemblyState = vk::PipelineInputAssemblyStateCreateInfo({}, vk::PrimitiveTopology::eTriangleList);
+	gmd.mRasterizationState = vk::PipelineRasterizationStateCreateInfo(
+		{},    // flags
+		false, // depthClampEnable_
+		false, // rasterizerDiscardEnable_
+		vk::PolygonMode::eFill,
+		vk::CullModeFlagBits::eNone,
+		vk::FrontFace::eCounterClockwise,
+		false, // depthBiasEnable_
+		{}, // depthBiasConstantFactor_
+		{}, // depthBiasClamp_
+		{}, // depthBiasSlopeFactor_
+		{}  // lineWidth_
+	);
+	gmd.mMultisampleState   = vk::PipelineMultisampleStateCreateInfo();
+	gmd.mDepthStencilState  = vk::PipelineDepthStencilStateCreateInfo(
+		{},    // flags_
+		true,  // depthTestEnable_
+		true,  // depthWriteEnable_
+		vk::CompareOp::eGreater, // depthCompareOp_
+		false, // depthBoundsTestEnable_
+		false, // stencilTestEnable_
+		{},    // front_
+		{},    // back_
+		{},    // minDepthBounds_
+		{}     // maxDepthBounds_
+	);
+
+	const filesystem::path shaderPath = *device.mInstance.findArgument("shaderKernelPath");
+	const filesystem::path rasterShaderPath = shaderPath / "vcm_vis.slang";
+	const vector<string>& rasterArgs = {
+		"-matrix-layout-row-major",
+		"-O3",
+		"-Wno-30081",
+		"-capability", "spirv_1_5",
+	};
+	mRasterLightPathPipeline = GraphicsPipelineCache({
+		{ vk::ShaderStageFlagBits::eVertex  , GraphicsPipelineCache::ShaderSourceInfo(rasterShaderPath, "LightVertexVS", "sm_6_6") },
+		{ vk::ShaderStageFlagBits::eFragment, GraphicsPipelineCache::ShaderSourceInfo(rasterShaderPath, "LightVertexFS", "sm_6_6") }
+	}, rasterArgs, gmd);
 }
 
 void PathTracer::drawGui() {
@@ -92,27 +163,33 @@ void PathTracer::drawGui() {
 			denoiser->resetAccumulation();
 	}
 
-	if (ImGui::CollapsingHeader("Configuration")) {
+	{
 		bool changed = false;
 		if (Gui::enumDropdown<VcmAlgorithmType>("Algorithm", mAlgorithm, VcmAlgorithmType::kNumVcmAlgorithmType)) changed = true;
 		if (ImGui::Checkbox("Random frame seed", &mRandomPerFrame)) changed = true;
 		if (ImGui::Checkbox("Half precision", &mHalfColorPrecision)) changed = true;
 		if (ImGui::Checkbox("Performance counters", &mUsePerformanceCounters)) changed = true;
-
+		ImGui::Checkbox("Show light paths", &mVisualizeLightPaths);
 		ImGui::PushItemWidth(60);
-		if (ImGui::DragScalar("LightTraceQuantization", ImGuiDataType_U32, &mLightTraceQuantization)) changed = true;
+		if (mVisualizeLightPaths) {
+			ImGui::DragScalar("Path count", ImGuiDataType_U32, &mVisualizeLightPathCount);
+			ImGui::DragFloat("Line radius", &mVisualizeLightPathRadius, .001f);
+		}
+
+		if (ImGui::DragScalar("Light image quantization", ImGuiDataType_U32, &mPushConstants.mLightImageQuantization)) changed = true;
 		if (ImGui::DragScalar("Max path length", ImGuiDataType_U32, &mPushConstants.mMaxPathLength)) changed = true;
 		if (ImGui::DragScalar("Min path length", ImGuiDataType_U32, &mPushConstants.mMinPathLength)) changed = true;
 		if (ImGui::SliderFloat("Light path count", &mLightPathPercent, 0, 1)) changed = true;
 		if (mPushConstants.mEnvironmentMaterialAddress != -1 && mPushConstants.mLightCount > 0)
 			if (ImGui::SliderFloat("Environment sample probability", &mPushConstants.mEnvironmentSampleProbability, 0, 1)) changed = true;
 		if (ImGui::DragScalar("Hash grid size", ImGuiDataType_U32, &mPushConstants.mHashGridCellCount)) changed = true;
-		if (ImGui::SliderFloat("Radius alpha", &mPushConstants.mRadiusAlpha, 0, 1)) changed = true;
+		if (ImGui::SliderFloat("Radius alpha", &mPushConstants.mRadiusAlpha, -1, 1)) changed = true;
 		if (ImGui::SliderFloat("Radius factor", &mPushConstants.mRadiusFactor, 0, 1)) changed = true;
 		ImGui::PopItemWidth();
 
 		if (ImGui::Checkbox("Debug paths", &mDebugPaths)) changed = true;
 		if (mDebugPaths) {
+			if (ImGui::Checkbox("Weights", &mDebugPathWeights)) changed = true;
 			ImGui::PushItemWidth(60);
 			if (ImGui::DragScalar("Camera vertices", ImGuiDataType_U32, &mPushConstants.mDebugCameraPathLength)) changed = true;
 			if (ImGui::DragScalar("Light vertices", ImGuiDataType_U32, &mPushConstants.mDebugLightPathLength)) changed = true;
@@ -134,6 +211,7 @@ void PathTracer::drawGui() {
 	if (mUsePerformanceCounters) {
 		const auto [rps, ext] = formatNumber(mPerformanceCounterPerSecond[0]);
 		ImGui::Text("%.2f%s Rays/second (%u%% visibility)", rps, ext, mPerformanceCounterPerSecond[0] == 0 ? 0 : (uint32_t)(100*mPerformanceCounterPerSecond[1] / mPerformanceCounterPerSecond[0]));
+		ImGui::Text("%u failed inserts, %u Buckets used", mHashGridStats[0], mHashGridStats[1]);
 	}
 
 	/*
@@ -206,8 +284,16 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 				if (selectedInstance == INVALID_INSTANCE || selectedInstance >= frame->mSceneData->mInstanceNodes.size())
 					inspector->select(nullptr);
 				else {
-					if (shared_ptr<Node> selected = frame->mSceneData->mInstanceNodes[selectedInstance].lock())
-						inspector->select(selected);
+					if (shared_ptr<Node> selected = frame->mSceneData->mInstanceNodes[selectedInstance].lock()) {
+						if (frame->mSelectionShift) {
+							shared_ptr<Node> tn;
+							if (selected->findAncestor<TransformData>(&tn))
+								inspector->select(tn);
+							else
+								inspector->select(selected);
+						} else
+							inspector->select(selected);
+					}
 				}
 			}
 		}
@@ -227,6 +313,9 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 			}
 		}
 	}
+
+	if (auto it = frame->mBuffers.find("mLightHashGrid.mStats"); it != frame->mBuffers.end())
+		mHashGridStats = it->second.cast<uint2>()[0];
 
 	frame->mSceneData = sceneResources;
 
@@ -329,9 +418,9 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 
 	Defines defines {
 		{ "gHasMedia", to_string(has_volumes) },
-		{ "gLightTraceQuantization", to_string(mLightTraceQuantization) },
 		{ "gPerformanceCounters", to_string(mUsePerformanceCounters) },
 		{ "gDebugPaths", to_string(mDebugPaths) },
+		{ "gDebugPathWeights", to_string(mDebugPathWeights) },
 	};
 
 	{
@@ -383,9 +472,23 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 	// clear light image
 	{
 		frame->mBuffers.at("mLightImage").fill(commandBuffer, 0);
-		frame->mBuffers.at("mLightImage").barrier(commandBuffer,
+		frame->mBuffers.at("mLightHashGrid.mChecksums").fill(commandBuffer, 0);
+		frame->mBuffers.at("mLightHashGrid.mCounters").fill(commandBuffer, 0);
+		const Buffer::View<byte>& appendIndices = frame->mBuffers.at("mLightHashGrid.mAppendIndices");
+		Buffer::View<byte> appendIndices0(appendIndices.buffer(), appendIndices.offset(), sizeof(uint2));
+		appendIndices0.fill(commandBuffer, 0);
+		Buffer::barriers(commandBuffer, {
+				frame->mBuffers.at("mLightImage"),
+				frame->mBuffers.at("mLightHashGrid.mChecksums"),
+				frame->mBuffers.at("mLightHashGrid.mCounters"),
+				appendIndices0 },
 			vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
 			vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
+	}
+
+	// clear hashgrid stats
+	if (mUsePerformanceCounters) {
+		frame->mBuffers.at("mLightHashGrid.mStats").cast<uint2>()[0] = uint2::Zero();
 	}
 
 	// generate light paths
@@ -398,7 +501,7 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		commandBuffer->pipelineBarrier(
 			vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
 			vk::DependencyFlagBits::eByRegion,
-			vk::MemoryBarrier(vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead), {}, {});
+			vk::MemoryBarrier(vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead), {}, {});
 
 		if (defines.find("gUseVM") != defines.end()) {
 			// Build hash grid over light vertices
@@ -408,7 +511,7 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 				mRenderPipelines[eHashGridComputeIndices].get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, indicesExtent, frame->mDescriptorSets, {}, { { "", PushConstantValue(mPushConstants) } });
 				frame->mBuffers.at("mLightHashGrid.mIndices").barrier(commandBuffer,
 					vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
-					vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
+					vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
 			}
 			{
 				ProfilerScope ps("Swizzle HashGrid", &commandBuffer);
@@ -416,7 +519,7 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 				mRenderPipelines[eHashGridSwizzle].get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, swizzleExtent, frame->mDescriptorSets, {}, { { "", PushConstantValue(mPushConstants) } });
 				frame->mBuffers.at("mLightHashGrid.mData").barrier(commandBuffer,
 					vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
-					vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
+					vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
 			}
 		}
 	}
@@ -425,6 +528,12 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 	{
 		ProfilerScope ps("Generate camera paths", &commandBuffer);
 		mRenderPipelines[eGenerateCameraPaths].get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, extent, frame->mDescriptorSets, {}, { { "", PushConstantValue(mPushConstants) } });
+	}
+
+	if (mUsePerformanceCounters) {
+		frame->mBuffers.at("mLightHashGrid.mStats").barrier(commandBuffer,
+			vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eHost,
+			vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eHostRead);
 	}
 
 	// run denoiser
@@ -477,10 +586,96 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 			if (view.isInside(int2(c.x, c.y))) {
 				frame->mSelectionData.copyFromImage(commandBuffer, v.image(), v.subresourceLayer(), vk::Offset3D{int(c.x), int(c.y), 0}, vk::Extent3D{1,1,1});
 				frame->mSelectionDataValid = true;
+				frame->mSelectionShift = ImGui::GetIO().KeyShift;
 			}
 	}
 
+	if (mVisualizeLightPaths && mAlgorithm != VcmAlgorithmType::kPathTrace)
+		renderHashGrids(commandBuffer, renderTarget, *frame);
+
 	mPrevFrame = frame;
+}
+
+void PathTracer::renderHashGrids(CommandBuffer& commandBuffer, const Image::View& renderTarget, FrameResources& frame) {
+	if (renderTarget.image()->format() != mRasterLightPathPipeline.pipelineMetadata().mDynamicRenderingState->mColorFormats[0])
+		createRasterPipeline(commandBuffer.mDevice);
+
+	Descriptors descriptors;
+
+	for (auto d : {
+		"mViews",
+		"mViewTransforms",
+		"mViewInverseTransforms",
+		"mLightVertices",
+		"mLightPathLengths",
+		"mLightHashGrid.mChecksums",
+		"mLightHashGrid.mCounters",
+		"mLightHashGrid.mAppendIndices",
+		"mLightHashGrid.mAppendData",
+		"mLightHashGrid.mIndices",
+		"mLightHashGrid.mData",
+		"mLightHashGrid.mStats" }) {
+		descriptors[{string("gParams.")+d,0}] = frame.mBuffers.at(d);
+	}
+	descriptors[{"gParams.mDepth",0}] = ImageDescriptor{get<Image::View>(frame.mImages.at("mDepth")), vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}};
+
+	const vk::Extent3D extent = renderTarget.extent();
+
+	if (!frame.mRasterDepthBuffer || extent.width > frame.mRasterDepthBuffer.extent().width || extent.height > frame.mRasterDepthBuffer.extent().height) {
+		Image::Metadata md = {};
+		md.mExtent = extent;
+		md.mFormat = vk::Format::eD32Sfloat;
+		md.mUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment|vk::ImageUsageFlagBits::eTransferDst;
+		frame.mRasterDepthBuffer = make_shared<Image>(commandBuffer.mDevice, "gRasterDepthBuffer", md);
+	}
+
+	auto lightPathPipeline = mRasterLightPathPipeline.get(commandBuffer.mDevice);
+	auto descriptorSets = lightPathPipeline->getDescriptorSets(descriptors);
+
+	// render light paths
+	{
+		renderTarget.barrier(commandBuffer, vk::ImageLayout::eColorAttachmentOptimal, vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::AccessFlagBits::eColorAttachmentWrite);
+		frame.mRasterDepthBuffer.barrier(commandBuffer, vk::ImageLayout::eDepthStencilAttachmentOptimal, vk::PipelineStageFlagBits::eEarlyFragmentTests, vk::AccessFlagBits::eDepthStencilAttachmentRead|vk::AccessFlagBits::eDepthStencilAttachmentWrite);
+
+		descriptorSets->transitionImages(commandBuffer);
+
+		vk::RenderingAttachmentInfo colorAttachment(
+			*renderTarget, vk::ImageLayout::eColorAttachmentOptimal,
+			vk::ResolveModeFlagBits::eNone,	{}, vk::ImageLayout::eUndefined,
+			vk::AttachmentLoadOp::eLoad,
+			vk::AttachmentStoreOp::eStore,
+			vk::ClearValue{});
+		vk::RenderingAttachmentInfo depthAttachment(
+			*frame.mRasterDepthBuffer, vk::ImageLayout::eDepthStencilAttachmentOptimal,
+			vk::ResolveModeFlagBits::eNone,	{}, vk::ImageLayout::eUndefined,
+			vk::AttachmentLoadOp::eClear,
+			vk::AttachmentStoreOp::eDontCare,
+			vk::ClearValue{vk::ClearDepthStencilValue{0,0}});
+		commandBuffer->beginRendering(vk::RenderingInfo(
+			vk::RenderingFlags{},
+			vk::Rect2D(vk::Offset2D(0,0), vk::Extent2D(extent.width, extent.height)),
+			1, 0, colorAttachment, &depthAttachment, nullptr));
+
+		commandBuffer->setViewport(0, vk::Viewport(0, 0, extent.width, extent.height, 0, 1));
+		commandBuffer->setScissor(0, vk::Rect2D(vk::Offset2D(0,0), vk::Extent2D(extent.width, extent.height)));
+
+		commandBuffer->bindPipeline(vk::PipelineBindPoint::eGraphics, ***lightPathPipeline);
+		descriptorSets->bind(commandBuffer);
+		lightPathPipeline->pushConstants(commandBuffer, {
+			{ "mHashGridCellCount", mPushConstants.mHashGridCellCount },
+			{ "mVmIteration", mPushConstants.mVmIteration },
+			{ "mSceneSphere", mPushConstants.mSceneSphere },
+			{ "mHashGridRadiusFactor", mPushConstants.mRadiusFactor },
+			{ "mHashGridRadiusAlpha", mPushConstants.mRadiusAlpha },
+			{ "mLightSubPathCount", mPushConstants.mLightSubPathCount },
+			{ "mLineRadius", mVisualizeLightPathRadius } });
+		commandBuffer->draw(mPushConstants.mMaxPathLength*6, min(mVisualizeLightPathCount, mPushConstants.mLightSubPathCount), 0, 0);
+
+		commandBuffer.trackResource(lightPathPipeline);
+		commandBuffer.trackResource(descriptorSets);
+
+		commandBuffer->endRendering();
+	}
 }
 
 }

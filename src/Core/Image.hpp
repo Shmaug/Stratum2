@@ -84,9 +84,11 @@ public:
 		inline View(const shared_ptr<Image>& image, const vk::ImageSubresourceRange& subresource = { vk::ImageAspectFlagBits::eColor, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS }, vk::ImageViewType viewType = vk::ImageViewType::e2D, const vk::ComponentMapping& componentMapping = {})
 			: mImage(image), mSubresource(subresource), mType(viewType), mComponentMapping(componentMapping) {
 			if (image) {
+				if (isDepthStencil(image->format()))
+					mSubresource.aspectMask = vk::ImageAspectFlagBits::eDepth;
 				if (mSubresource.levelCount == VK_REMAINING_MIP_LEVELS) mSubresource.levelCount = image->levels();
 				if (mSubresource.layerCount == VK_REMAINING_ARRAY_LAYERS) mSubresource.layerCount = image->layers();
-				mView = image->view(subresource, viewType, componentMapping);
+				mView = image->view(mSubresource, mType, mComponentMapping);
 			}
 		}
 		View& operator=(const View&) = default;

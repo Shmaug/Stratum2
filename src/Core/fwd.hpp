@@ -10,6 +10,7 @@ namespace stm2 {
 	class Image;
 	class Instance;
 	class Mesh;
+	class Pipeline;
 	class ComputePipeline;
 	class ComputePipelineCache;
 	class Profiler;

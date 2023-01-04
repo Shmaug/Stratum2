@@ -5,8 +5,7 @@
 
 namespace stm2 {
 
-
-DescriptorSets::DescriptorSets(ComputePipeline& pipeline, const string& name) :
+DescriptorSets::DescriptorSets(Pipeline& pipeline, const string& name) :
 	Device::Resource(pipeline.mDevice, name), mPipeline(pipeline) {
 	// get descriptor set layouts
 	vector<vk::DescriptorSetLayout> layouts(mPipeline.descriptorSetLayouts().size());
@@ -36,9 +35,9 @@ void DescriptorSets::write(const Descriptors& descriptors) {
 
 	for (const auto& [id, descriptorValue] : descriptors) {
 		const auto& [name, arrayIndex] = id;
-		auto it = mPipeline.shader()->descriptorMap().find(name);
-		if (it == mPipeline.shader()->descriptorMap().end()) {
-			cerr << "Warning: Descriptor " << name << " does not exist in shader " << mPipeline.shader()->resourceName() << endl;
+		auto it = mPipeline.descriptorMap().find(name);
+		if (it == mPipeline.descriptorMap().end()) {
+			cerr << "Warning: Descriptor " << name << " does not exist in pipeline " << mPipeline.resourceName() << endl;
 			continue;
 		}
 		const Shader::DescriptorBinding& binding = it->second;
@@ -115,14 +114,22 @@ void DescriptorSets::write(const Descriptors& descriptors) {
 		mDevice->updateDescriptorSets(writes, {});
 }
 
-void DescriptorSets::bind(CommandBuffer& commandBuffer, const unordered_map<string, uint32_t>& dynamicOffsets) {
+void DescriptorSets::transitionImages(CommandBuffer& commandBuffer) {
+	const bool compute = mPipeline.shaderStage(vk::ShaderStageFlagBits::eCompute) != nullptr;
 	// transition image descriptors to required layout
 	for (const auto& [id, descriptorValue] : mDescriptors) {
 		if (descriptorValue.index() == 1) {
 			const auto& [image, layout, accessFlags, sampler] = get<ImageDescriptor>(descriptorValue);
-			image.barrier(commandBuffer, layout, vk::PipelineStageFlagBits::eComputeShader, accessFlags, commandBuffer.queueFamily());
+			image.barrier(commandBuffer, layout, compute ? vk::PipelineStageFlagBits::eComputeShader : vk::PipelineStageFlagBits::eFragmentShader, accessFlags, commandBuffer.queueFamily());
 		}
 	}
+}
+
+void DescriptorSets::bind(CommandBuffer& commandBuffer, const unordered_map<string, uint32_t>& dynamicOffsets) {
+	const bool compute = mPipeline.shaderStage(vk::ShaderStageFlagBits::eCompute) != nullptr;
+
+	if (compute)
+		transitionImages(commandBuffer);
 
 	// dynamic offsets
 	vector<uint32_t> dynamicOffsetValues(dynamicOffsets.size());
@@ -130,9 +137,9 @@ void DescriptorSets::bind(CommandBuffer& commandBuffer, const unordered_map<stri
 		vector<pair<uint32_t/*set+binding*/, uint32_t/*offset*/>> dynamicOffsetPairs;
 		dynamicOffsetPairs.resize(dynamicOffsets.size());
 		for (const auto& [name, offset] : dynamicOffsets) {
-			auto it = mPipeline.shader()->descriptorMap().find(name);
-			if (it == mPipeline.shader()->descriptorMap().end()) {
-				const string msg = "Descriptor " + name + " does not exist in shader " + mPipeline.shader()->resourceName();
+			auto it = mPipeline.descriptorMap().find(name);
+			if (it == mPipeline.descriptorMap().end()) {
+				const string msg = "Descriptor " + name + " does not exist in pipeline " + mPipeline.resourceName();
 				cerr << "Error: " << msg << endl;
 				throw runtime_error(msg);
 			}
@@ -147,66 +154,67 @@ void DescriptorSets::bind(CommandBuffer& commandBuffer, const unordered_map<stri
 	// bind descriptor sets
 	vector<vk::DescriptorSet> descriptorSets(mDescriptorSets.size());
 	ranges::transform(mDescriptorSets, descriptorSets.begin(), [](const auto& ds) { return **ds; });
-	commandBuffer->bindDescriptorSets(vk::PipelineBindPoint::eCompute, **mPipeline.layout(), 0, descriptorSets, dynamicOffsetValues);
+	commandBuffer->bindDescriptorSets(compute ? vk::PipelineBindPoint::eCompute : vk::PipelineBindPoint::eGraphics, **mPipeline.layout(), 0, descriptorSets, dynamicOffsetValues);
 }
 
 
-
-ComputePipeline::ComputePipeline(const string& name, const shared_ptr<Shader>& shader, const Metadata& metadata, const vector<std::shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts)
-	: Device::Resource(shader->mDevice, name), mShader(shader), mPipeline(nullptr), mMetadata(metadata), mDescriptorSetLayouts(descriptorSetLayouts) {
+Pipeline::Pipeline(Device& device, const string& name, const ShaderStageMap& shaders, const Metadata& metadata, const vector<std::shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts) :
+	Device::Resource(device, name), mShaders(shaders), mPipeline(nullptr), mMetadata(metadata), mDescriptorSetLayouts(descriptorSetLayouts) {
 
 	// gather descriptorset bindings
 
 	vector<map<uint32_t, tuple<vk::DescriptorSetLayoutBinding, optional<vk::DescriptorBindingFlags>, vector<vk::Sampler>>>> bindings;
 
-	for (const auto&[id, binding] : shader->descriptorMap()) {
-		// compute total array size
-		uint32_t descriptorCount = 1;
-		for (const uint32_t v : binding.mArraySize)
-			descriptorCount *= v;
+	for (const auto&[stage, shader] : mShaders) {
+		for (const auto&[id, binding] : shader->descriptorMap()) {
+			mDescriptorMap[id] = binding;
 
-		// get binding flags
+			// compute total array size
+			uint32_t descriptorCount = 1;
+			for (const uint32_t v : binding.mArraySize)
+				descriptorCount *= v;
 
-		optional<vk::DescriptorBindingFlags> flags;
-		if (auto b_it = mMetadata.mBindingFlags.find(id); b_it != mMetadata.mBindingFlags.end())
-			flags = b_it->second;
+			// get binding flags
+			optional<vk::DescriptorBindingFlags> flags;
+			if (auto b_it = mMetadata.mBindingFlags.find(id); b_it != mMetadata.mBindingFlags.end())
+				flags = b_it->second;
 
-		// get immutable samplers
+			// get immutable samplers
+			vector<vk::Sampler> samplers;
+			if (auto s_it = mMetadata.mImmutableSamplers.find(id); s_it != mMetadata.mImmutableSamplers.end()) {
+				samplers.resize(s_it->second.size());
+				ranges::transform(s_it->second, samplers.begin(), [](const shared_ptr<vk::raii::Sampler>& s){ return **s; });
+			}
 
-		vector<vk::Sampler> samplers;
-		if (auto s_it = mMetadata.mImmutableSamplers.find(id); s_it != mMetadata.mImmutableSamplers.end()) {
-			samplers.resize(s_it->second.size());
-			ranges::transform(s_it->second, samplers.begin(), [](const shared_ptr<vk::raii::Sampler>& s){ return **s; });
-		}
+			// increase set count if needed
+			if (binding.mSet >= bindings.size())
+				bindings.resize(binding.mSet + 1);
 
-		// increase set count if needed
-		if (binding.mSet >= bindings.size())
-			bindings.resize(binding.mSet + 1);
+			// copy bindings
 
-		// copy bindings
+			auto& setBindings = bindings[binding.mSet];
 
-		auto& setBindings = bindings[binding.mSet];
+			auto it = setBindings.find(binding.mBinding);
+			if (it == setBindings.end())
+				it = setBindings.emplace(binding.mBinding,
+					tuple{
+						vk::DescriptorSetLayoutBinding(
+							binding.mBinding,
+							binding.mDescriptorType,
+							descriptorCount,
+							shader->stage(), {}),
+						flags,
+						samplers }).first;
+			else {
+				auto&[setLayoutBinding, flags, samplers] = it->second;
 
-		auto it = setBindings.find(binding.mBinding);
-		if (it == setBindings.end())
-			it = setBindings.emplace(binding.mBinding,
-				tuple{
-					vk::DescriptorSetLayoutBinding(
-						binding.mBinding,
-						binding.mDescriptorType,
-						descriptorCount,
-						shader->stage(), {}),
-					flags,
-					samplers }).first;
-		else {
-			auto&[setLayoutBinding, flags, samplers] = it->second;
+				if (setLayoutBinding.descriptorType != binding.mDescriptorType)
+					throw logic_error("Shader modules contain descriptors of different types at the same binding");
+				if (setLayoutBinding.descriptorCount != descriptorCount)
+					throw logic_error("Shader modules contain descriptors with different counts at the same binding");
 
-			if (setLayoutBinding.descriptorCount != descriptorCount)
-				throw logic_error("Shader modules contain descriptors with different counts at the same binding");
-			if (setLayoutBinding.descriptorType != binding.mDescriptorType)
-				throw logic_error("Shader modules contain descriptors of different types at the same binding");
-
-			setLayoutBinding.stageFlags |= shader->stage();
+				setLayoutBinding.stageFlags |= shader->stage();
+			}
 		}
 	}
 
@@ -238,16 +246,21 @@ ComputePipeline::ComputePipeline(const string& name, const shared_ptr<Shader>& s
 
 	vector<vk::PushConstantRange> pushConstantRanges;
 
-    if (!shader->pushConstants().empty()) {
-		// determine push constant range
-		uint32_t rangeBegin = numeric_limits<uint32_t>::max();
-		uint32_t rangeEnd = 0;
+	// determine push constant range
+	uint32_t rangeBegin = numeric_limits<uint32_t>::max();
+	uint32_t rangeEnd = 0;
+	vk::ShaderStageFlags stages = vk::ShaderStageFlags{0};
+	for (const auto&[stage, shader] : mShaders) {
+		if (shader->pushConstants().empty())
+			continue;
+		stages |= stage;
 		for (const auto& [id, p] : shader->pushConstants()) {
 			rangeBegin = std::min(rangeBegin, p.mOffset);
 			rangeEnd   = std::max(rangeEnd  , p.mOffset + p.mTypeSize);
 		}
-		pushConstantRanges.emplace_back(shader->stage(), rangeBegin, rangeEnd - rangeBegin);
-    }
+	}
+	if (stages != vk::ShaderStageFlags{0})
+		pushConstantRanges.emplace_back(stages, rangeBegin, rangeEnd - rangeBegin);
 
 	// create pipelinelayout from descriptors and pushconstants
 
@@ -255,46 +268,113 @@ ComputePipeline::ComputePipeline(const string& name, const shared_ptr<Shader>& s
 	ranges::transform(mDescriptorSetLayouts, vklayouts.begin(), [](auto ds) { return **ds; });
 	mLayout = make_shared<vk::raii::PipelineLayout>(*mDevice, vk::PipelineLayoutCreateInfo(mMetadata.mLayoutFlags, vklayouts, pushConstantRanges));
 	mDevice.setDebugName(**mLayout, resourceName() + "/Layout");
-
-	// create pipeline
-
-	mPipeline = vk::raii::Pipeline(*shader->mDevice, shader->mDevice.pipelineCache(), vk::ComputePipelineCreateInfo(
-		mMetadata.mFlags,
-		vk::PipelineShaderStageCreateInfo(mMetadata.mStageLayoutFlags, vk::ShaderStageFlagBits::eCompute, ***shader, "main"),
-		**mLayout));
-	mDevice.setDebugName(*mPipeline, resourceName());
 }
 
-
-void ComputePipeline::pushConstants(CommandBuffer& commandBuffer, const PushConstants& constants) const {
+void Pipeline::pushConstants(CommandBuffer& commandBuffer, const PushConstants& constants) const {
 	for (const auto[name, pushConstant] : constants) {
-		if (name == "") {
-			commandBuffer->pushConstants<byte>(**layout(), shader()->stage(), 0, pushConstant);
-			continue;
+		vk::ShaderStageFlags stages = vk::ShaderStageFlags{0};
+		uint32_t offset = 0;
+
+		for (const auto&[stage, shader] : mShaders) {
+			if (name == "") {
+				stages |= stage;
+				offset = 0;
+				continue;
+			}
+
+			auto it = shader->pushConstants().find(name);
+			if (it == shader->pushConstants().end())
+				continue;
+
+			if (it->second.mTypeSize != pushConstant.size())
+				cerr << "Warning: " << "Push constant " << name << " (" << pushConstant.size() << "B)"
+					<< " does not match size declared by shader (" << it->second.mTypeSize << "B) for shader " + shader->resourceName() << endl;
+
+			stages |= stage;
+			offset = it->second.mOffset;
 		}
 
-		auto it = shader()->pushConstants().find(name);
-		if (it == shader()->pushConstants().end()) {
-			cerr << "Warning: Push constant " + name + " does not exist in shader " + shader()->resourceName() << endl;
-			continue;
-		}
-
-		if (it->second.mTypeSize != pushConstant.size())
-			cerr << "Warning: " << "Push constant " << name << " (" << pushConstant.size() << "B)"
-				 << " does not match size declared by shader (" << it->second.mTypeSize << "B) for shader " + shader()->resourceName() << endl;
-
-		commandBuffer->pushConstants<byte>(**layout(), shader()->stage(), it->second.mOffset, pushConstant);
+		if (stages != vk::ShaderStageFlags{0})
+			commandBuffer->pushConstants<byte>(**layout(), stages, offset, pushConstant);
+		else
+			cerr << "Warning: Push constant " + name + " does not exist in pipeline " + resourceName() << endl;
 	}
 }
 
-
-shared_ptr<DescriptorSets> ComputePipeline::getDescriptorSets(const Descriptors& descriptors) {
+shared_ptr<DescriptorSets> Pipeline::getDescriptorSets(const Descriptors& descriptors) {
 	shared_ptr<DescriptorSets> r = mResources.get();
 	if (!r)
 		r = mResources.emplace(make_shared<DescriptorSets>(*this, resourceName() + "/Resources"));
 	r->write(descriptors);
 	return r;
 }
+
+
+GraphicsPipeline::GraphicsPipeline(const string& name, const ShaderStageMap& shaders, const GraphicsMetadata& metadata, const vector<std::shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts)
+	: Pipeline(shaders.begin()->second->mDevice, name, shaders, metadata, descriptorSetLayouts) {
+
+	// Pipeline constructor creates mLayout, mDescriptorSetLayouts, and mDescriptorMap
+
+	// create pipeline
+
+	vector<vk::PipelineShaderStageCreateInfo> stages;
+	for (const auto&[stage, shader] : shaders)
+		stages.emplace_back(vk::PipelineShaderStageCreateInfo(mMetadata.mStageLayoutFlags, shader->stage(), ***shader, "main"));
+
+	vk::PipelineColorBlendStateCreateInfo colorBlendState;
+	if (metadata.mColorBlendState)
+		colorBlendState = vk::PipelineColorBlendStateCreateInfo(
+			{},
+			metadata.mColorBlendState->mLogicOpEnable,
+			metadata.mColorBlendState->mLogicOp,
+			metadata.mColorBlendState->mAttachments,
+			metadata.mColorBlendState->mBlendConstants);
+
+	vk::PipelineDynamicStateCreateInfo dynamicState({}, metadata.mDynamicStates);
+
+	vk::PipelineRenderingCreateInfo dynamicRenderingState;
+	if (metadata.mDynamicRenderingState)
+		dynamicRenderingState = vk::PipelineRenderingCreateInfo(
+			metadata.mDynamicRenderingState->mViewMask,
+			metadata.mDynamicRenderingState->mColorFormats,
+			metadata.mDynamicRenderingState->mDepthFormat,
+			metadata.mDynamicRenderingState->mStencilFormat);
+
+	vk::PipelineViewportStateCreateInfo viewportState({}, metadata.mViewports, metadata.mScissors);
+
+	mPipeline = vk::raii::Pipeline(*mDevice, mDevice.pipelineCache(), vk::GraphicsPipelineCreateInfo(
+		mMetadata.mFlags,
+		stages,
+		metadata.mVertexInputState.has_value()   ? &metadata.mVertexInputState.value() : nullptr,
+		metadata.mInputAssemblyState.has_value() ? &metadata.mInputAssemblyState.value() : nullptr,
+		metadata.mTessellationState.has_value()  ? &metadata.mTessellationState.value() : nullptr,
+		&viewportState,
+		metadata.mRasterizationState.has_value() ? &metadata.mRasterizationState.value() : nullptr,
+		metadata.mMultisampleState.has_value()   ? &metadata.mMultisampleState.value() : nullptr,
+		metadata.mDepthStencilState.has_value()  ? &metadata.mDepthStencilState.value() : nullptr,
+		metadata.mColorBlendState.has_value()    ? &colorBlendState : nullptr,
+		&dynamicState,
+		**mLayout,
+		metadata.mRenderPass,
+		metadata.mSubpassIndex, {}, {},
+		metadata.mDynamicRenderingState.has_value() ? &dynamicRenderingState : nullptr));
+	mDevice.setDebugName(*mPipeline, resourceName());
+}
+
+ComputePipeline::ComputePipeline(const string& name, const shared_ptr<Shader>& shader_, const Metadata& metadata, const vector<std::shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts)
+	: Pipeline(shader_->mDevice, name, { { shader_->stage(), shader_ } }, metadata, descriptorSetLayouts) {
+
+	// Pipeline constructor creates mLayout, mDescriptorSetLayouts, and mDescriptorMap
+
+	// create pipeline
+
+	mPipeline = vk::raii::Pipeline(*mDevice, mDevice.pipelineCache(), vk::ComputePipelineCreateInfo(
+		mMetadata.mFlags,
+		vk::PipelineShaderStageCreateInfo(mMetadata.mStageLayoutFlags, vk::ShaderStageFlagBits::eCompute, ***shader_, "main"),
+		**mLayout));
+	mDevice.setDebugName(*mPipeline, resourceName());
+}
+
 
 void ComputePipeline::dispatch(CommandBuffer& commandBuffer, const vk::Extent3D& dim, const shared_ptr<DescriptorSets>& descriptors, const unordered_map<string, uint32_t>& dynamicOffsets, const PushConstants& constants) {
 	commandBuffer.trackResource(descriptors);
@@ -304,10 +384,38 @@ void ComputePipeline::dispatch(CommandBuffer& commandBuffer, const vk::Extent3D&
 	pushConstants(commandBuffer, constants);
 	commandBuffer->dispatch(dim.width, dim.height, dim.depth);
 }
-void ComputePipeline::dispatch(CommandBuffer& commandBuffer, const vk::Extent3D& dim, const Descriptors& descriptors, const unordered_map<string, uint32_t>& dynamicOffsets, const PushConstants& constants) {
-	dispatch(commandBuffer, dim, getDescriptorSets(descriptors), dynamicOffsets, constants);
-}
 
+
+
+shared_ptr<GraphicsPipeline> GraphicsPipelineCache::get(Device& device, const Defines& defines, const vector<shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts, optional<pair<vk::RenderPass, uint32_t>> renderPass) {
+	size_t key = 0;
+	for (const auto& d : defines)
+		key = hashArgs(key, d.first, d.second);
+	const size_t defineKey = key;
+	for (const auto& l : descriptorSetLayouts)
+		key = hashArgs(key, l);
+	if (renderPass.has_value())
+		key = hashArgs(key, *renderPass);
+
+	if (auto it = mCachedPipelines.find(key); it != mCachedPipelines.end())
+		return it->second;
+
+	Pipeline::ShaderStageMap stages;
+	if (auto it = mCachedShaders.find(defineKey); it != mCachedShaders.end())
+		stages = it->second;
+	else {
+		for (const auto&[stage, info] : mEntryPointProfiles)
+			stages[stage] = make_shared<Shader>(device, info.mSourceFile, info.mEntryPoint, info.mProfile, mCompileArgs, defines);
+		mCachedShaders.emplace(defineKey, stages);
+	}
+
+	GraphicsPipeline::GraphicsMetadata metadata = mPipelineMetadata;
+	if (renderPass.has_value())
+		tie(metadata.mRenderPass, metadata.mSubpassIndex) = renderPass.value();
+
+	const shared_ptr<GraphicsPipeline> pipeline = make_shared<GraphicsPipeline>("Graphics pipeline", stages, mPipelineMetadata, descriptorSetLayouts);
+	return mCachedPipelines.emplace(key, pipeline).first->second;
+}
 
 shared_ptr<ComputePipeline> ComputePipelineCache::get(Device& device, const Defines& defines, const vector<shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts) {
 	size_t key = 0;
@@ -316,12 +424,12 @@ shared_ptr<ComputePipeline> ComputePipelineCache::get(Device& device, const Defi
 	for (const auto& l : descriptorSetLayouts)
 		key = hashArgs(key, l);
 
-	if (auto it = mPipelines.find(key); it != mPipelines.end())
+	if (auto it = mCachedPipelines.find(key); it != mCachedPipelines.end())
 		return it->second;
 
 	const shared_ptr<Shader> shader = make_shared<Shader>(device, mSourceFile, mEntryPoint, mProfile, mCompileArgs, defines);
 	const shared_ptr<ComputePipeline> pipeline = make_shared<ComputePipeline>(mSourceFile.stem().string() + "_" + mEntryPoint, shader, mPipelineMetadata, descriptorSetLayouts);
-	return mPipelines.emplace(key, pipeline).first->second;
+	return mCachedPipelines.emplace(key, pipeline).first->second;
 }
 
 

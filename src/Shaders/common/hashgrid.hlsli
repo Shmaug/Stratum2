@@ -24,7 +24,7 @@ struct HashGrid<T> {
 
 
 	float GetCellSize(const float3 aPosition) {
-		return VcmMergeRadius()*2;
+		return gPushConstants.VcmMergeRadius()*2;
 		//if (aCellPixelSize <= 0)
 		//	return aMinCellSize;
 		//const float cameraDistance = length(gCamera.transform.transformPoint(0) - aPosition);
@@ -33,11 +33,10 @@ struct HashGrid<T> {
 		//return aMinCellSize * (1 << uint(log2(step / aMinCellSize)));
 	}
 
-	uint2 GetCellRange(const uint cellIndex) {
-		const uint start = mIndices[cellIndex];
-		return uint2(start, start + mCounters[cellIndex]);
-	}
-
+	uint2 GetCellDataRange(const uint cellIndex) {
+        const uint start = mIndices[cellIndex];
+        return uint2(start, start + mCounters[cellIndex]);
+    }
 
 	uint FindCellIndex<let bInserting : bool>(const float3 aPosition, const int3 offset = 0) {
 		const float cellSize = GetCellSize(aPosition);
@@ -63,16 +62,16 @@ struct HashGrid<T> {
         }
 
 		// failed to find cell (hashgrid full)
-
-        if (gPerformanceCounters && bInserting)
-			InterlockedAdd(mStats[0], 1); // failed inserts
-
 		return -1;
 	}
 
 	void Append(const float3 aPosition, const T data) {
-		const uint cellIndex = FindCellIndex<true>(aPosition);
-		if (cellIndex == -1) return;
+        const uint cellIndex = FindCellIndex<true>(aPosition);
+        if (cellIndex == -1) {
+			if (gPerformanceCounters)
+                InterlockedAdd(mStats[0], 1); // failed inserts
+			return;
+        }
 
 		// append item to cell by incrementing cell counter
 		uint indexInCell;

@@ -48,7 +48,10 @@ Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) : mI
 	mFeatures.shaderSampledImageArrayDynamicIndexing = true;
 	mFeatures.shaderStorageImageArrayDynamicIndexing = true;
 
-	auto& difeatures = get<vk::PhysicalDeviceDescriptorIndexingFeatures>(mFeatureChain);
+	vk::PhysicalDeviceVulkan13Features& vk13features = get<vk::PhysicalDeviceVulkan13Features>(mFeatureChain);
+	vk13features.dynamicRendering = true;
+
+	vk::PhysicalDeviceDescriptorIndexingFeatures& difeatures = get<vk::PhysicalDeviceDescriptorIndexingFeatures>(mFeatureChain);
 	difeatures.shaderStorageBufferArrayNonUniformIndexing = true;
 	difeatures.shaderSampledImageArrayNonUniformIndexing = true;
 	difeatures.shaderStorageImageArrayNonUniformIndexing = true;
@@ -59,6 +62,8 @@ Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) : mI
 	rtfeatures.rayTracingPipeline = deviceExtensions.contains(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
 	rtfeatures.rayTraversalPrimitiveCulling = rtfeatures.rayTracingPipeline;
 	get<vk::PhysicalDeviceRayQueryFeaturesKHR>(mFeatureChain).rayQuery = deviceExtensions.contains(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+
+
 
 	// Create logical device
 
@@ -78,7 +83,7 @@ Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) : mI
 	createInfo.setPEnabledLayerNames(validationLayers);
 	createInfo.setPEnabledExtensionNames(deviceExts);
 	createInfo.setPEnabledFeatures(&mFeatures);
-	createInfo.setPNext(&difeatures);
+	createInfo.setPNext(&vk13features);
 	mDevice = mPhysicalDevice.createDevice(createInfo);
 	setDebugName(*mDevice, "[" + to_string(properties.deviceID) + "]: " + properties.deviceName.data());
 

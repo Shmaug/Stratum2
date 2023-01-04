@@ -7,14 +7,6 @@
 
 [[vk::push_constant]] ConstantBuffer<PathTracerPushConstants> gPushConstants;
 
-float VcmMergeRadius() {
-    // Setup our radius, 1st iteration has aIteration == 0, thus offset
-    float radius = gPushConstants.mRadiusFactor * gPushConstants.mSceneSphere.w;
-    radius /= pow(float(gPushConstants.mVmIteration + 1), 0.5f * (1 - gPushConstants.mRadiusAlpha));
-    // Purely for numeric stability
-    return max(radius, 1e-7f);
-}
-
 #include "hashgrid.hlsli"
 
 struct RenderParams {
@@ -276,7 +268,7 @@ void InterlockedAddColor(const int2 ipos, const uint2 extent, const float3 color
     if (all(color <= 0) || any(ipos < 0) || any(ipos >= extent))
         return;
 
-    const uint3 icolor = uint3(color * gLightTraceQuantization);
+    const uint3 icolor = uint3(color * gPushConstants.mLightImageQuantization);
 
     const uint address = 16 * (ipos.y * extent.x + ipos.x);
     uint overflowed = 0;

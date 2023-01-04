@@ -18,10 +18,6 @@
 #define gPerformanceCounters (false)
 #endif
 
-#ifndef gLightTraceQuantization
-#define gLightTraceQuantization (16384)
-#endif
-
 // Do only unidirectional path tracing with next event estimation
 #ifndef gPathTraceOnly
 #define gPathTraceOnly (false)
@@ -45,6 +41,9 @@
 
 #ifndef gDebugPaths
 #define gDebugPaths (false)
+#endif
+#ifndef gDebugPathWeights
+#define gDebugPathWeights (false)
 #endif
 
 #include "common/path.hlsli"
@@ -91,7 +90,7 @@ struct VertexCM {
         mScreenPixelCount  = pathCount;
         mLightSubPathCount = pathCount;
 
-        const float mergeRadiusSqr = pow2(VcmMergeRadius());
+        const float mergeRadiusSqr = pow2(gPushConstants.VcmMergeRadius());
 
         // Factor used to normalise vertex merging contribution.
         // We divide the summed up energy by disk radius and number of light paths
@@ -109,7 +108,10 @@ struct VertexCM {
 
 		const uint idx = storedCount * mLightSubPathCount + pathIndex;
 		gRenderParams.mLightVertices[idx] = vertex;
-		gRenderParams.mLightHashGrid.Append(vertex.mShadingData.mPosition, idx);
+
+        if (gUseVM) {
+			gRenderParams.mLightHashGrid.Append(vertex.mShadingData.mPosition, idx);
+        }
 	}
 	VcmVertex LoadLightVertex(const uint vertexIndex) {
 		return gRenderParams.mLightVertices[vertexIndex * mLightSubPathCount + pathIndex];
@@ -147,7 +149,7 @@ struct VertexCM {
 
         const int3 offsetSign = sign(frac(queryPos / gRenderParams.mLightHashGrid.GetCellSize(queryPos)) - 0.5);
 
-        const float mergeRadiusSqr = pow2(VcmMergeRadius());
+        const float mergeRadiusSqr = pow2(gPushConstants.VcmMergeRadius());
 
 		for (int j = 0; j < 8; j++) {
 			const int3 offset = int3((j%2), (j%4)/2, j/4) * offsetSign;
@@ -156,11 +158,11 @@ struct VertexCM {
 			if (cellIndex == -1)
 				continue;
 
-			const uint2 activeRange = gRenderParams.mLightHashGrid.GetCellRange(cellIndex);
+            uint2 range = gRenderParams.mLightHashGrid.GetCellDataRange(cellIndex);
+            range.y = min(range.y, range.x + 512);
 
-			for (; activeRange.x < activeRange.y; activeRange.x++) {
-				const uint particleIndex = gRenderParams.mLightHashGrid.mIndices[activeRange.x];
-				LightVertex particle     = gRenderParams.mLightVertices[gRenderParams.mLightHashGrid.mData[particleIndex]];
+            for (; range.x < range.y; range.x++) {
+                LightVertex particle = gRenderParams.mLightVertices[gRenderParams.mLightHashGrid.mData[range.x]];
 
 				const float3 toParticle = particle.mShadingData.mPosition - queryPos;
 				const float distSqr     = dot(toParticle, toParticle);
@@ -207,7 +209,7 @@ struct VertexCM {
 		const float misWeight = gPpm ? 1.f : 1.f / (wLight + 1.f + wCamera);
 
 		const float3 contrib = misWeight * cameraBsdfFactor * aLightVertex.mThroughput;
-		AddColor(mIndex, aCameraState.mVertex.mThroughput * mVmNormalization * contrib, aCameraState.mVertex.mPathLength+1, aLightVertex.mPathLength+1);
+		AddColor(mIndex, aCameraState.mVertex.mThroughput * mVmNormalization * contrib, aCameraState.mVertex.mPathLength+1, aLightVertex.mPathLength);
 	}
 
 
@@ -288,7 +290,7 @@ struct VertexCM {
         for (uint i = 0; i < 3; i++)
             if ((lightTraceSample.w & BIT(i)) > 0)
                 lightTraceSample[i] = 0xFFFFFFFF;
-        gRenderParams.mOutput[mIndex] = float4(lightTraceSample.rgb / float(gLightTraceQuantization), 1);
+        gRenderParams.mOutput[mIndex] = float4(lightTraceSample.rgb / float(gPushConstants.mLightImageQuantization), 1);
 
         // Unless rendering with traditional light tracing
 		if (gLightTraceOnly) return;
@@ -498,7 +500,7 @@ struct VertexCM {
             misWeight = 1 / (1 + wCamera);
         }
 
-        if (gDebugPaths)
+        if (gDebugPaths && !gDebugPathWeights)
             misWeight = 1;
 
         return misWeight * aLight.mRadiance;
@@ -566,7 +568,7 @@ struct VertexCM {
             misWeight = 1 / (wLight + 1 + wCamera);
 		}
 
-        if (gDebugPaths)
+        if (gDebugPaths && !gDebugPathWeights)
             misWeight = 1;
 
         const float3 contrib = (misWeight / emissionSample.mDirectPdfW) * (emissionSample.mRadiance * evaluateRecord.mReflectance);
@@ -641,7 +643,9 @@ struct VertexCM {
         const float wCamera = Mis(lightBsdfDirPdfA) * (mMisVmWeightFactor + aCameraState.mVertex.dVCM + aCameraState.mVertex.dVC * Mis(cameraBsdfRevPdfW));
 
         // Full path MIS weight [tech. rep. (37)]
-        const float misWeight = gDebugPaths ? 1.f : 1.f / (wLight + 1.f + wCamera);
+        const float misWeight = (gDebugPaths && !gDebugPathWeights) ?
+			1.f :
+			1.f / (wLight + 1.f + wCamera);
 
         const float3 contrib = (misWeight * geometryTerm) * cameraBsdfFactor * lightBsdfFactor;
 
@@ -739,7 +743,9 @@ struct VertexCM {
         // Partial eye sub-path weight is 0 [tech. rep. (47)]
 
         // Full path MIS weight [tech. rep. (37)]. No MIS for traditional light tracing.
-        const float misWeight = (gLightTraceOnly || gDebugPaths) ? 1.f : (1.f / (wLight + 1.f));
+        const float misWeight = (gLightTraceOnly || (gDebugPaths && !gDebugPathWeights)) ?
+			1.f :
+			(1.f / (wLight + 1.f));
 
         const float surfaceToImageFactor = 1.f / imageToSurfaceFactor;
 

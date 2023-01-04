@@ -689,11 +689,11 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 		mEnvironmentMaterialAddress = -1;
 		scene.mNode.forEachDescendant<EnvironmentImage>([&](Node& node, const shared_ptr<EnvironmentImage> environment) {
 			if (environment->mEmission.mValue.isZero()) return true;
-		mEnvironmentMaterialAddress = mMaterialResources.mMaterialData.sizeBytes();
-		mMaterialCount++;
-		environment->store(mMaterialResources);
-		return false;
-			});
+			mEnvironmentMaterialAddress = mMaterialResources.mMaterialData.sizeBytes();
+			mMaterialCount++;
+			environment->store(mMaterialResources);
+			return false;
+		});
 	}
 
 	{ // Build TLAS
@@ -772,22 +772,7 @@ Descriptors Scene::FrameResources::getDescriptors() const {
 }
 
 
-template<int N>
-void ImageValue<N>::drawGui(const string& label) {
-	ImGui::DragScalarN(label.c_str(), ImGuiDataType_Float, mValue.data(), N, .01f);
-
-	if (mImage) {
-		ImGui::PushID(this);
-		const bool d = ImGui::Button("x");
-		ImGui::PopID();
-		if (d)
-			mImage = {};
-		else {
-			const uint32_t w = ImGui::GetWindowSize().x;
-			ImGui::Image(Gui::getTextureID(mImage), ImVec2(w, w * (float)mImage.extent().height / (float)mImage.extent().width));
-		}
-	}
-}
+// drawGui functions
 
 void Scene::drawGui() {
 	if (mResources) {
@@ -826,6 +811,26 @@ void Scene::drawGui() {
 			}
 		}
 	}
+}
+
+template<int N>
+bool ImageValue<N>::drawGui(const string& label) {
+	bool changed = ImGui::DragScalarN(label.c_str(), ImGuiDataType_Float, mValue.data(), N, .01f);
+
+	if (mImage) {
+		ImGui::PushID(this);
+		const bool d = ImGui::Button("x");
+		ImGui::PopID();
+		if (d) {
+			mImage = {};
+			changed = true;
+		} else {
+			const uint32_t w = ImGui::GetWindowSize().x;
+			ImGui::Image(Gui::getTextureID(mImage), ImVec2(w, w * (float)mImage.extent().height / (float)mImage.extent().width));
+		}
+	}
+
+	return changed;
 }
 
 void Frustum(float left, float right, float bottom, float top, float znear, float zfar, float* m16) {
@@ -881,7 +886,6 @@ void LookAt(const float3 eye, const float3 fwd, const float3 up, float* m16) {
 	m16[14] = -dot(Z, eye);
 	m16[15] = 1.0f;
 }
-
 bool EditTransform(float* view, float* projection, Eigen::Matrix4f& parent, Eigen::Matrix4f& matrix) {
 	static ImGuizmo::OPERATION mCurrentGizmoOperation = ImGuizmo::ROTATE;
 	static ImGuizmo::MODE mCurrentGizmoMode = ImGuizmo::WORLD;
@@ -916,13 +920,11 @@ bool EditTransform(float* view, float* projection, Eigen::Matrix4f& parent, Eige
 	if (changed)
 		ImGuizmo::RecomposeMatrixFromComponents(matrixTranslation, matrixRotation, matrixScale, matrix.data());
 
-	if (mCurrentGizmoOperation != ImGuizmo::SCALE) {
-		if (ImGui::RadioButton("Local", mCurrentGizmoMode == ImGuizmo::LOCAL))
-			mCurrentGizmoMode = ImGuizmo::LOCAL;
-		ImGui::SameLine();
-		if (ImGui::RadioButton("World", mCurrentGizmoMode == ImGuizmo::WORLD))
-			mCurrentGizmoMode = ImGuizmo::WORLD;
-	}
+	if (ImGui::RadioButton("Local", mCurrentGizmoMode == ImGuizmo::LOCAL))
+		mCurrentGizmoMode = ImGuizmo::LOCAL;
+	ImGui::SameLine();
+	if (ImGui::RadioButton("World", mCurrentGizmoMode == ImGuizmo::WORLD))
+		mCurrentGizmoMode = ImGuizmo::WORLD;
 
 	if (ImGui::IsKeyPressed(ImGuiKey_U))
 		useSnap = !useSnap;
@@ -1017,6 +1019,27 @@ void TransformData::drawGui(Node& node) {
 	}
 }
 
+void Camera::drawGui() {
+	bool ortho = mProjection.isOrthographic();
+	if (ImGui::Checkbox("Orthographic", reinterpret_cast<bool*>(&ortho)))
+		mProjection.mVerticalFoV = -mProjection.mVerticalFoV;
+	ImGui::DragFloat("Near Plane", &mProjection.mNearPlane, 0.01f, -1, 1);
+	if (mProjection.isOrthographic()) {
+		ImGui::DragFloat("Far Plane", &mProjection.mFarPlane, 0.01f, -1, 1);
+		ImGui::DragFloat2("Projection Scale", mProjection.mScale.data(), 0.01f, -1, 1);
+	} else {
+		float fovy = degrees(2 * atan(1 / mProjection.mScale[1]));
+		if (ImGui::DragFloat("Vertical FoV", &fovy, 0.01f, 1, 179)) {
+			const float aspect = mProjection.mScale[0] / mProjection.mScale[1];
+			mProjection.mScale[1] = 1 / tan(radians(fovy / 2));
+			mProjection.mScale[0] = mProjection.mScale[1] * aspect;
+		}
+	}
+	ImGui::DragFloat2("Projection Offset", mProjection.mOffset.data(), 0.01f, -1, 1);
+	ImGui::InputInt2("ImageRect Offset", &mImageRect.offset.x);
+	ImGui::InputInt2("ImageRect Extent", reinterpret_cast<int32_t*>(&mImageRect.extent.width));
+}
+
 void MeshPrimitive::drawGui(Node& node) {
 	if (mMesh) {
 		ImGui::Text("%s", type_index(typeid(Mesh)).name());
@@ -1043,25 +1066,10 @@ void SpherePrimitive::drawGui(Node& node) {
 	}
 }
 
-void Camera::drawGui() {
-	bool ortho = mProjection.isOrthographic();
-	if (ImGui::Checkbox("Orthographic", reinterpret_cast<bool*>(&ortho)))
-		mProjection.mVerticalFoV = -mProjection.mVerticalFoV;
-	ImGui::DragFloat("Near Plane", &mProjection.mNearPlane, 0.01f, -1, 1);
-	if (mProjection.isOrthographic()) {
-		ImGui::DragFloat("Far Plane", &mProjection.mFarPlane, 0.01f, -1, 1);
-		ImGui::DragFloat2("Projection Scale", mProjection.mScale.data(), 0.01f, -1, 1);
-	} else {
-		float fovy = degrees(2 * atan(1 / mProjection.mScale[1]));
-		if (ImGui::DragFloat("Vertical FoV", &fovy, 0.01f, 1, 179)) {
-			const float aspect = mProjection.mScale[0] / mProjection.mScale[1];
-			mProjection.mScale[1] = 1 / tan(radians(fovy / 2));
-			mProjection.mScale[0] = mProjection.mScale[1] * aspect;
-		}
-	}
-	ImGui::DragFloat2("Projection Offset", mProjection.mOffset.data(), 0.01f, -1, 1);
-	ImGui::InputInt2("ImageRect Offset", &mImageRect.offset.x);
-	ImGui::InputInt2("ImageRect Extent", reinterpret_cast<int32_t*>(&mImageRect.extent.width));
+void EnvironmentImage::drawGui(Node& node) {
+	if (mEmission.drawGui("Emission"))
+		if (const shared_ptr<Scene> scene = node.findAncestor<Scene>())
+			scene->markDirty();
 }
 
 void Material::drawGui(Node& node) {
@@ -1097,7 +1105,7 @@ void Material::drawGui(Node& node) {
 	}
 
 	if (changed)
-		if (const auto scene = node.findAncestor<Scene>(); scene)
+		if (const auto scene = node.findAncestor<Scene>())
 			scene->markDirty();
 }
 void Medium::drawGui(Node& node) {
