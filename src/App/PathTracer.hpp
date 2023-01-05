@@ -70,7 +70,7 @@ public:
 	inline Image::View resultImage() const { return mLastResultImage; }
 
 private:
-	void createRasterPipeline(Device& device);
+	void createRasterPipeline(Device& device, const vk::Extent2D& extent, const vk::Format format);
 
 	enum RenderPipelineIndex {
 		eGenerateLightPaths,

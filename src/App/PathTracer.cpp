@@ -63,7 +63,8 @@ void PathTracer::createPipelines(Device& device) {
 	mRenderPipelines[RenderPipelineIndex::eHashGridComputeIndices] = ComputePipelineCache(kernelPath, "ComputeHashGridIndices", "sm_6_6", args, md);
 	mRenderPipelines[RenderPipelineIndex::eHashGridSwizzle]        = ComputePipelineCache(kernelPath, "SwizzleHashGrid"       , "sm_6_6", args, md);
 
-	createRasterPipeline(device);
+	auto swapchain = mNode.root()->findDescendant<Swapchain>();
+	createRasterPipeline(device, swapchain->extent(), swapchain->format().format);
 
 	mPerformanceCounters = make_shared<Buffer>(device, "mPerformanceCounters", 4*sizeof(uint32_t), vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
 	mPrevPerformanceCounters.resize(mPerformanceCounters.size());
@@ -73,7 +74,7 @@ void PathTracer::createPipelines(Device& device) {
 	mPerformanceCounterTimer = 0;
 }
 
-void PathTracer::createRasterPipeline(Device& device) {
+void PathTracer::createRasterPipeline(Device& device, const vk::Extent2D& extent, const vk::Format format) {
 	GraphicsPipeline::GraphicsMetadata gmd;
 	gmd.mColorBlendState = GraphicsPipeline::ColorBlendState();
 	gmd.mColorBlendState->mAttachments = { vk::PipelineColorBlendAttachmentState(
@@ -88,14 +89,12 @@ void PathTracer::createRasterPipeline(Device& device) {
 
 	gmd.mDynamicStates = { vk::DynamicState::eViewport, vk::DynamicState::eScissor };
 
-	auto swapchain = mNode.root()->findDescendant<Swapchain>();
-
 	gmd.mDynamicRenderingState = GraphicsPipeline::DynamicRenderingState();
-	gmd.mDynamicRenderingState->mColorFormats = { swapchain->format().format };
+	gmd.mDynamicRenderingState->mColorFormats = { format };
 	gmd.mDynamicRenderingState->mDepthFormat = vk::Format::eD32Sfloat;
 
-	gmd.mViewports = { vk::Viewport(0, 0, swapchain->extent().width, swapchain->extent().height, 0, 1) };
-	gmd.mScissors = { vk::Rect2D({0,0}, {swapchain->extent().width, swapchain->extent().height}) };
+	gmd.mViewports = { vk::Viewport(0, 0, extent.width, extent.height, 0, 1) };
+	gmd.mScissors = { vk::Rect2D({0,0}, extent) };
 
 	gmd.mVertexInputState   = vk::PipelineVertexInputStateCreateInfo();
 	gmd.mInputAssemblyState = vk::PipelineInputAssemblyStateCreateInfo({}, vk::PrimitiveTopology::eTriangleList);
@@ -536,11 +535,13 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 			vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eHostRead);
 	}
 
+	// post processing
+
 	// run denoiser
 
 	Image::View renderResult = get<Image::View>(frame->mImages.at("mOutput"));
 
-	if (mDenoise && denoiser) {
+	if (mDenoise && denoiser && mRandomPerFrame) {
 		bool changed = mPrevFrame && (frame->mBuffers.at("mViewTransforms").cast<TransformData>()[0].m != mPrevFrame->mBuffers.at("mViewTransforms").cast<TransformData>()[0].m).any();
 
 		if (scene->lastUpdate() > mLastSceneUpdateTime) {
@@ -573,7 +574,10 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 			Image::blit(commandBuffer, renderResult, renderTarget);
 	}
 
-	mLastResultImage = renderResult;
+	// visualize paths
+
+	if (mVisualizeLightPaths && mAlgorithm != VcmAlgorithmType::kPathTrace)
+		renderHashGrids(commandBuffer, renderTarget, *frame);
 
 	// copy VisibilityData for selected pixel
 	frame->mSelectionDataValid = false;
@@ -590,15 +594,13 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 			}
 	}
 
-	if (mVisualizeLightPaths && mAlgorithm != VcmAlgorithmType::kPathTrace)
-		renderHashGrids(commandBuffer, renderTarget, *frame);
-
+	mLastResultImage = renderResult;
 	mPrevFrame = frame;
 }
 
 void PathTracer::renderHashGrids(CommandBuffer& commandBuffer, const Image::View& renderTarget, FrameResources& frame) {
 	if (renderTarget.image()->format() != mRasterLightPathPipeline.pipelineMetadata().mDynamicRenderingState->mColorFormats[0])
-		createRasterPipeline(commandBuffer.mDevice);
+		createRasterPipeline(commandBuffer.mDevice, vk::Extent2D(renderTarget.extent().width, renderTarget.extent().height), renderTarget.image()->format());
 
 	Descriptors descriptors;
 
