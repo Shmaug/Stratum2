@@ -65,7 +65,7 @@ public:
 
 	void drawGui();
 	void render(CommandBuffer& commandBuffer, const Image::View& renderTarget);
-	void renderHashGrids(CommandBuffer& commandBuffer, const Image::View& renderTarget, FrameResources& frame);
+	void rasterLightPaths(CommandBuffer& commandBuffer, const Image::View& renderTarget, FrameResources& frame);
 
 	inline Image::View resultImage() const { return mLastResultImage; }
 

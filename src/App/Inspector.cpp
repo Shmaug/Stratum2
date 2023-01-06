@@ -162,7 +162,7 @@ void Inspector::draw() {
 						ImGui::PopID();
 						ImGui::SameLine();
 					}
-					if (ImGui::CollapsingHeader(type.name())) {
+					if (ImGui::CollapsingHeader(type.name(), ImGuiTreeNodeFlags_DefaultOpen)) {
 						if (auto it = mInspectorGuiFns.find(type); it != mInspectorGuiFns.end()) {
 							// draw gui for component
 							ImGui::Indent();

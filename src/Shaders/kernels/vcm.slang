@@ -42,23 +42,17 @@
 #ifndef gPpm
 #define gPpm (false)
 #endif
-
+// show only specific subpaths
 #ifndef gDebugPaths
 #define gDebugPaths (false)
 #endif
+// show weighted subpaths
 #ifndef gDebugPathWeights
 #define gDebugPathWeights (false)
 #endif
 
 #include "common/path.hlsli"
 #include "compat/reservoir.h"
-
-float AdjustDistance(const float dist) {
-    if (dist > 1e-3)
-        return dist - 1e-3;
-    else
-        return dist * 0.99;
-}
 
 static const AbstractCamera gCamera = { 0 };
 
@@ -74,31 +68,52 @@ struct SubPathState {
 	bool mSpecularPath; // All scattering events so far were specular
 };
 
+
+
+
+// For visibility tests: after the ray origin is offsetted with rayOffset(), TMax should be decreased
+// so the ray doesn't intersect the surface/light (resulting in an occlusion)
+float AdjustDistance(const float dist) {
+    //if (dist > 1e-4)
+    //    return dist - 1e-4;
+    //else
+        return dist * 0.99;
+}
+
 // ported from https://github.com/SmallVCM/SmallVCM/blob/master/src/vertexcm.hxx
 struct VertexCM {
     uint2 mIndex;
     RandomSampler mRng;
 
-    property uint pathIndex { get { return mIndex.y * gPushConstants.mOutputExtent.x + mIndex.x; } };
+    property uint mPathIndex { get { return mIndex.y * gPushConstants.mOutputExtent.x + mIndex.x; } };
 
     __init(const uint2 index, const int aRngOffset) {
         mIndex = index;
         mRng = RandomSampler(gPushConstants.mRandomSeed, index, aRngOffset);
     }
 
-	void StoreLightVertex(const VcmVertex vertex) {
-		const uint storedCount = gRenderParams.mLightPathLengths[pathIndex];
-		gRenderParams.mLightPathLengths[pathIndex] = storedCount + 1;
+    uint GetLightVertexIndex(const uint lightPathIndex, const uint vertexIndex) {
+        // store light paths individually, so specific path vertices can be found
+		// i.e. { path0.vertex0, ..., pathN.vertex0, path0.vertex1, ..., pathN.vertex1, ... }
+        return vertexIndex * gPushConstants.mLightSubPathCount + lightPathIndex;
+    }
+    // For regular VC: uses GetLightVertexIndex to find index in mLightPathLengths
+    // For LVC VC: atomically appends light vertices to mLightPathLengths
+    void StoreLightVertex(const VcmVertex vertex) {
+        uint idx;
+        if (gUseLVC) {
+            InterlockedAdd(gRenderParams.mLightPathLengths[0], 1, idx);
+        } else {
+			const uint storedVertices = gRenderParams.mLightPathLengths[mPathIndex];
+			gRenderParams.mLightPathLengths[mPathIndex] = storedVertices + 1;
 
-		const uint idx = storedCount * gPushConstants.mLightSubPathCount + pathIndex;
+            idx = GetLightVertexIndex(mPathIndex, storedVertices);
+        }
+
 		gRenderParams.mLightVertices[idx] = vertex;
-
         if (gUseVM) {
 			gRenderParams.mLightHashGrid.Append(vertex.mShadingData.mPosition, idx);
         }
-	}
-    VcmVertex LoadLightVertex(const uint vertexIndex) {
-        return gRenderParams.mLightVertices[vertexIndex * gPushConstants.mLightSubPathCount + pathIndex];
 	}
 
     void StoreAuxillaryData(const IntersectionResult isect, const float3 albedo) {
@@ -152,7 +167,7 @@ struct VertexCM {
 				const float3 toParticle = particle.mShadingData.mPosition - queryPos;
 				const float distSqr     = dot(toParticle, toParticle);
 
-                if (distSqr <= mergeRadiusSqr)
+                //if (distSqr <= mergeRadiusSqr)
                     ProcessVertex(aCameraState, aCameraBsdf, particle);
 			}
 		}
@@ -206,7 +221,8 @@ struct VertexCM {
 		SubPathState lightState;
 		GenerateLightSample(lightState);
 
-        gRenderParams.mLightPathLengths[pathIndex] = 0;
+		if (gUseVC && !gUseLVC)
+			gRenderParams.mLightPathLengths[mPathIndex] = 0;
 
 		//////////////////////////////////////////////////////////////////////////
 		// Trace light path
@@ -270,8 +286,8 @@ struct VertexCM {
 
 	[mutating]
 	void GenerateCameraPaths() {
-		// initialize with light trace sample
-        uint4 lightTraceSample = gRenderParams.mLightImage.Load4(int(pathIndex*16));
+        // initialize with light trace sample
+        uint4 lightTraceSample = gRenderParams.mLightImage.Load4(int(mPathIndex*16));
 		// detect overflow from atomic adds
         for (uint i = 0; i < 3; i++)
             if ((lightTraceSample.w & BIT(i)) > 0)
@@ -474,6 +490,21 @@ struct VertexCM {
         return misWeight * aLight.mRadiance;
     }
 
+    [mutating]
+	IlluminationSampleRecord sampleIlluminationReSTIR(const SubPathState aCameraState) {
+		Reservoir reservior;
+		IlluminationSampleRecord s;
+		float sampleTargetPdf;
+		for (uint i = 0; i < 32; i++) {
+			const IlluminationSampleRecord si = gScene.sampleIllumination(aCameraState.mVertex.mShadingData.mPosition, mRng.nextFloat4());
+			if (reservior.update(mRng.nextFloat(), s.mDirectPdfW, luminance(si.mRadiance))) {
+				s = si;
+			}
+		}
+		s.mIntegrationWeight = reservior.W();
+		return s;
+	}
+
     // Connects camera vertex to randomly chosen light point.
     // Returns emitted radiance multiplied by path MIS weight.
     // Has to be called AFTER updating the MIS quantities.
@@ -552,8 +583,7 @@ struct VertexCM {
     }
 
     // Connects an eye and a light vertex. Result multiplied by MIS weight, but
-    // not multiplied by vertex throughputs. Has to be called AFTER updating MIS
-    // constants. 'direction' is FROM eye TO light vertex.
+    // not multiplied by vertex throughputs. Has to be called AFTER updating MIS constants.
     float3 ConnectVertices(const SubPathState aCameraState, const BSDF aCameraBsdf, inout LightVertex aLightVertex) {
         // Get the connection
         float3 direction = aLightVertex.mShadingData.mPosition - aCameraState.mVertex.mShadingData.mPosition;
@@ -627,19 +657,34 @@ struct VertexCM {
         return contrib;
     }
 
+    // Connects an eye vertex to a light sub-path.
+    // Has to be called AFTER updating MIS constants.
     [mutating]
     void ConnectToLightPath(const SubPathState aCameraState, const BSDF aCameraBsdf) {
         if (gUseLVC) {
+			// LVC: connect to a random light vertex
+            const uint i = mRng.next() % gRenderParams.mLightPathLengths[0];
+            LightVertex lightVertex = gRenderParams.mLightVertices[i];
+            const uint fullPathLength = lightVertex.mPathLength + 1 + aCameraState.mVertex.mPathLength;
 
+            if (fullPathLength >= gPushConstants.mMinPathLength && fullPathLength <= gPushConstants.mMaxPathLength) {
+                const float3 contrib = aCameraState.mVertex.mThroughput * lightVertex.mThroughput * ConnectVertices(aCameraState, aCameraBsdf, lightVertex);
+				// the LVC paper connects to lightVertexCount/lightPathCount light vertices
+                // we only connect to one light vertex, therefore we weight its contribution by lightVertexCount/lightPathCount
+                const float w = gRenderParams.mLightPathLengths[0] / (float)gPushConstants.mLightSubPathCount;
+	            AddColor(mIndex, contrib * w, aCameraState.mVertex.mPathLength + 1, lightVertex.mPathLength + 1);
+            }
         } else {
 			// For VC, each light sub-path is assigned to a particular eye
 			// sub-path, as in traditional BPT. It is also possible to
 			// connect to vertices from any light path, but MIS should
 			// be revisited.
-			const uint count = gRenderParams.mLightPathLengths[pathIndex];
 
-			for (int i = 0; i < count; i++) {
-				LightVertex lightVertex = LoadLightVertex(i);
+            const uint pathIndex = mPathIndex % gPushConstants.mLightSubPathCount;
+            const uint count = gRenderParams.mLightPathLengths[pathIndex];
+
+            for (int i = 0; i < count; i++) {
+                LightVertex lightVertex = gRenderParams.mLightVertices[GetLightVertexIndex(pathIndex, i)];
 				const uint fullPathLength = lightVertex.mPathLength + 1 + aCameraState.mVertex.mPathLength;
 
 				if (fullPathLength < gPushConstants.mMinPathLength)
@@ -840,13 +885,13 @@ void GenerateCameraPaths(uint3 index: SV_DispatchThreadID) {
 }
 
 [shader("compute")]
-[numthreads(128, 1, 1)]
+[numthreads(64, 1, 1)]
 void ComputeHashGridIndices(uint3 index: SV_DispatchThreadID) {
     gRenderParams.mLightHashGrid.ComputeIndices(index.y * gPushConstants.mOutputExtent.x + index.x);
 }
 
 [shader("compute")]
-[numthreads(128, 1, 1)]
+[numthreads(64, 1, 1)]
 void SwizzleHashGrid(uint3 index: SV_DispatchThreadID) {
     gRenderParams.mLightHashGrid.Swizzle(index.y * gPushConstants.mOutputExtent.x + index.x);
 }

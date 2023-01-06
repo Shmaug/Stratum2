@@ -19,6 +19,7 @@ struct RenderParams {
 	StructuredBuffer<TransformData> mPrevInverseViewTransforms;
 
     RWByteAddressBuffer mLightImage;
+
     RWTexture2D<float4> mOutput;
 	RWTexture2D<float4> mAlbedo;
 	RWTexture2D<float2> mPrevUVs;
@@ -266,7 +267,8 @@ void AddColor(const uint2 index, const float3 color, const uint cameraVertices, 
 			gRenderParams.mOutput[index] += float4(color, 0);
 		return;
     }
-	gRenderParams.mOutput[index] += float4(color, 0);
+
+    gRenderParams.mOutput[index] += float4(color, 0);
 }
 
 void InterlockedAddColor(const int2 ipos, const uint2 extent, const float3 color, const uint cameraVertices, const uint lightVertices) {

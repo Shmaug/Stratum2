@@ -17,14 +17,29 @@ ImageComparer::ImageComparer(Node& node) : mNode(node) {
 
 void ImageComparer::update(CommandBuffer& commandBuffer) {
 	ProfilerScope ps("ImageComparer::update");
+
+	// copy images
 	for (auto&[original, img] : mImages|views::values) {
-		if (!img) {
-			Image::Metadata md = original.image()->metadata();
-			md.mUsage = vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eTransferSrc|vk::ImageUsageFlagBits::eTransferDst;
-			img = make_shared<Image>(commandBuffer.mDevice, original.image()->resourceName() + "/ImageComparer Copy", md);
-			Image::copy(commandBuffer, original, img);
-			img.image()->generateMipMaps(commandBuffer);
+		if (img) continue;
+
+		Image::Metadata md = original.image()->metadata();
+		md.mUsage = vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eTransferSrc|vk::ImageUsageFlagBits::eTransferDst;
+		img = make_shared<Image>(commandBuffer.mDevice, original.image()->resourceName() + "/ImageComparer Copy", md);
+
+
+		{
+			ProfilerScope ps("Image compare", &commandBuffer);
+			const Defines defines {
+				{ "COPY_KERNEL", "" },
+				{ "CONVERT_SRGB", "" },
+			};
+			mPipeline.get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, original.extent(), Descriptors{
+				{ {"gInput",0}, ImageDescriptor(original, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}) },
+				{ {"gOutput",0}, ImageDescriptor(img, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {}) },
+			});
 		}
+
+		img.image()->generateMipMaps(commandBuffer);
 	}
 
 	if (mComparing.empty()) return;
@@ -41,10 +56,13 @@ void ImageComparer::update(CommandBuffer& commandBuffer) {
 					mCurrent = c;
 			}
 
+			// if two images are selected, compute the error between them
 			if (mComparing.size() == 2) {
-				auto& resultBuffer = mCompareResult[ *mComparing.begin() + "_" + *(++mComparing.begin())];
+				const string& img0 = *mComparing.begin();
+				const string& img1 = *(++mComparing.begin());
+				Buffer::View<uint32_t>& resultBuffer = mCompareResult[ img0 + "_" + img1];
 
-				bool update = !resultBuffer;
+				bool update = !resultBuffer.buffer();
 				ImGui::SameLine();
 				ImGui::SetNextItemWidth(80);
 				if (ImGui::DragScalar("Quantization", ImGuiDataType_U32, &mQuantization)) update = true;
@@ -54,27 +72,26 @@ void ImageComparer::update(CommandBuffer& commandBuffer) {
 					update = true;
 
 				if (update) {
-					if (!resultBuffer)
+					if (!resultBuffer.buffer())
 						resultBuffer = make_shared<Buffer>(commandBuffer.mDevice, "ImageComparer/ResultBuffer", 2*sizeof(uint32_t), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
 					resultBuffer[0] = 0;
 					resultBuffer[1] = 0;
 
-					const Defines defines {
-						{"gMode", to_string((uint32_t)mMode)},
-						{"gQuantization", to_string(mQuantization)}
-					};
-
 					{
 						ProfilerScope ps("Image compare", &commandBuffer);
-						mPipeline.get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, mImages.at(*mComparing.begin()).second.extent(), Descriptors{
-							{ {"gImage1",0}, ImageDescriptor(mImages.at(*mComparing.begin()).second  , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}) },
-							{ {"gImage2",0}, ImageDescriptor(mImages.at(*++mComparing.begin()).second, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}) },
+						const Defines defines {
+							{ "gMode", to_string((uint32_t)mMode) },
+							{ "gQuantization", to_string(mQuantization) }
+						};
+						mPipeline.get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, mImages.at(img0).second.extent(), Descriptors{
+							{ {"gImage1",0}, ImageDescriptor(mImages.at(img0).second, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}) },
+							{ {"gImage2",0}, ImageDescriptor(mImages.at(img1).second, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}) },
 							{ {"gOutput",0}, resultBuffer },
 						});
 					}
 				}
 
-				if (resultBuffer) {
+				if (resultBuffer && !resultBuffer.buffer()->inFlight()) {
 					ImGui::SameLine();
 					if (resultBuffer[1])
 						ImGui::Text("OVERFLOW");

@@ -21,7 +21,6 @@ struct Params {
 
 	RWStructuredBuffer<VcmVertex> mLightVertices;
 	RWStructuredBuffer<uint> mLightPathLengths;
-	HashGrid<uint> mLightHashGrid;
     Texture2D<float4> mDepth;
 };
 

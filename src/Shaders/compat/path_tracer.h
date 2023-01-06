@@ -68,6 +68,10 @@ enum VcmAlgorithmType {
     // dVCM and dVC used for MIS
     kBpt,
 
+    // Bidirectional path tracing with a light vertex cache
+    // dVCM and dVC used for MIS
+    kBptLvc,
+
     // Vertex connection and mering
     // dVCM, dVM, and dVC used for MIS
     kVcm,
@@ -90,8 +94,9 @@ inline string to_string(const stm2::VcmAlgorithmType algorithm) {
     case stm2::VcmAlgorithmType::kPathTrace: return "Path tracing";
     case stm2::VcmAlgorithmType::kLightTrace: return "Light tracing";
 	case stm2::VcmAlgorithmType::kPpm: return "Progressive photon mapping";
-	case stm2::VcmAlgorithmType::kBpm: return "Bidirectional photon mapping";
+    case stm2::VcmAlgorithmType::kBpm: return "Bidirectional photon mapping";
     case stm2::VcmAlgorithmType::kBpt: return "Bidirectional path tracing";
+    case stm2::VcmAlgorithmType::kBptLvc: return "Bidirectional path tracing (LVC)";
     case stm2::VcmAlgorithmType::kVcm: return "Vertex connection and merging";
 	}
 }
