@@ -85,15 +85,21 @@ private:
 
 	PathTracerPushConstants mPushConstants;
 
-	bool mHalfColorPrecision = false;
 	bool mRandomPerFrame = true;
 	bool mDenoise = true;
 	bool mTonemap = true;
+
 	bool mDebugPaths = false;
 	bool mDebugPathWeights = false;
+
+	float mVmRadiusAlpha  = 0.01f;
+	float mVmRadiusFactor = 0.025f;
+
 	bool mVisualizeLightPaths = false;
 	uint32_t mVisualizeLightPathCount = 128;
-	float mVisualizeLightPathRadius = 0.0025;
+	float mVisualizeLightPathRadius = 0.00075f;
+	float mVisualizeLightPathLength = 0.05;
+	uint32_t mVisualizeSegmentIndex = -1;
 
 	VcmAlgorithmType mAlgorithm = VcmAlgorithmType::kBpt;
 	bool mUsePerformanceCounters = false;

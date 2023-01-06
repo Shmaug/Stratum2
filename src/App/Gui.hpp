@@ -8,6 +8,9 @@
 namespace stm2 {
 
 class Gui {
+private:
+	static shared_ptr<vk::raii::DescriptorPool> gImGuiDescriptorPool;
+
 public:
 	inline static void scalarField(const char* label, const vk::Format format, void* data) {
 		switch (format) {
@@ -147,7 +150,7 @@ public:
 			vk::raii::DescriptorSet descriptorSet(
 				*image.image()->mDevice,
 				ImGui_ImplVulkan_AddTexture(*sampler, *image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
-				*image.image()->mDevice.descriptorPool());
+				**gImGuiDescriptorPool);
 
 			it = gTextureIDs.emplace(image, pair{ move(descriptorSet), move(sampler) }).first;
 		}

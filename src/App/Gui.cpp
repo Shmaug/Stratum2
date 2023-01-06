@@ -12,6 +12,7 @@ namespace stm2 {
 
 unordered_map<Image::View, pair<vk::raii::DescriptorSet, vk::raii::Sampler>> Gui::gTextureIDs;
 unordered_set<Image::View> Gui::gFrameTextures;
+shared_ptr<vk::raii::DescriptorPool> Gui::gImGuiDescriptorPool;
 
 Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily, const vk::ImageLayout dstLayout, const bool clear)
 	: mRenderPass(nullptr), mQueueFamily(queueFamily), mDstLayout(dstLayout) {
@@ -43,6 +44,8 @@ Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily
 	ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 	ImGui::GetIO().ConfigWindowsMoveFromTitleBarOnly = true;
 
+	gImGuiDescriptorPool = swapchain.mDevice.descriptorPool();
+
 	ImGui_ImplGlfw_InitForVulkan(swapchain.mWindow.window(), true);
 
 	ImGui_ImplVulkan_InitInfo init_info = {};
@@ -52,7 +55,7 @@ Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily
 	init_info.QueueFamily = mQueueFamily;
 	init_info.Queue = *queue;
 	init_info.PipelineCache  = *swapchain.mDevice.pipelineCache();
-	init_info.DescriptorPool = *swapchain.mDevice.descriptorPool();
+	init_info.DescriptorPool = **gImGuiDescriptorPool;
 	init_info.Subpass = 0;
 	init_info.MinImageCount = max(swapchain.minImageCount(), 2u);
 	init_info.ImageCount    = max(swapchain.imageCount(), 2u);
@@ -90,6 +93,7 @@ Gui::~Gui() {
 	gFrameTextures.clear();
 	gTextureIDs.clear();
 	ImGui_ImplVulkan_Shutdown();
+	gImGuiDescriptorPool.reset();
 	ImGui_ImplGlfw_Shutdown();
 	ImGui::DestroyContext();
 }

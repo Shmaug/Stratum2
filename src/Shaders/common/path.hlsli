@@ -71,14 +71,22 @@ extension ShadingData {
 
 struct IlluminationSampleRecord {
     float3 mRadiance;
-    float mDistance;
+    float mIntegrationWeight;
     float3 mDirectionToLight;
+    float mDistance;
     float mDirectPdfW;
     float mEmissionPdfW;
     float mCosLight;
+    uint mFlags;
 
-    bool isSingular;
-    bool isFinite;
+    property bool isSingular {
+        get { return BF_GET(mFlags, 0, 1); }
+        set { BF_SET(mFlags, (uint)newValue, 0, 1); }
+	}
+    property bool isFinite {
+        get { return BF_GET(mFlags, 1, 1); }
+        set { BF_SET(mFlags, (uint)newValue, 1, 1); }
+	}
 };
 struct EmissionSampleRecord {
     float3 mRadiance;
@@ -105,6 +113,7 @@ extension SceneParameters {
                     r.mDirectPdfW *= gPushConstants.mEnvironmentSampleProbability;
 				r.mDistance = POS_INFINITY;
                 r.mEmissionPdfW = r.mDirectPdfW * concentricDiscPdfA() / pow2(gPushConstants.mSceneSphere.w);
+                r.mIntegrationWeight = 1 / r.mDirectPdfW;
                 r.mCosLight = 1;
                 r.isSingular = false;
                 r.isFinite = false;
@@ -133,16 +142,16 @@ extension SceneParameters {
             const SphereInstanceData sphere = reinterpret<SphereInstanceData>(instance);
             shadingData = makeSphereShadingData(sphere, transform, sphere.radius() * sampleUniformSphereCartesian(rnd.x, rnd.y));
         } else
-            return { 0 };
-
+            return { 0 }; // shouldn't happen
 
         r.mDirectionToLight = shadingData.mPosition - referencePosition;
         r.mDistance = length(r.mDirectionToLight);
         r.mDirectionToLight /= r.mDistance;
 
         r.mCosLight = -dot(shadingData.geometryNormal, r.mDirectionToLight);
-        if (r.mCosLight < 0)
-            return { 0 };
+
+		if (r.mCosLight < 0)
+            return { 0 }; // point is behind the light surface
 
         const Material m = Material(shadingData);
         pdfA *= m.emissionPdf() / shadingData.mShapeArea;
@@ -150,6 +159,7 @@ extension SceneParameters {
         r.mRadiance = m.emission();
         r.mDirectPdfW = pdfAtoW(pdfA, r.mCosLight / pow2(r.mDistance));
         r.mEmissionPdfW = pdfA * cosHemispherePdfW(r.mCosLight);
+        r.mIntegrationWeight = 1 / r.mDirectPdfW;
         r.isSingular = false;
         r.isFinite = true;
         return r;

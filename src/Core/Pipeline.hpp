@@ -60,6 +60,7 @@ public:
 	void bind(CommandBuffer& commandBuffer, const unordered_map<string, uint32_t>& dynamicOffsets = {});
 
 private:
+	shared_ptr<vk::raii::DescriptorPool> mDescriptorPool;
 	vector<shared_ptr<vk::raii::DescriptorSet>> mDescriptorSets;
 	Descriptors mDescriptors;
 };

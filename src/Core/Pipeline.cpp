@@ -6,13 +6,13 @@
 namespace stm2 {
 
 DescriptorSets::DescriptorSets(Pipeline& pipeline, const string& name) :
-	Device::Resource(pipeline.mDevice, name), mPipeline(pipeline) {
+	Device::Resource(pipeline.mDevice, name), mPipeline(pipeline), mDescriptorPool(pipeline.mDevice.descriptorPool()) {
 	// get descriptor set layouts
 	vector<vk::DescriptorSetLayout> layouts(mPipeline.descriptorSetLayouts().size());
 	ranges::transform(mPipeline.descriptorSetLayouts(), layouts.begin(), [](auto& l){ return **l; });
 
 	// allocate descriptor sets
-	vk::raii::DescriptorSets sets(*mPipeline.mDevice, vk::DescriptorSetAllocateInfo(*mPipeline.mDevice.descriptorPool(), layouts));
+	vk::raii::DescriptorSets sets(*mPipeline.mDevice, vk::DescriptorSetAllocateInfo(**mDescriptorPool, layouts));
 
 	mDescriptorSets.resize(sets.size());
 	for (uint32_t i = 0; i < sets.size(); i++) {

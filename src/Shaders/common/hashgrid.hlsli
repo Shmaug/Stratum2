@@ -24,7 +24,7 @@ struct HashGrid<T> {
 
 
 	float GetCellSize(const float3 aPosition) {
-		return gPushConstants.VcmMergeRadius()*2;
+		return gPushConstants.mMergeRadius*2;
 		//if (aCellPixelSize <= 0)
 		//	return aMinCellSize;
 		//const float cameraDistance = length(gCamera.transform.transformPoint(0) - aPosition);
@@ -44,10 +44,11 @@ struct HashGrid<T> {
 		// compute index in hash grid
 		const int3 p = int3(floor(aPosition/cellSize)) + offset;
 		const uint checksum = max(1, xxhash32(asuint(cellSize) + xxhash32(p.z + xxhash32(p.y + xxhash32(p.x)))));
-		uint cellIndex = pcg(asuint(cellSize) + pcg(p.z + pcg(p.y + pcg(p.x)))) % mCellCount;
+		const uint baseCellIndex = pcg(asuint(cellSize) + pcg(p.z + pcg(p.y + pcg(p.x)))) % mCellCount;
 
 		// resolve hash collisions with linear probing
 		for (uint i = 0; i < 32; i++) {
+			const uint cellIndex = (baseCellIndex + i) % mCellCount;
 			// find cell with matching checksum, or empty cell if inserting
 			if (bInserting) {
 				uint prevChecksum;
@@ -58,7 +59,6 @@ struct HashGrid<T> {
 				if (mChecksums[cellIndex] == checksum)
 					return cellIndex;
 			}
-			cellIndex = (cellIndex + 1) % mCellCount;
         }
 
 		// failed to find cell (hashgrid full)
@@ -80,7 +80,7 @@ struct HashGrid<T> {
 		uint appendIndex;
 		InterlockedAdd(mAppendIndices[0][0], 1, appendIndex);
 		mAppendIndices[1 + appendIndex] = uint2(cellIndex, indexInCell);
-		mAppendData[1 + appendIndex] = data;
+		mAppendData[appendIndex] = data;
 
 		// first time the cell was used
         if (gPerformanceCounters && indexInCell == 0)
@@ -107,6 +107,6 @@ struct HashGrid<T> {
 		const uint indexInCell = data[1];
 
 		const uint dstIndex = mIndices[cellIndex] + indexInCell;
-		mData[dstIndex] = mAppendData[1 + aAppendIndex];
+		mData[dstIndex] = mAppendData[aAppendIndex];
 	}
 };

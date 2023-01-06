@@ -84,7 +84,7 @@ Image::PixelData Image::loadFile(Device& device, const filesystem::path& filenam
 
 		auto buf = make_shared<Buffer>(device, filename.stem().string() + "/Staging", img->m_memSlicePitch, vk::BufferUsageFlagBits::eTransferSrc|vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
 		memcpy(buf->data(), img->m_mem, buf->size());
-		return Image::PixelData{buf, dxgiToVulkan(dds.GetFormat(), false), vk::Extent3D(dds.GetWidth(), dds.GetHeight(), dds.GetDepth())};
+		return Image::PixelData{buf, dxgiToVulkan(dds.GetFormat(), desiredChannels == 4), vk::Extent3D(dds.GetWidth(), dds.GetHeight(), dds.GetDepth())};
 	} else {
 		int x,y,channels;
 		stbi_info(filename.string().c_str(), &x, &y, &channels);

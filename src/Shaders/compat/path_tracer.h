@@ -18,39 +18,33 @@ struct VcmVertex {
 
 
 struct PathTracerPushConstants {
-    float4 mSceneSphere;
-
-    uint mEnvironmentMaterialAddress;
-    float mEnvironmentSampleProbability;
-
-	uint mViewCount;
-	uint mLightCount;
-
-	uint mMinPathLength;
-    uint mMaxPathLength;
-
+    uint2 mOutputExtent;
 	uint mScreenPixelCount;  // Number of pixels
 	uint mLightSubPathCount; // Number of light sub-paths
 
-    uint mRandomSeed;
+    float4 mSceneSphere;
 
-	float mRadiusAlpha;  // Radius reduction rate parameter
-	float mRadiusFactor; // Initial radius = scene radius * radius factor
-    uint mVmIteration;
+	uint mViewCount;
+	uint mLightCount;
+    uint mEnvironmentMaterialAddress;
+    float mEnvironmentSampleProbability;
 
-	uint mHashGridCellCount;
+	uint mMinPathLength;
+    uint mMaxPathLength;
 	uint mLightImageQuantization;
+	uint mHashGridCellCount;
+
+    float mMergeRadius;
+    float mMisVmWeightFactor;
+    float mMisVcWeightFactor;
+    float mVmNormalization;
+
+    uint mRandomSeed;
 
     uint mDebugCameraPathLength;
     uint mDebugLightPathLength;
 
-    float VcmMergeRadius() {
-        // Setup our radius, 1st iteration has aIteration == 0, thus offset
-        float radius = mRadiusFactor * mSceneSphere[3];
-        radius /= pow(float(mVmIteration + 1), 0.5f * (1 - mRadiusAlpha));
-        // Purely for numeric stability
-        return max(radius, 1e-7f);
-    }
+    uint pad;
 };
 
 enum VcmAlgorithmType {
@@ -80,6 +74,11 @@ enum VcmAlgorithmType {
 
 	kNumVcmAlgorithmType
 };
+
+// Mis power
+inline float Mis(float aPdf) {
+    return pow2(aPdf);
+}
 
 STM_NAMESPACE_END
 

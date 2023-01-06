@@ -4,6 +4,7 @@
 #include "hash.hpp"
 
 #include <slang/slang.h>
+#include <portable-file-dialogs.h>
 
 namespace stm2 {
 
@@ -17,50 +18,59 @@ Shader::Shader(Device& device, const filesystem::path& sourceFile, const string&
 	slang::createGlobalSession(&session);
 
 	slang::ICompileRequest* request;
-	session->createCompileRequest(&request);
+	int targetIndex, entryPointIndex;
+	do {
+		session->createCompileRequest(&request);
 
-	// process compile args
+		// process compile args
 
-	vector<const char*> args;
-	for (const string& arg : compileArgs) args.emplace_back(arg.c_str());
-	if (SLANG_FAILED(request->processCommandLineArguments(args.data(), args.size())))
-		cerr << "Warning: Failed to process compile arguments while compiling " << resourceName() << endl;
+		vector<const char*> args;
+		for (const string& arg : compileArgs) args.emplace_back(arg.c_str());
+		if (SLANG_FAILED(request->processCommandLineArguments(args.data(), args.size())))
+			cerr << "Warning: Failed to process compile arguments while compiling " << resourceName() << endl;
 
-	// defines
+		// defines
 
-	int targetIndex = request->addCodeGenTarget(SLANG_SPIRV);
-	request->addPreprocessorDefine("__SLANG__", "");
-	request->addPreprocessorDefine("__HLSL__", "");
-	for (const auto&[n,d] : defines)
-		request->addPreprocessorDefine(n.c_str(), d.c_str());
+		targetIndex = request->addCodeGenTarget(SLANG_SPIRV);
+		request->addPreprocessorDefine("__SLANG__", "");
+		request->addPreprocessorDefine("__HLSL__", "");
+		for (const auto&[n,d] : defines)
+			request->addPreprocessorDefine(n.c_str(), d.c_str());
 
-	// include paths
+		// include paths
 
-	for (const string& inc : mDevice.mInstance.findArguments("shaderInclude"))
-		request->addSearchPath(inc.c_str());
+		for (const string& inc : mDevice.mInstance.findArguments("shaderInclude"))
+			request->addSearchPath(inc.c_str());
 
-	const int translationUnitIndex = request->addTranslationUnit(SLANG_SOURCE_LANGUAGE_SLANG, nullptr);
-	request->addTranslationUnitSourceFile(translationUnitIndex, sourceFile.string().c_str());
+		const int translationUnitIndex = request->addTranslationUnit(SLANG_SOURCE_LANGUAGE_SLANG, nullptr);
+		request->addTranslationUnitSourceFile(translationUnitIndex, sourceFile.string().c_str());
 
-	const int entryPointIndex = request->addEntryPoint(translationUnitIndex, entryPoint.c_str(), SLANG_STAGE_NONE);
-	request->setTargetProfile(targetIndex, session->findProfile(profile.c_str()));
-	request->setTargetFloatingPointMode(targetIndex, SLANG_FLOATING_POINT_MODE_FAST);
+		entryPointIndex = request->addEntryPoint(translationUnitIndex, entryPoint.c_str(), SLANG_STAGE_NONE);
+		request->setTargetProfile(targetIndex, session->findProfile(profile.c_str()));
+		//request->setTargetFloatingPointMode(targetIndex, SLANG_FLOATING_POINT_MODE_FAST);
 
-	// compile
+		// compile
 
-	SlangResult r = request->compile();
-	const char* msg = request->getDiagnosticOutput();
-	cout << "Compiled " << sourceFile << " " << entryPoint;
-	for (const auto&[d,v] : defines)
-		cout << " -D" << d << "=" << v;
-	cout << endl << msg;
-	if (SLANG_FAILED(r))
-		throw runtime_error(msg);
+		SlangResult r = request->compile();
+		const char* msg = request->getDiagnosticOutput();
+		cout << "Compiled " << sourceFile << " " << entryPoint;
+		for (const auto&[d,v] : defines)
+			cout << " -D" << d << "=" << v;
+		cout << endl << msg;
+		if (SLANG_FAILED(r)) {
+			pfd::message n("Attempt recompilation?", "Retry recompilation?", pfd::choice::yes_no);
+			if (n.result() == pfd::button::yes) {
+				continue;
+			} else
+				throw runtime_error(msg);
+		}
+		break;
+	} while (true);
 
 	// get spirv
 
 	slang::IBlob* blob;
-	r = request->getEntryPointCodeBlob(entryPointIndex, targetIndex, &blob);
+	SlangResult r = request->getEntryPointCodeBlob(entryPointIndex, targetIndex, &blob);
 	//if (SLANG_FAILED(r)) {
 	//	std::stringstream stream;
 	//	stream << "facility 0x" << std::setfill('0') << std::setw(4) << std::hex << SLANG_GET_RESULT_FACILITY(r);

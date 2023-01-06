@@ -129,20 +129,20 @@ vk::raii::CommandPool& Device::commandPool(const uint32_t queueFamily) {
 	return mCommandPools.emplace(queueFamily, vk::raii::CommandPool(mDevice, vk::CommandPoolCreateInfo(vk::CommandPoolCreateFlagBits::eResetCommandBuffer, queueFamily))).first->second;
 }
 
-vk::raii::DescriptorPool& Device::descriptorPool() {
-	if (!*mDescriptorPool) {
+const shared_ptr<vk::raii::DescriptorPool>& Device::descriptorPool() {
+	if (!mDescriptorPool) {
 		vector<vk::DescriptorPoolSize> poolSizes {
-			vk::DescriptorPoolSize(vk::DescriptorType::eSampler,              min(8192u, mLimits.maxDescriptorSetSamplers)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, min(8192u, mLimits.maxDescriptorSetSampledImages)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eInputAttachment,      min(8192u, mLimits.maxDescriptorSetInputAttachments)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eSampledImage,         min(8192u, mLimits.maxDescriptorSetSampledImages)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eStorageImage,         min(8192u, mLimits.maxDescriptorSetStorageImages)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer,        min(8192u, mLimits.maxDescriptorSetUniformBuffers)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eUniformBufferDynamic, min(8192u, mLimits.maxDescriptorSetUniformBuffersDynamic)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer,        min(8192u, mLimits.maxDescriptorSetStorageBuffers)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eStorageBufferDynamic, min(8192u, mLimits.maxDescriptorSetStorageBuffersDynamic))
+			vk::DescriptorPoolSize(vk::DescriptorType::eSampler,              min(16384u, mLimits.maxDescriptorSetSamplers)),
+			vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, min(16384u, mLimits.maxDescriptorSetSampledImages)),
+			vk::DescriptorPoolSize(vk::DescriptorType::eInputAttachment,      min(16384u, mLimits.maxDescriptorSetInputAttachments)),
+			vk::DescriptorPoolSize(vk::DescriptorType::eSampledImage,         min(16384u, mLimits.maxDescriptorSetSampledImages)),
+			vk::DescriptorPoolSize(vk::DescriptorType::eStorageImage,         min(16384u, mLimits.maxDescriptorSetStorageImages)),
+			vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer,        min(16384u, mLimits.maxDescriptorSetUniformBuffers)),
+			vk::DescriptorPoolSize(vk::DescriptorType::eUniformBufferDynamic, min(16384u, mLimits.maxDescriptorSetUniformBuffersDynamic)),
+			vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer,        min(16384u, mLimits.maxDescriptorSetStorageBuffers)),
+			vk::DescriptorPoolSize(vk::DescriptorType::eStorageBufferDynamic, min(16384u, mLimits.maxDescriptorSetStorageBuffersDynamic))
 		};
-		mDescriptorPool = vk::raii::DescriptorPool(mDevice, vk::DescriptorPoolCreateInfo(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet, 1024, poolSizes));
+		mDescriptorPool = make_shared<vk::raii::DescriptorPool>(mDevice, vk::DescriptorPoolCreateInfo(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet, 4096, poolSizes));
 	}
 	return mDescriptorPool;
 }

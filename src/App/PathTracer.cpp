@@ -24,8 +24,6 @@ PathTracer::PathTracer(Node& node) : mNode(node) {
 
 	mPushConstants.mMinPathLength = 0;
 	mPushConstants.mMaxPathLength = 6;
-	mPushConstants.mRadiusAlpha = 0.01f;
-	mPushConstants.mRadiusFactor = 0.05f;
 	mPushConstants.mEnvironmentSampleProbability = 0.5f;
 	mPushConstants.mHashGridCellCount = 131072;
 	mPushConstants.mLightImageQuantization = 16384;
@@ -166,24 +164,36 @@ void PathTracer::drawGui() {
 		bool changed = false;
 		if (Gui::enumDropdown<VcmAlgorithmType>("Algorithm", mAlgorithm, VcmAlgorithmType::kNumVcmAlgorithmType)) changed = true;
 		if (ImGui::Checkbox("Random frame seed", &mRandomPerFrame)) changed = true;
-		if (ImGui::Checkbox("Half precision", &mHalfColorPrecision)) changed = true;
 		if (ImGui::Checkbox("Performance counters", &mUsePerformanceCounters)) changed = true;
-		ImGui::Checkbox("Show light paths", &mVisualizeLightPaths);
-		ImGui::PushItemWidth(60);
-		if (mVisualizeLightPaths) {
-			ImGui::DragScalar("Path count", ImGuiDataType_U32, &mVisualizeLightPathCount);
-			ImGui::DragFloat("Line radius", &mVisualizeLightPathRadius, .001f);
-		}
 
-		if (ImGui::DragScalar("Light image quantization", ImGuiDataType_U32, &mPushConstants.mLightImageQuantization)) changed = true;
+		ImGui::PushItemWidth(60);
+
+
 		if (ImGui::DragScalar("Max path length", ImGuiDataType_U32, &mPushConstants.mMaxPathLength)) changed = true;
 		if (ImGui::DragScalar("Min path length", ImGuiDataType_U32, &mPushConstants.mMinPathLength)) changed = true;
-		if (ImGui::SliderFloat("Light path count", &mLightPathPercent, 0, 1)) changed = true;
+
+		if (mAlgorithm != VcmAlgorithmType::kPathTrace) {
+			if (ImGui::DragScalar("Light image quantization", ImGuiDataType_U32, &mPushConstants.mLightImageQuantization)) changed = true;
+			if (ImGui::SliderFloat("Light path count", &mLightPathPercent, 0, 1)) changed = true;
+
+			ImGui::Checkbox("Visualize light paths", &mVisualizeLightPaths);
+			if (mVisualizeLightPaths) {
+				ImGui::DragScalar("Num paths visualized", ImGuiDataType_U32, &mVisualizeLightPathCount);
+				ImGui::DragScalar("Segment index", ImGuiDataType_U32, &mVisualizeSegmentIndex);
+				ImGui::DragFloat("Line width", &mVisualizeLightPathRadius, .0005f);
+				ImGui::DragFloat("Line length", &mVisualizeLightPathLength, .0005f);
+			}
+		}
+		if (mAlgorithm == VcmAlgorithmType::kPpm || mAlgorithm == VcmAlgorithmType::kBpm || mAlgorithm == VcmAlgorithmType::kVcm) {
+			if (ImGui::DragScalar("Hash grid size", ImGuiDataType_U32, &mPushConstants.mHashGridCellCount)) changed = true;
+			if (ImGui::SliderFloat("Merge radius alpha", &mVmRadiusAlpha, -1, 1)) changed = true;
+			if (ImGui::SliderFloat("Merge radius factor", &mVmRadiusFactor, 0, 1)) changed = true;
+			ImGui::Text("Current merge radius: %f", mPushConstants.mMergeRadius);
+		}
+
 		if (mPushConstants.mEnvironmentMaterialAddress != -1 && mPushConstants.mLightCount > 0)
 			if (ImGui::SliderFloat("Environment sample probability", &mPushConstants.mEnvironmentSampleProbability, 0, 1)) changed = true;
-		if (ImGui::DragScalar("Hash grid size", ImGuiDataType_U32, &mPushConstants.mHashGridCellCount)) changed = true;
-		if (ImGui::SliderFloat("Radius alpha", &mPushConstants.mRadiusAlpha, -1, 1)) changed = true;
-		if (ImGui::SliderFloat("Radius factor", &mPushConstants.mRadiusFactor, 0, 1)) changed = true;
+
 		ImGui::PopItemWidth();
 
 		if (ImGui::Checkbox("Debug paths", &mDebugPaths)) changed = true;
@@ -370,18 +380,19 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		});
 	}
 
-	if (mRandomPerFrame) mPushConstants.mRandomSeed = rand();
-	mPushConstants.mEnvironmentMaterialAddress = frame->mSceneData->mEnvironmentMaterialAddress;
-	mPushConstants.mLightCount = frame->mSceneData->mLightCount;
+	const vk::Extent3D extent = renderTarget.extent();
+
+	mPushConstants.mOutputExtent = uint2(extent.width, extent.height);
+	mPushConstants.mScreenPixelCount = extent.width * extent.height;
+	mPushConstants.mLightSubPathCount = uint32_t(mPushConstants.mScreenPixelCount * mLightPathPercent);
 
 	const float3 center = (frame->mSceneData->mAabbMin + frame->mSceneData->mAabbMax) / 2;
 	mPushConstants.mSceneSphere = float4(center[0], center[1], center[2], length<float,3>(frame->mSceneData->mAabbMax - center));
-	mPushConstants.mVmIteration = (mDenoise && denoiser && denoiser->reprojection()) ? denoiser->accumulatedFrames() : 0;
 
-	const vk::Extent3D extent = renderTarget.extent();
+	mPushConstants.mEnvironmentMaterialAddress = frame->mSceneData->mEnvironmentMaterialAddress;
+	mPushConstants.mLightCount = frame->mSceneData->mLightCount;
 
-	mPushConstants.mScreenPixelCount = extent.width * extent.height;
-	mPushConstants.mLightSubPathCount = uint32_t(mPushConstants.mScreenPixelCount * mLightPathPercent);
+	if (mRandomPerFrame) mPushConstants.mRandomSeed = rand();
 
 	const uint32_t maxLightVertices = mPushConstants.mLightSubPathCount*mPushConstants.mMaxPathLength;
 
@@ -389,12 +400,10 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 	{
 		ProfilerScope ps("Allocate data", &commandBuffer);
 
-
-		auto format = mHalfColorPrecision ? vk::Format::eR16G16B16A16Sfloat : vk::Format::eR32G32B32A32Sfloat;
 		auto usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst;
 
-		frame->getImage("mOutput",     extent, format, usage);
-		frame->getImage("mAlbedo",     extent, format, usage);
+		frame->getImage("mOutput",     extent, vk::Format::eR32G32B32A32Sfloat, usage);
+		frame->getImage("mAlbedo",     extent, vk::Format::eR16G16B16A16Sfloat, usage);
 		frame->getImage("mPrevUVs",    extent, vk::Format::eR32G32Sfloat, usage);
 		frame->getImage("mVisibility", extent, vk::Format::eR32G32Uint, usage);
 		frame->getImage("mDepth" ,     extent, vk::Format::eR32G32B32A32Sfloat, usage);
@@ -405,7 +414,7 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 
 		frame->getBuffer<uint> ("mLightHashGrid.mChecksums", mPushConstants.mHashGridCellCount, vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
 		frame->getBuffer<uint> ("mLightHashGrid.mCounters", mPushConstants.mHashGridCellCount, vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
-		frame->getBuffer<uint2>("mLightHashGrid.mAppendIndices", maxLightVertices, vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
+		frame->getBuffer<uint2>("mLightHashGrid.mAppendIndices", 1+maxLightVertices, vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
 		frame->getBuffer<uint> ("mLightHashGrid.mAppendData", maxLightVertices);
 		frame->getBuffer<uint> ("mLightHashGrid.mIndices", mPushConstants.mHashGridCellCount);
 		frame->getBuffer<uint> ("mLightHashGrid.mData", maxLightVertices);
@@ -450,6 +459,29 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		}
 	}
 
+	// merge radius, MIS quantities
+	{
+		const uint32_t vmIteration = (mDenoise && denoiser) ? denoiser->accumulatedFrames() : 0;
+
+        // Setup our radius, 1st iteration has aIteration == 0, thus offset
+        float radius = mVmRadiusFactor * mPushConstants.mSceneSphere[3];
+        radius /= pow(float(vmIteration + 1), 0.5f * (1 - mVmRadiusAlpha));
+        // Purely for numeric stability
+        mPushConstants.mMergeRadius = max(radius, 1e-7f);
+
+        const float mergeRadiusSqr = pow2(mPushConstants.mMergeRadius);
+
+        // Factor used to normalise vertex merging contribution.
+        // We divide the summed up energy by disk radius and number of light paths
+        mPushConstants.mVmNormalization = 1.f / (mergeRadiusSqr * M_PI * mPushConstants.mLightSubPathCount);
+
+        // MIS weight constant [tech. rep. (20)], with n_VC = 1 and n_VM = mLightPathCount
+        const float etaVCM = (M_PI * mergeRadiusSqr) * mPushConstants.mLightSubPathCount;
+        mPushConstants.mMisVmWeightFactor = defines.find("gUseVM") != defines.end() ? Mis(etaVCM) : 0.f;
+        mPushConstants.mMisVcWeightFactor = defines.find("gUseVC") != defines.end() ? Mis(1.f / etaVCM) : 0.f;
+	}
+
+
 	// create mDescriptorSets
 	{
 		ProfilerScope ps("Assign descriptors", &commandBuffer);
@@ -468,7 +500,7 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		frame->mDescriptorSets = mRenderPipelines[eGenerateLightPaths].get(commandBuffer.mDevice, defines)->getDescriptorSets(descriptors);
 	}
 
-	// clear light image
+	// clear light image and hashgrid
 	{
 		frame->mBuffers.at("mLightImage").fill(commandBuffer, 0);
 		frame->mBuffers.at("mLightHashGrid.mChecksums").fill(commandBuffer, 0);
@@ -664,14 +696,14 @@ void PathTracer::renderHashGrids(CommandBuffer& commandBuffer, const Image::View
 		commandBuffer->bindPipeline(vk::PipelineBindPoint::eGraphics, ***lightPathPipeline);
 		descriptorSets->bind(commandBuffer);
 		lightPathPipeline->pushConstants(commandBuffer, {
-			{ "mHashGridCellCount", mPushConstants.mHashGridCellCount },
-			{ "mVmIteration", mPushConstants.mVmIteration },
-			{ "mSceneSphere", mPushConstants.mSceneSphere },
-			{ "mHashGridRadiusFactor", mPushConstants.mRadiusFactor },
-			{ "mHashGridRadiusAlpha", mPushConstants.mRadiusAlpha },
 			{ "mLightSubPathCount", mPushConstants.mLightSubPathCount },
-			{ "mLineRadius", mVisualizeLightPathRadius } });
-		commandBuffer->draw(mPushConstants.mMaxPathLength*6, min(mVisualizeLightPathCount, mPushConstants.mLightSubPathCount), 0, 0);
+			{ "mHashGridCellCount", mPushConstants.mHashGridCellCount },
+			{ "mSegmentIndex", mVisualizeSegmentIndex },
+			{ "mLineRadius", mVisualizeLightPathRadius },
+			{ "mLineLength", mVisualizeLightPathLength },
+			{ "mMergeRadius", mPushConstants.mMergeRadius },
+		});
+		commandBuffer->draw((mPushConstants.mMaxPathLength+1)*6, min(mVisualizeLightPathCount, mPushConstants.mLightSubPathCount), 0, 0);
 
 		commandBuffer.trackResource(lightPathPipeline);
 		commandBuffer.trackResource(descriptorSets);

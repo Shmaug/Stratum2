@@ -560,7 +560,7 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 		meshVertexInfos.emplace_back(
 			appendVertexBuffer(prim->mMesh->indices().buffer()), (uint32_t)prim->mMesh->indices().offset(), (uint32_t)prim->mMesh->indices().stride(),
 			appendVertexBuffer(positions.buffer()), (uint32_t)positions.offset() + positionsDesc.mOffset, positionsDesc.mStride,
-			appendVertexBuffer(normals.buffer()), (uint32_t)normals.offset() + normalsDesc.mOffset, normalsDesc.mStride,
+			appendVertexBuffer(normals.buffer())  , (uint32_t)normals.offset()   + normalsDesc.mOffset  , normalsDesc.mStride,
 			appendVertexBuffer(texcoords.buffer()), (uint32_t)texcoords.offset() + texcoordsDesc.mOffset, texcoordsDesc.mStride);
 
 		const uint32_t materialAddress = appendMaterialData(prim->mMaterial.get());
@@ -888,7 +888,7 @@ void LookAt(const float3 eye, const float3 fwd, const float3 up, float* m16) {
 }
 bool EditTransform(float* view, float* projection, Eigen::Matrix4f& parent, Eigen::Matrix4f& matrix) {
 	static ImGuizmo::OPERATION mCurrentGizmoOperation = ImGuizmo::ROTATE;
-	static ImGuizmo::MODE mCurrentGizmoMode = ImGuizmo::WORLD;
+	static ImGuizmo::MODE mCurrentGizmoMode = ImGuizmo::LOCAL;
 	static bool useSnap = false;
 	static float3 snapTranslation = float3::Constant(0.05f);
 	static float3 snapAngle = float3::Constant(M_PI/8);

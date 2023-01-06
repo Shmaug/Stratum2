@@ -143,18 +143,15 @@ shared_ptr<Node> Scene::loadAssimp(CommandBuffer& commandBuffer, const filesyste
 	}
 
 	if (scene->HasMeshes()) {
-		vk::BufferUsageFlags bufferUsage = vk::BufferUsageFlagBits::eVertexBuffer|vk::BufferUsageFlagBits::eIndexBuffer|vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eTransferSrc;
-		#ifdef VK_KHR_buffer_device_address
-		bufferUsage |= vk::BufferUsageFlagBits::eShaderDeviceAddress;
-		bufferUsage |= vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
-		#endif
-
 		cout << "Loading meshes...";
 
-		vector<Buffer::View<float3>> positions_tmp(scene->mNumMeshes);
-		vector<Buffer::View<float3>> normals_tmp(scene->mNumMeshes);
-		vector<Buffer::View<float2>> uvs_tmp(scene->mNumMeshes);
-		vector<Buffer::View<uint32_t>> indices_tmp(scene->mNumMeshes);
+		size_t vertexDataSize = 0;
+		size_t indexDataSize = 0;
+
+		vector<size_t> positionsOffsets(scene->mNumMeshes);
+		vector<size_t> normalsOffsets(scene->mNumMeshes);
+		vector<size_t> uvsOffsets(scene->mNumMeshes);
+		vector<size_t> indicesOffsets(scene->mNumMeshes);
 
 		for (int i = 0; i < scene->mNumMeshes; i++) {
 			cout << "\rCreating vertex buffers " << (i+1) << "/" << scene->mNumMeshes;
@@ -164,13 +161,24 @@ shared_ptr<Node> Scene::loadAssimp(CommandBuffer& commandBuffer, const filesyste
 			if (!(m->mPrimitiveTypes & aiPrimitiveType_TRIANGLE) || (m->mPrimitiveTypes & ~aiPrimitiveType_TRIANGLE) != 0)
 				continue;
 
-			positions_tmp[i] = make_shared<Buffer>(commandBuffer.mDevice, "tmp vertices", m->mNumVertices*sizeof(float3) , vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
-			normals_tmp[i]   = make_shared<Buffer>(commandBuffer.mDevice, "tmp normals" , m->mNumVertices*sizeof(float3) , vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
-			indices_tmp[i]   = make_shared<Buffer>(commandBuffer.mDevice, "tmp indices" , m->mNumFaces*3*sizeof(uint32_t), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
-			if (m->GetNumUVChannels() >= 1)
-				uvs_tmp[i]   = make_shared<Buffer>(commandBuffer.mDevice, "tmp uvs"     , m->mNumVertices*sizeof(float2) , vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+			positionsOffsets[i] = vertexDataSize;
+			vertexDataSize += m->mNumVertices*3;
+
+			normalsOffsets[i] = vertexDataSize;
+			vertexDataSize += m->mNumVertices*3;
+
+			if (m->GetNumUVChannels() > 0) {
+				uvsOffsets[i] = vertexDataSize;
+				vertexDataSize += m->mNumVertices*2;
+			}
+
+			indicesOffsets[i] = indexDataSize;
+			indexDataSize += m->mNumFaces*3;
 		}
 		cout << endl;
+
+		Buffer::View<float> vertexBufferTmp   = make_shared<Buffer>(commandBuffer.mDevice, "tmp vertices" , vertexDataSize*sizeof(float), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+		Buffer::View<uint32_t> indexBufferTmp = make_shared<Buffer>(commandBuffer.mDevice, "tmp indices" , indexDataSize*sizeof(uint32_t), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
 
 		// copy vertex data to staging buffers
 		auto copyVertices = [&](const uint32_t i) {
@@ -178,19 +186,26 @@ shared_ptr<Node> Scene::loadAssimp(CommandBuffer& commandBuffer, const filesyste
 			if (!(m->mPrimitiveTypes & aiPrimitiveType_TRIANGLE) || (m->mPrimitiveTypes & ~aiPrimitiveType_TRIANGLE) != 0)
 				return;
 
+			const size_t offsetPos = positionsOffsets[i];
 			for (int vi = 0; vi < m->mNumVertices; vi++)
-				positions_tmp[i][vi] = float3((float)m->mVertices[vi].x, (float)m->mVertices[vi].y, (float)m->mVertices[vi].z);
-			for (int vi = 0; vi < m->mNumVertices; vi++)
-				normals_tmp[i][vi] = float3((float)m->mNormals[vi].x, (float)m->mNormals[vi].y, (float)m->mNormals[vi].z);
-			if (m->GetNumUVChannels() >= 1)
-				for (int vi = 0; vi < m->mNumVertices; vi++)
-					uvs_tmp[i][vi] = float2(m->mTextureCoords[0][vi].x, m->mTextureCoords[0][vi].y);
+				float3::Map(&vertexBufferTmp[offsetPos + 3*vi]) = float3((float)m->mVertices[vi].x, (float)m->mVertices[vi].y, (float)m->mVertices[vi].z);
 
+			const size_t offsetNorm = normalsOffsets[i];
+			for (int vi = 0; vi < m->mNumVertices; vi++)
+				float3::Map(&vertexBufferTmp[offsetNorm + 3*vi]) = float3((float)m->mNormals[vi].x, (float)m->mNormals[vi].y, (float)m->mNormals[vi].z);
+
+			if (m->GetNumUVChannels() >= 1) {
+				const size_t offsetUv = uvsOffsets[i];
+				for (int vi = 0; vi < m->mNumVertices; vi++)
+					float2::Map(&vertexBufferTmp[offsetUv + 2*vi]) = float2((float)m->mTextureCoords[0][vi].x, (float)m->mTextureCoords[0][vi].y);
+			}
+
+			const size_t offsetIdx = indicesOffsets[i];
 			for (int fi = 0; fi < m->mNumFaces; fi++) {
 				const uint32_t idx = fi*3;
-				indices_tmp[i][idx+0] = m->mFaces[fi].mIndices[0];
-				indices_tmp[i][idx+1] = m->mFaces[fi].mIndices[1];
-				indices_tmp[i][idx+2] = m->mFaces[fi].mIndices[2];
+				indexBufferTmp[offsetIdx + idx+0] = m->mFaces[fi].mIndices[0];
+				indexBufferTmp[offsetIdx + idx+1] = m->mFaces[fi].mIndices[1];
+				indexBufferTmp[offsetIdx + idx+2] = m->mFaces[fi].mIndices[2];
 			}
 		};
 
@@ -201,6 +216,18 @@ shared_ptr<Node> Scene::loadAssimp(CommandBuffer& commandBuffer, const filesyste
 		cout << "Copying vertex data...";
 		for (thread& t : threads) if (t.joinable()) t.join();
 		cout << endl;
+
+
+		vk::BufferUsageFlags bufferUsage = vk::BufferUsageFlagBits::eTransferSrc|vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer;
+		#ifdef VK_KHR_buffer_device_address
+		bufferUsage |= vk::BufferUsageFlagBits::eShaderDeviceAddress;
+		bufferUsage |= vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
+		#endif
+
+		Buffer::View<float> vertexBuffer   = make_shared<Buffer>(commandBuffer.mDevice, filename.stem().string() + "/Vertices" , vertexDataSize*sizeof(float), bufferUsage|vk::BufferUsageFlagBits::eVertexBuffer);
+		Buffer::View<uint32_t> indexBuffer = make_shared<Buffer>(commandBuffer.mDevice, filename.stem().string() + "/Indices" , indexDataSize*sizeof(uint32_t), bufferUsage|vk::BufferUsageFlagBits::eIndexBuffer);
+		Buffer::copy(commandBuffer, vertexBufferTmp, vertexBuffer);
+		Buffer::copy(commandBuffer, indexBufferTmp , indexBuffer);
 
 		// construct meshes
 
@@ -213,30 +240,20 @@ shared_ptr<Node> Scene::loadAssimp(CommandBuffer& commandBuffer, const filesyste
 			if (!(m->mPrimitiveTypes & aiPrimitiveType_TRIANGLE) || (m->mPrimitiveTypes & ~aiPrimitiveType_TRIANGLE) != 0)
 				continue;
 
-			vk::BufferUsageFlags bufferUsage = vk::BufferUsageFlagBits::eTransferSrc|vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer;
-			#ifdef VK_KHR_buffer_device_address
-			bufferUsage |= vk::BufferUsageFlagBits::eShaderDeviceAddress;
-			bufferUsage |= vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
-			#endif
-
 			Mesh::Vertices vertices;
+
 			vertices[Mesh::VertexAttributeType::ePosition].emplace_back(
-				make_shared<Buffer>(commandBuffer.mDevice, filename.stem().string() + " vertices", positions_tmp[i].sizeBytes(), bufferUsage|vk::BufferUsageFlagBits::eVertexBuffer),
-				Mesh::VertexAttributeDescription{ (uint32_t)sizeof(float3), vk::Format::eR32G32B32Sfloat, 0, vk::VertexInputRate::eVertex });
-			vertices[Mesh::VertexAttributeType::eNormal].emplace_back(
-				make_shared<Buffer>(commandBuffer.mDevice, filename.stem().string() + " normals", normals_tmp[i].sizeBytes(), bufferUsage|vk::BufferUsageFlagBits::eVertexBuffer),
+				Buffer::View<byte>(vertexBuffer.buffer(), positionsOffsets[i]*sizeof(float), m->mNumVertices*3*sizeof(float)),
 				Mesh::VertexAttributeDescription{ (uint32_t)sizeof(float3), vk::Format::eR32G32B32Sfloat, 0, vk::VertexInputRate::eVertex });
 
-			Buffer::View<uint32_t> indexBuffer = make_shared<Buffer>(commandBuffer.mDevice, filename.stem().string() + " indices", indices_tmp[i].sizeBytes(), bufferUsage|vk::BufferUsageFlagBits::eIndexBuffer);
-			Buffer::copy(commandBuffer, positions_tmp[i], vertices.at(Mesh::VertexAttributeType::ePosition)[0].first);
-			Buffer::copy(commandBuffer, normals_tmp[i]  , vertices.at(Mesh::VertexAttributeType::eNormal)[0].first);
-			Buffer::copy(commandBuffer, indices_tmp[i], indexBuffer);
+			vertices[Mesh::VertexAttributeType::eNormal].emplace_back(
+				Buffer::View<byte>(vertexBuffer.buffer(), normalsOffsets[i]*sizeof(float), m->mNumVertices*3*sizeof(float)),
+				Mesh::VertexAttributeDescription{ (uint32_t)sizeof(float3), vk::Format::eR32G32B32Sfloat, 0, vk::VertexInputRate::eVertex });
 
 			if (m->GetNumUVChannels() >= 1) {
 				vertices[Mesh::VertexAttributeType::eTexcoord].emplace_back(
-					make_shared<Buffer>(commandBuffer.mDevice, filename.stem().string() + " uvs", uvs_tmp[i].sizeBytes(), bufferUsage|vk::BufferUsageFlagBits::eVertexBuffer),
+					Buffer::View<byte>(vertexBuffer.buffer(), uvsOffsets[i]*sizeof(float), m->mNumVertices*2*sizeof(float)),
 					Mesh::VertexAttributeDescription{ (uint32_t)sizeof(float2), vk::Format::eR32G32Sfloat, 0, vk::VertexInputRate::eVertex } );
-				Buffer::copy(commandBuffer, uvs_tmp[i], vertices.at(Mesh::VertexAttributeType::eTexcoord)[0].first);
 			}
 
 			vertices.mAabb.minX = (float)m->mAABB.mMin.x;
@@ -247,7 +264,7 @@ shared_ptr<Node> Scene::loadAssimp(CommandBuffer& commandBuffer, const filesyste
 			vertices.mAabb.maxZ = (float)m->mAABB.mMax.z;
 
 			const shared_ptr<Node>& meshNode = meshesNode->addChild(m->mName.C_Str());
-			meshes.emplace_back( meshNode->makeComponent<Mesh>(vertices, indexBuffer, vk::PrimitiveTopology::eTriangleList) );
+			meshes.emplace_back( meshNode->makeComponent<Mesh>(vertices, Buffer::View<uint32_t>(indexBuffer, indicesOffsets[i], m->mNumFaces*3), vk::PrimitiveTopology::eTriangleList) );
 		}
 		cout << endl;
 	}

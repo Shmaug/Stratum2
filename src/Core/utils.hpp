@@ -270,6 +270,8 @@ inline constexpr T channelCount(const vk::Format format) {
 	case vk::Format::eX8D24UnormPack32:
 	case vk::Format::eS8Uint:
 	case vk::Format::eD32SfloatS8Uint:
+	case vk::Format::eBc4UnormBlock:
+	case vk::Format::eBc4SnormBlock:
 		return 1;
 	case vk::Format::eR4G4UnormPack8:
 	case vk::Format::eR8G8Unorm:
@@ -292,6 +294,8 @@ inline constexpr T channelCount(const vk::Format format) {
 	case vk::Format::eR64G64Uint:
 	case vk::Format::eR64G64Sint:
 	case vk::Format::eR64G64Sfloat:
+	case vk::Format::eBc5UnormBlock:
+	case vk::Format::eBc5SnormBlock:
 		return 2;
 	case vk::Format::eR4G4B4A4UnormPack16:
 	case vk::Format::eB4G4R4A4UnormPack16:
@@ -325,6 +329,10 @@ inline constexpr T channelCount(const vk::Format format) {
 	case vk::Format::eR64G64B64Sint:
 	case vk::Format::eR64G64B64Sfloat:
 	case vk::Format::eB10G11R11UfloatPack32:
+	case vk::Format::eBc1RgbUnormBlock:
+	case vk::Format::eBc1RgbSrgbBlock:
+	case vk::Format::eBc3UnormBlock:
+	case vk::Format::eBc3SrgbBlock:
 		return 3;
 	case vk::Format::eR5G5B5A1UnormPack16:
 	case vk::Format::eB5G5R5A1UnormPack16:
@@ -378,6 +386,8 @@ inline constexpr T channelCount(const vk::Format format) {
 	case vk::Format::eE5B9G9R9UfloatPack32:
 	case vk::Format::eBc1RgbaUnormBlock:
 	case vk::Format::eBc1RgbaSrgbBlock:
+	case vk::Format::eBc2UnormBlock:
+	case vk::Format::eBc2SrgbBlock:
 		return 4;
 	}
 }

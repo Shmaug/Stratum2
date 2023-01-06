@@ -11,7 +11,7 @@ STM_NAMESPACE_BEGIN
 #define BVH_FLAG_VOLUME BIT(2)
 
 #define gVertexBufferCount 1024
-#define gImageCount 1024
+#define gImageCount 2048
 #define gVolumeCount 8
 
 #define INVALID_INSTANCE 0xFFFF

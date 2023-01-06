@@ -5,20 +5,30 @@
 STM_NAMESPACE_BEGIN
 
 struct Reservoir {
-	float total_weight;
-	uint M;
+	float mTotalWeight;
+    float mSampleTargetPdf;
+    uint mCandidateCount;
 
-	SLANG_MUTATING
-	inline void init() {
-		total_weight = 0;
-		M = 0;
+    SLANG_CTOR(Reservoir) () {
+        mTotalWeight = 0;
+        mSampleTargetPdf = 0;
+        mCandidateCount = 0;
 	}
 
 	SLANG_MUTATING
-	inline bool update(const float rnd, const float w) {
-		M++;
-		total_weight += w;
-		return rnd*total_weight <= w;
+    inline bool update(const float rnd, const float sourcePdf, const float targetPdf) {
+		const float w = targetPdf / sourcePdf;
+        mTotalWeight += w;
+		mCandidateCount++;
+        if (rnd * mTotalWeight <= w) {
+            mSampleTargetPdf = targetPdf;
+            return true;
+        }
+        return false;
+	}
+
+    inline float W() CONST_CPP {
+        return mTotalWeight / (mCandidateCount * mSampleTargetPdf);
 	}
 };
 
