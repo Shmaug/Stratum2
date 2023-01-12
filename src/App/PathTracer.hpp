@@ -95,6 +95,9 @@ private:
 	float mVmRadiusAlpha  = 0.01f;
 	float mVmRadiusFactor = 0.025f;
 
+	VcmReservoirFlags mDIReservoirFlags = VcmReservoirFlags::eNone;
+	VcmReservoirFlags mLVCReservoirFlags = VcmReservoirFlags::eNone;
+
 	bool mVisualizeLightPaths = false;
 	uint32_t mVisualizeLightPathCount = 128;
 	float mVisualizeLightPathRadius = 0.00075f;

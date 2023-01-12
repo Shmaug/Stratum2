@@ -393,6 +393,7 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 	mEmissivePrimitiveCount = 0;
 
 	mInstanceNodes.clear();
+	mInstanceTransformMap.clear();
 
 	mMaterialResources.mMaterialData.clear();
 	mMaterialResources.mImage4s.clear();
@@ -418,7 +419,10 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 	vector<vk::AccelerationStructureInstanceKHR> instancesAS;
 	vector<vk::BufferMemoryBarrier> blasBarriers;
 
-	auto appendVertexBuffer = [&](const shared_ptr<Buffer>& buf) {
+	auto appendVertexBuffer = [&](const shared_ptr<Buffer>& buf) -> uint32_t {
+		if (!buf)
+			return 0xFFFF;
+
 		if (auto it = vertexBufferMap.find(buf.get()); it != vertexBufferMap.end())
 			return it->second;
 		const uint32_t idx = mVertexBuffers.size();
@@ -510,87 +514,89 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 		scene.mNode.forEachDescendant<MeshPrimitive>([&](Node& primNode, const shared_ptr<MeshPrimitive>& prim) {
 			if (!prim->mMesh || !prim->mMaterial) return;
 
-		if (prim->mMesh->topology() != vk::PrimitiveTopology::eTriangleList ||
-			(prim->mMesh->indexType() != vk::IndexType::eUint32 && prim->mMesh->indexType() != vk::IndexType::eUint16) ||
-			!prim->mMesh->vertices().find(Mesh::VertexAttributeType::ePosition) ||
-			!prim->mMesh->vertices().find(Mesh::VertexAttributeType::eNormal) ||
-			!prim->mMesh->vertices().find(Mesh::VertexAttributeType::eTexcoord)) {
-			cout << "Skipping unsupported mesh in node " << primNode.name() << endl;
-			return;
-		}
+			if (prim->mMesh->topology() != vk::PrimitiveTopology::eTriangleList ||
+				(prim->mMesh->indexType() != vk::IndexType::eUint32 && prim->mMesh->indexType() != vk::IndexType::eUint16) ||
+				!prim->mMesh->vertices().find(Mesh::VertexAttributeType::ePosition)) {
+				cout << "Skipping unsupported mesh in node " << primNode.name() << endl;
+				return;
+			}
 
-		ProfilerScope s(primNode.name());
+			ProfilerScope s(primNode.name());
 
-		auto [positions, positionsDesc] = prim->mMesh->vertices().at(Mesh::VertexAttributeType::ePosition)[0];
+			auto [positions, positionsDesc] = prim->mMesh->vertices().at(Mesh::VertexAttributeType::ePosition)[0];
 
-		const uint32_t vertexCount = (uint32_t)((positions.sizeBytes() - positionsDesc.mOffset) / positionsDesc.mStride);
-		const uint32_t primitiveCount = prim->mMesh->indices().size() / (prim->mMesh->indices().stride() * 3);
+			const uint32_t vertexCount = (uint32_t)((positions.sizeBytes() - positionsDesc.mOffset) / positionsDesc.mStride);
+			const uint32_t primitiveCount = prim->mMesh->indices().size() / (prim->mMesh->indices().stride() * 3);
 
-		// get/build BLAS
-		const size_t key = hashArgs(positions.buffer(), positions.offset(), positions.sizeBytes(), positionsDesc, prim->mMaterial->alphaTest());
-		auto it = scene.mMeshAccelerationStructures.find(key);
-		if (it == scene.mMeshAccelerationStructures.end()) {
-			ProfilerScope ps("Build acceleration structure", &commandBuffer);
+			// get/build BLAS
+			const size_t key = hashArgs(positions.buffer(), positions.offset(), positions.sizeBytes(), positionsDesc, prim->mMaterial->alphaTest());
+			auto it = scene.mMeshAccelerationStructures.find(key);
+			if (it == scene.mMeshAccelerationStructures.end()) {
+				ProfilerScope ps("Build acceleration structure", &commandBuffer);
 
-			vk::AccelerationStructureGeometryTrianglesDataKHR triangles;
-			triangles.vertexFormat = positionsDesc.mFormat;
-			triangles.vertexData = positions.deviceAddress();
-			triangles.vertexStride = positionsDesc.mStride;
-			triangles.maxVertex = vertexCount;
-			triangles.indexType = prim->mMesh->indexType();
-			triangles.indexData = prim->mMesh->indices().deviceAddress();
-			vk::AccelerationStructureGeometryKHR triangleGeometry(vk::GeometryTypeKHR::eTriangles, triangles, prim->mMaterial->alphaTest() ? vk::GeometryFlagBitsKHR{} : vk::GeometryFlagBitsKHR::eOpaque);
-			vk::AccelerationStructureBuildRangeInfoKHR range(primitiveCount);
+				vk::AccelerationStructureGeometryTrianglesDataKHR triangles;
+				triangles.vertexFormat = positionsDesc.mFormat;
+				triangles.vertexData = positions.deviceAddress();
+				triangles.vertexStride = positionsDesc.mStride;
+				triangles.maxVertex = vertexCount;
+				triangles.indexType = prim->mMesh->indexType();
+				triangles.indexData = prim->mMesh->indices().deviceAddress();
+				vk::AccelerationStructureGeometryKHR triangleGeometry(vk::GeometryTypeKHR::eTriangles, triangles, prim->mMaterial->alphaTest() ? vk::GeometryFlagBitsKHR{} : vk::GeometryFlagBitsKHR::eOpaque);
+				vk::AccelerationStructureBuildRangeInfoKHR range(primitiveCount);
 
-			auto [as, asbuf] = buildAccelerationStructure(commandBuffer, primNode.name() + "/BLAS", vk::AccelerationStructureTypeKHR::eBottomLevel, triangleGeometry, range);
+				auto [as, asbuf] = buildAccelerationStructure(commandBuffer, primNode.name() + "/BLAS", vk::AccelerationStructureTypeKHR::eBottomLevel, triangleGeometry, range);
 
-			blasBarriers.emplace_back(
-				vk::AccessFlagBits::eAccelerationStructureWriteKHR, vk::AccessFlagBits::eAccelerationStructureReadKHR,
-				VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-				**asbuf.buffer(), asbuf.offset(), asbuf.sizeBytes());
+				blasBarriers.emplace_back(
+					vk::AccessFlagBits::eAccelerationStructureWriteKHR, vk::AccessFlagBits::eAccelerationStructureReadKHR,
+					VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+					**asbuf.buffer(), asbuf.offset(), asbuf.sizeBytes());
 
-			it = scene.mMeshAccelerationStructures.emplace(key, make_pair(as, asbuf)).first;
-		}
+				it = scene.mMeshAccelerationStructures.emplace(key, make_pair(as, asbuf)).first;
+			}
 
-		auto [normals, normalsDesc] = prim->mMesh->vertices().at(Mesh::VertexAttributeType::eNormal)[0];
-		auto [texcoords, texcoordsDesc] = prim->mMesh->vertices().at(Mesh::VertexAttributeType::eTexcoord)[0];
+			Buffer::View<byte> normals, texcoords;
+			Mesh::VertexAttributeDescription normalsDesc, texcoordsDesc;
+			if (auto attrib = prim->mMesh->vertices().find(Mesh::VertexAttributeType::eNormal))
+				tie(normals, normalsDesc) = *attrib;
+			if (auto attrib = prim->mMesh->vertices().find(Mesh::VertexAttributeType::eTexcoord))
+				tie(texcoords, texcoordsDesc) = *attrib;
 
-		const uint32_t vertexInfoIndex = (uint32_t)meshVertexInfos.size();
+			const uint32_t vertexInfoIndex = (uint32_t)meshVertexInfos.size();
 
-		meshVertexInfos.emplace_back(
-			appendVertexBuffer(prim->mMesh->indices().buffer()), (uint32_t)prim->mMesh->indices().offset(), (uint32_t)prim->mMesh->indices().stride(),
-			appendVertexBuffer(positions.buffer()), (uint32_t)positions.offset() + positionsDesc.mOffset, positionsDesc.mStride,
-			appendVertexBuffer(normals.buffer())  , (uint32_t)normals.offset()   + normalsDesc.mOffset  , normalsDesc.mStride,
-			appendVertexBuffer(texcoords.buffer()), (uint32_t)texcoords.offset() + texcoordsDesc.mOffset, texcoordsDesc.mStride);
+			meshVertexInfos.emplace_back(
+				appendVertexBuffer(prim->mMesh->indices().buffer()), (uint32_t)prim->mMesh->indices().offset(), (uint32_t)prim->mMesh->indices().stride(),
+				appendVertexBuffer(positions.buffer()), (uint32_t)positions.offset() + positionsDesc.mOffset, positionsDesc.mStride,
+				appendVertexBuffer(normals.buffer())  , (uint32_t)normals.offset()   + normalsDesc.mOffset  , normalsDesc.mStride,
+				appendVertexBuffer(texcoords.buffer()), (uint32_t)texcoords.offset() + texcoordsDesc.mOffset, texcoordsDesc.mStride);
 
-		const uint32_t materialAddress = appendMaterialData(prim->mMaterial.get());
+			const uint32_t materialAddress = appendMaterialData(prim->mMaterial.get());
 
-		const uint32_t triCount = prim->mMesh->indices().sizeBytes() / (prim->mMesh->indices().stride() * 3);
-		const TransformData transform = nodeToWorld(primNode);
-		const float area = 1;
+			const uint32_t triCount = prim->mMesh->indices().sizeBytes() / (prim->mMesh->indices().stride() * 3);
+			const TransformData transform = nodeToWorld(primNode);
+			const float area = 1;
 
-		if (prim->mMaterial->emission() > 0)
-			mEmissivePrimitiveCount += triCount;
+			if (prim->mMaterial->emission() > 0)
+				mEmissivePrimitiveCount += triCount;
 
-		vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
-		float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
-		instance.instanceCustomIndex = appendInstanceData(primNode, prim.get(), MeshInstanceData(materialAddress, vertexInfoIndex, primitiveCount), transform, prim->mMaterial->emission() * area);
-		instance.mask = BVH_FLAG_TRIANGLES;
-		instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**it->second.first);
+			vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
+			float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
+			instance.instanceCustomIndex = appendInstanceData(primNode, prim.get(), MeshInstanceData(materialAddress, vertexInfoIndex, primitiveCount), transform, prim->mMaterial->emission() * area);
+			instance.mask = BVH_FLAG_TRIANGLES;
+			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**it->second.first);
 
-		const vk::AabbPositionsKHR& aabb = prim->mMesh->vertices().mAabb;
-		for (uint32_t i = 0; i < 8; i++) {
-			const int3 idx(i % 2, (i % 4) / 2, i / 4);
-			float3 corner(idx[0] == 0 ? aabb.minX : aabb.maxX,
-				idx[1] == 0 ? aabb.minY : aabb.maxY,
-				idx[2] == 0 ? aabb.minZ : aabb.maxZ);
-			corner = transform.transformPoint(corner);
-			mAabbMin = min(mAabbMin, corner);
-			mAabbMax = max(mAabbMax, corner);
-		}
+			const vk::AabbPositionsKHR& aabb = prim->mMesh->vertices().mAabb;
+			for (uint32_t i = 0; i < 8; i++) {
+				const int3 idx(i % 2, (i % 4) / 2, i / 4);
+				float3 corner(idx[0] == 0 ? aabb.minX : aabb.maxX,
+					idx[1] == 0 ? aabb.minY : aabb.maxY,
+					idx[2] == 0 ? aabb.minZ : aabb.maxZ);
+				corner = transform.transformPoint(corner);
+				mAabbMin = min(mAabbMin, corner);
+				mAabbMax = max(mAabbMax, corner);
+			}
 
-		meshInstanceIndices.emplace_back(prim.get(), (uint32_t)instance.instanceCustomIndex);
-			});
+			meshInstanceIndices.emplace_back(prim.get(), (uint32_t)instance.instanceCustomIndex);
+		});
 	}
 
 	{ // sphere instances

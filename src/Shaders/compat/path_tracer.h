@@ -4,18 +4,12 @@
 
 STM_NAMESPACE_BEGIN
 
-// 80 bytes
-struct VcmVertex {
-    ShadingData mShadingData; // Position of the vertex
-    float3 mThroughput;       // Path throughput (including emission)
-    uint mPathLength;         // Number of segments between source and vertex
-
-    float dVCM; // MIS quantity used for vertex connection and merging
-    float dVC;  // MIS quantity used for vertex connection
-    float dVM;  // MIS quantity used for vertex merging
-    uint mLocalDirectionIn;
+struct ReservoirParameters {
+    float mMaxM;
+    float mSpatialRadius;
+    uint mSampleCount;
+    uint pad;
 };
-
 
 struct PathTracerPushConstants {
     uint2 mOutputExtent;
@@ -40,12 +34,56 @@ struct PathTracerPushConstants {
     float mVmNormalization;
 
     uint mRandomSeed;
-
-    uint mDebugCameraPathLength;
-    uint mDebugLightPathLength;
-
+    uint mDebugPathLengths;
+    uint mFlags;
     uint pad;
+
+    ReservoirParameters mDIReservoirParams;
+    ReservoirParameters mLVCReservoirParams;
+
+	SLANG_MUTATING
+    void reservoirHistoryValid(const bool v) { BF_SET(mFlags, v, 0, 1); }
+    bool reservoirHistoryValid() CONST_CPP { return BF_GET(mFlags, 0, 1); }
+
+    SLANG_MUTATING
+    void debugCameraPathLength(const uint v) { BF_SET(mDebugPathLengths, v, 0, 16); }
+    uint debugCameraPathLength() CONST_CPP { return BF_GET(mDebugPathLengths, 0, 16); }
+
+    SLANG_MUTATING
+    void debugLightPathLength(const uint v) { BF_SET(mDebugPathLengths, v, 16, 16); }
+    uint debugLightPathLength() CONST_CPP { return BF_GET(mDebugPathLengths, 16, 16); }
 };
+
+// 80 bytes
+struct VcmVertex {
+    ShadingData mShadingData; // Position of the vertex
+    float3 mThroughput;       // Path throughput (including emission)
+	// stores mPathLength and mPathSamplePdfA
+    uint mPackedData;
+
+    float dVCM; // MIS quantity used for vertex connection and merging
+    float dVC;  // MIS quantity used for vertex connection
+    float dVM;  // MIS quantity used for vertex merging
+    uint mLocalDirectionIn;
+};
+
+struct DirectIlluminationReservoir {
+    float4 mRnd;
+    float3 mReferencePosition; // position that initially generated the sample
+    uint mReferenceGeometryNormal;
+    float2 pad;
+    float M;
+    float mIntegrationWeight;
+};
+struct LVCReservoir {
+    VcmVertex mLightVertex;
+    float3 mReferencePosition;
+    uint mReferenceGeometryNormal;
+    float2 pad;
+    float M;
+    float mIntegrationWeight;
+};
+
 
 enum VcmAlgorithmType {
 	// unidirectional path tracing from the camera, with next event estimation
@@ -77,6 +115,13 @@ enum VcmAlgorithmType {
     kVcm,
 
 	kNumVcmAlgorithmType
+};
+
+enum VcmReservoirFlags {
+	eNone          = 0,
+	eRIS           = BIT(0),
+	eTemporalReuse = BIT(1),
+	eSpatialReuse  = BIT(2)
 };
 
 // Mis power

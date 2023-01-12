@@ -523,9 +523,12 @@ shared_ptr<Material> parse_bsdf(Scene& scene, Node& dst, CommandBuffer& commandB
 			if (!id.empty()) material_map[id] = m;
 		return m;
 	}
+
 	string idstr;
 	for (const string& id : ids)
 		idstr += id + " ";
+
+	cerr << "Unsupported BSDF type: \"" + type + "\" with IDs " + idstr << endl;
 	throw runtime_error("Unsupported BSDF type: \"" + type + "\" with IDs " + idstr);
 }
 

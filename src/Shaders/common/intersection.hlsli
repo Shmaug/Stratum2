@@ -93,7 +93,10 @@ extension SceneParameters {
 		r.mShapeArea = area2/2;
 
 		float2 t0,t1,t2;
-		loadTriangleAttribute(mVertexBuffers[NonUniformResourceIndex(vertexInfo.texcoordBuffer())], vertexInfo.texcoordOffset(), vertexInfo.texcoordStride(), tri, t0, t1, t2);
+		if (vertexInfo.texcoordBuffer() < gVertexBufferCount)
+			loadTriangleAttribute(mVertexBuffers[NonUniformResourceIndex(vertexInfo.texcoordBuffer())], vertexInfo.texcoordOffset(), vertexInfo.texcoordStride(), tri, t0, t1, t2);
+        else
+            t0 = t1 = t2 = 0;
 
 		const float2 duvds = t2 - t0;
 		const float2 duvdt = t2 - t1;
@@ -125,11 +128,17 @@ extension SceneParameters {
 			r.mTexcoordScreenSize = 1;
 		}
 
+        bool shadingNormalValid = false;
+        float3 shadingNormal;
 		float3 n0,n1,n2;
-		loadTriangleAttribute(mVertexBuffers[NonUniformResourceIndex(vertexInfo.normalBuffer())], vertexInfo.normalOffset(), vertexInfo.normalStride(), tri, n0, n1, n2);
+        if (vertexInfo.normalBuffer() < gVertexBufferCount) {
+			loadTriangleAttribute(mVertexBuffers[NonUniformResourceIndex(vertexInfo.normalBuffer())], vertexInfo.normalOffset(), vertexInfo.normalStride(), tri, n0, n1, n2);
 
-		float3 shadingNormal = n0 + (n1 - n0)*bary.x + (n2 - n0)*bary.y;
-		if (all(shadingNormal.xyz == 0) || any(isnan(shadingNormal))) {
+			shadingNormal = n0 + (n1 - n0)*bary.x + (n2 - n0)*bary.y;
+			shadingNormalValid = !(all(shadingNormal.xyz == 0) || any(isnan(shadingNormal)));
+        }
+
+        if (!shadingNormalValid) {
 			r.mPackedShadingNormal = r.mPackedGeometryNormal;
 			r.mPackedTangent = packNormal(normalize(dPdu));
 			r.mMeanCurvature = 0;
@@ -267,6 +276,8 @@ extension SceneParameters {
 					if (alphaImage >= gImageCount)
 						break;
                     const MeshVertexInfo vertexInfo = mMeshVertexInfo[instance.vertexInfoIndex()];
+                    if (vertexInfo.texcoordBuffer() >= gVertexBufferCount)
+                        break;
                     const uint3 tri = loadTriangleIndices(mVertexBuffers[NonUniformResourceIndex(vertexInfo.indexBuffer())], vertexInfo.indexStride(), vertexInfo.indexStride(), rayQuery.CandidatePrimitiveIndex());
 					float2 v0,v1,v2;
 					loadTriangleAttribute(mVertexBuffers[NonUniformResourceIndex(vertexInfo.texcoordBuffer())], vertexInfo.texcoordOffset(), vertexInfo.texcoordStride(), tri, v0, v1, v2);

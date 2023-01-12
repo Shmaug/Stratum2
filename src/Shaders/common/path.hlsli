@@ -1,7 +1,22 @@
 #pragma once
 
-#include "compat/scene.h"
 #include "compat/path_tracer.h"
+#include "compat/scene.h"
+
+extension VcmVertex {
+    __init() {
+        mThroughput = 0;
+	}
+
+    property uint mPathLength {
+        get { return BF_GET(mPackedData, 0, 16); }
+        set { BF_SET(mPackedData, newValue, 0, 16); }
+    }
+    property float mPathPdfA {
+        get { return BF_GET(mPackedData, 0, 16); }
+        set { BF_SET(mPackedData, newValue, 0, 16); }
+    }
+}
 
 // shader parameters
 
@@ -25,6 +40,12 @@ struct RenderParams {
 	RWTexture2D<float2> mPrevUVs;
 	RWTexture2D<uint2> mVisibility;
     RWTexture2D<float4> mDepth;
+
+    RWStructuredBuffer<DirectIlluminationReservoir> mDirectIlluminationReservoirs;
+    RWStructuredBuffer<DirectIlluminationReservoir> mPrevDirectIlluminationReservoirs;
+
+    //RWStructuredBuffer<LVCReservoir> mLVCReservoirs;
+    //RWStructuredBuffer<LVCReservoir> mPrevLVCReservoirs;
 
     RWStructuredBuffer<VcmVertex> mLightVertices;
     RWStructuredBuffer<uint> mLightPathLengths;
@@ -80,6 +101,13 @@ struct IlluminationSampleRecord {
     float mCosLight;
     uint mFlags;
 
+    property float mG {
+        get { return mCosLight / pow2(mDistance); }
+    }
+    property float mDirectPdfA {
+        get { return pdfWtoA(mDirectPdfW, mG); }
+	}
+
     property bool isSingular {
         get { return BF_GET(mFlags, 0, 1); }
         set { BF_SET(mFlags, (uint)newValue, 0, 1); }
@@ -87,7 +115,11 @@ struct IlluminationSampleRecord {
     property bool isFinite {
         get { return BF_GET(mFlags, 1, 1); }
         set { BF_SET(mFlags, (uint)newValue, 1, 1); }
-	}
+    }
+    property bool visibilityKnown {
+        get { return BF_GET(mFlags, 2, 1); }
+        set { BF_SET(mFlags, (uint)newValue, 2, 1); }
+    }
 };
 struct EmissionSampleRecord {
     float3 mRadiance;
@@ -103,6 +135,8 @@ struct EmissionSampleRecord {
 };
 
 extension SceneParameters {
+	// uniformly samples a light instance and primitive index, then uniformly samples the primitive's area
+	// note: referencePosition is not used during sampling
     IlluminationSampleRecord sampleIllumination(const float3 referencePosition, const float4 rnd) {
         IlluminationSampleRecord r;
 
@@ -112,12 +146,13 @@ extension SceneParameters {
                 r.mRadiance = EnvironmentImage().sample(rnd.xy, /*out*/ r.mDirectionToLight, /*out*/ uv, /*out*/ r.mDirectPdfW);
                 if (gPushConstants.mLightCount > 0)
                     r.mDirectPdfW *= gPushConstants.mEnvironmentSampleProbability;
-				r.mDistance = POS_INFINITY;
+                r.mDistance = POS_INFINITY;
                 r.mEmissionPdfW = r.mDirectPdfW * concentricDiscPdfA() / pow2(gPushConstants.mSceneSphere.w);
                 r.mIntegrationWeight = 1 / r.mDirectPdfW;
                 r.mCosLight = 1;
                 r.isSingular = false;
                 r.isFinite = false;
+                r.visibilityKnown = false;
                 return r;
             }
         }
@@ -135,11 +170,13 @@ extension SceneParameters {
 
         ShadingData shadingData;
         if (instance.type() == InstanceType::eMesh) {
+			// triangle
             const MeshInstanceData mesh = reinterpret<MeshInstanceData>(instance);
             const uint primitiveIndex = uint(rnd.w * mesh.primitiveCount()) % mesh.primitiveCount();
             shadingData = makeTriangleShadingData(mesh, transform, primitiveIndex, sampleUniformTriangle(rnd.x, rnd.y));
             pdfA /= mesh.primitiveCount();
         } else if (instance.type() == InstanceType::eSphere) {
+			// sphere
             const SphereInstanceData sphere = reinterpret<SphereInstanceData>(instance);
             shadingData = makeSphereShadingData(sphere, transform, sphere.radius() * sampleUniformSphereCartesian(rnd.x, rnd.y));
         } else
@@ -163,6 +200,7 @@ extension SceneParameters {
         r.mIntegrationWeight = 1 / r.mDirectPdfW;
         r.isSingular = false;
         r.isFinite = true;
+        r.visibilityKnown = false;
         return r;
     }
     EmissionSampleRecord sampleEmission(const float4 posRnd, const float2 dirRnd) {
@@ -226,6 +264,11 @@ extension SceneParameters {
         return r;
     }
 }
+extension DirectIlluminationReservoir {
+    IlluminationSampleRecord get() {
+        return gScene.sampleIllumination(mReferencePosition, mRnd);
+	}
+}
 
 struct LightRadianceRecord {
 	float3 mRadiance;
@@ -263,7 +306,7 @@ float3 OffsetRayOrigin(const VcmVertex vertex, const float3 direction) {
 
 void AddColor(const uint2 index, const float3 color, const uint cameraVertices, const uint lightVertices) {
     if (gDebugPaths) {
-        if (cameraVertices == gPushConstants.mDebugCameraPathLength && lightVertices == gPushConstants.mDebugLightPathLength)
+        if (cameraVertices == gPushConstants.debugCameraPathLength() && lightVertices == gPushConstants.debugLightPathLength())
 			gRenderParams.mOutput[index] += float4(color, 0);
 		return;
     }
@@ -273,7 +316,7 @@ void AddColor(const uint2 index, const float3 color, const uint cameraVertices, 
 
 void InterlockedAddColor(const int2 ipos, const uint2 extent, const float3 color, const uint cameraVertices, const uint lightVertices) {
     if (gDebugPaths) {
-        if (!(cameraVertices == gPushConstants.mDebugCameraPathLength && lightVertices == gPushConstants.mDebugLightPathLength))
+        if (!(cameraVertices == gPushConstants.debugCameraPathLength() && lightVertices == gPushConstants.debugLightPathLength()))
 	        return;
     }
 

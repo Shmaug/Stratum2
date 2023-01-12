@@ -49,49 +49,38 @@ float3 sampleUniformSphereCartesian(const float u1, const float u2) {
     return float3(r * cos(phi), r * sin(phi), z);
 }
 
-float3 sampleCosHemisphere(const float u1, const float u2) {
-	const float phi = (2*M_PI) * u2;
-	float2 xy = sqrt(u1) * float2(cos(phi), sin(phi));
-	return float3(xy[0], xy[1], sqrt(max(0.f, 1 - dot(xy, xy))));
-}
-float cosHemispherePdfW(const float cosTheta) {
-	return max(cosTheta, 0.f) / M_PI;
-}
 
 float2 sampleConcentricDisc(const float u1, const float u2) {
-	const float a = 2 * u1 - 1; /* (a,b) is now on [-1,1]^2 */
-    const float b = 2 * u2 - 1;
+	// from pbrtv3, sampling.cpp line 113
 
-    float phi, r;
+    // Map uniform random numbers to $[-1,1]^2$
+    const float2 uOffset = 2 * float2(u1,u2) - 1;
 
-    if (a > -b) { /* region 1 or 2 */
-        if (a > b) { /* region 1, also |a| > |b| */
-            r = a;
-            phi = (M_PI / 4.f) * (b / a);
-        } else { /* region 2, also |b| > |a| */
-            r = b;
-            phi = (M_PI / 4.f) * (2.f - (a / b));
-        }
-    } else { /* region 3 or 4 */
+    // Handle degeneracy at the origin
+    if (uOffset.x == 0 && uOffset.y == 0) return 0;
 
-        if (a < b) { /* region 3, also |a| >= |b|, a != 0 */
-            r = -a;
-            phi = (M_PI / 4.f) * (4.f + (b / a));
-        } else { /* region 4, |b| >= |a|, but a==0 and b==0 could occur. */
-            r = -b;
-            if (b != 0)
-                phi = (M_PI / 4.f) * (6.f - (a / b));
-            else
-                phi = 0;
-        }
+    // Apply concentric mapping to point
+    float theta, r;
+    if (abs(uOffset.x) > abs(uOffset.y)) {
+        r = uOffset.x;
+        theta = M_PI/4 * (uOffset.y / uOffset.x);
+    } else {
+        r = uOffset.y;
+        theta = M_PI/2 - M_PI/4 * (uOffset.x / uOffset.y);
     }
-
-    return r * float2(cos(phi), sin(phi));
+    return r * float2(cos(theta), sin(theta));
 }
 float concentricDiscPdfA() {
     return 1.0 / M_PI;
 }
 
+float3 sampleCosHemisphere(const float u1, const float u2) {
+    const float2 xy = sampleConcentricDisc(u1, u2);
+	return float3(xy, sqrt(max(0, 1 - dot(xy,xy))));
+}
+float cosHemispherePdfW(const float cosTheta) {
+	return max(cosTheta, 0.f) / M_PI;
+}
 
 float2 sampleTexel(Texture2D<float4> image, float2 rnd, out float pdf, const uint maxIterations = 10) {
  	uint2 imageExtent;

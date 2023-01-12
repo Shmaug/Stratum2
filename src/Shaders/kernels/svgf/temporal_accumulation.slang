@@ -16,7 +16,7 @@
 
 struct PushConstants {
 	uint mViewCount;
-	uint mHistoryLimit;
+    uint mHistoryLimit;
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> gPushConstants;
 
@@ -39,6 +39,7 @@ void main(uint3 index: SV_DispatchThreadId) {
 	float2 moments_prev = 0;
 	float sum_w         = 0;
 	if (gReprojection) {
+		// reproject pixel from previous frame
 		const VisibilityData vis = reinterpret<VisibilityData>(gParams.mVisibility[ipos]);
 		const DepthData depth    = reinterpret<DepthData>(gParams.mDepth[ipos]);
 		if (vis.instanceIndex() != INVALID_INSTANCE) {
@@ -51,19 +52,16 @@ void main(uint3 index: SV_DispatchThreadId) {
 					const int2 ipos_prev = p + int2(xx, yy);
 					if (!gParams.mViews[view_index].isInside(ipos_prev)) continue;
 
-                    if (gCheckNormal || gCheckDepth) {
-						const VisibilityData prev_vis = reinterpret<VisibilityData>(gParams.mPrevVisibility[ipos_prev]);
-						if (gParams.mInstanceIndexMap[vis.instanceIndex()] != prev_vis.instanceIndex()) continue;
-						if (gCheckNormal && dot(vis.normal(), prev_vis.normal()) < cos(degrees(2))) continue;
-						if (gCheckDepth && abs(depth.mPrevDepth - reinterpret<DepthData>(gParams.mPrevDepth[ipos_prev]).mDepth) >= 2 * length(depth.mDepthDerivative)) continue;
-                    }
+					const VisibilityData prev_vis = reinterpret<VisibilityData>(gParams.mPrevVisibility[ipos_prev]);
+					if (gParams.mInstanceIndexMap[vis.instanceIndex()] != prev_vis.instanceIndex()) continue;
+					if (gCheckNormal && dot(vis.normal(), prev_vis.normal()) < cos(degrees(2))) continue;
+					if (gCheckDepth && abs(depth.mPrevDepth - reinterpret<DepthData>(gParams.mPrevDepth[ipos_prev]).mDepth) >= 2 * length(depth.mDepthDerivative)) continue;
 
 					const float4 c = gParams.mPrevAccumColor[ipos_prev];
 
 					if (c.a <= 0 || any(isnan(c)) || any(isinf(c)) || any(c != c)) continue;
 
 					float wc = (xx == 0 ? (1 - w.x) : w.x) * (yy == 0 ? (1 - w.y) : w.y);
-					//wc *= wc;
 					color_prev   += c * wc;
 					moments_prev += gParams.mPrevAccumMoments[ipos_prev] * wc;
 					sum_w        += wc;
@@ -71,6 +69,7 @@ void main(uint3 index: SV_DispatchThreadId) {
 			}
 		}
 	} else {
+		// accumulate the same pixel
 		color_prev = gParams.mPrevAccumColor[ipos];
 		if (any(isnan(color_prev.rgb)) || any(isinf(color_prev.rgb)))
 			color_prev = 0;
@@ -86,6 +85,8 @@ void main(uint3 index: SV_DispatchThreadId) {
 	if (any(isinf(moments_prev)) || any(moments_prev != moments_prev)) moments_prev = 0;
 
 	const float l = luminance(color_curr.rgb);
+
+	// normalize reprojected sample
 
 	if (sum_w > 0 && color_prev.a > 0) {
 		const float invSum = 1/sum_w;

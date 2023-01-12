@@ -93,8 +93,8 @@ shared_ptr<Node> Scene::loadGltf(CommandBuffer& commandBuffer, const filesystem:
 	cout << "Loading materials..." << endl;
 	ranges::transform(model.materials, materials.begin(), [&](const tinygltf::Material& material) {
 		ImageValue<3> emission(double3::Map(material.emissiveFactor.data()).cast<float>(), getImage(material.emissiveTexture.index, true));
-		if (material.extras.Has("emissionIntensity"))
-			emission.mValue *= (float)material.extras.Get("emissionIntensity").GetNumberAsDouble();
+		if (material.extensions.find("KHR_materials_emissive_strength") != material.extensions.end())
+			emission.mValue *= (float)material.extensions.at("KHR_materials_emissive_strength").Get("emissiveStrength").GetNumberAsDouble();
 
 		ImageValue<3> baseColor(double3::Map(material.pbrMetallicRoughness.baseColorFactor.data()).cast<float>(), getImage(material.pbrMetallicRoughness.baseColorTexture.index, true));
 		ImageValue<4> metallicRoughness(double4(0, material.pbrMetallicRoughness.roughnessFactor, material.pbrMetallicRoughness.metallicFactor, 0).cast<float>(), getImage(material.pbrMetallicRoughness.metallicRoughnessTexture.index, false));

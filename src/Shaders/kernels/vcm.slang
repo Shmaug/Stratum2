@@ -1,3 +1,5 @@
+// Based on https://github.com/SmallVCM/SmallVCM/blob/master/src/vertexcm.hxx
+
 #ifndef gHasMedia
 #define gHasMedia (false)
 #endif
@@ -51,25 +53,17 @@
 #define gDebugPathWeights (false)
 #endif
 
+#ifndef gDIReservoirFlags
+#define gDIReservoirFlags 0
+#endif
+
+#ifndef gLVCReservoirFlags
+#define gLVCReservoirFlags 0
+#endif
+
 #include "common/path.hlsli"
-#include "compat/reservoir.h"
 
 static const AbstractCamera gCamera = { 0 };
-
-typedef VcmVertex CameraVertex;
-typedef VcmVertex LightVertex;
-
-// The sole point of this structure is to make carrying around the ray baggage easier.
-struct SubPathState {
-    VcmVertex mVertex;
-    float3 mDirection; // Where to go next
-    float mFwdBsdfPdfW;
-	bool mIsFiniteLight; // Just generate by finite light
-	bool mSpecularPath; // All scattering events so far were specular
-};
-
-
-
 
 // For visibility tests: after the ray origin is offsetted with rayOffset(), TMax should be decreased
 // so the ray doesn't intersect the surface/light (resulting in an occlusion)
@@ -80,8 +74,19 @@ float AdjustDistance(const float dist) {
         return dist * 0.99;
 }
 
-// ported from https://github.com/SmallVCM/SmallVCM/blob/master/src/vertexcm.hxx
+typedef VcmVertex CameraVertex;
+typedef VcmVertex LightVertex;
+
 struct VertexCM {
+	// The sole point of this structure is to make carrying around the ray baggage easier.
+	struct SubPathState {
+		VcmVertex mVertex;
+		float3 mDirection; // Where to go next
+		float mFwdBsdfPdfW; // for NEE MIS when doing regular path tracing. Other techniques use MIS quantities in mVertex.
+		bool mIsFiniteLight; // Just generate by finite light
+		bool mSpecularPath; // All scattering events so far were specular
+	};
+
     uint2 mIndex;
     RandomSampler mRng;
 
@@ -92,11 +97,13 @@ struct VertexCM {
         mRng = RandomSampler(gPushConstants.mRandomSeed, index, aRngOffset);
     }
 
-    uint GetLightVertexIndex(const uint lightPathIndex, const uint vertexIndex) {
+
+    static uint GetLightVertexIndex(const uint lightPathIndex, const uint vertexIndex) {
         // store light paths individually, so specific path vertices can be found
 		// i.e. { path0.vertex0, ..., pathN.vertex0, path0.vertex1, ..., pathN.vertex1, ... }
         return vertexIndex * gPushConstants.mLightSubPathCount + lightPathIndex;
     }
+
     // For regular VC: uses GetLightVertexIndex to find index in mLightPathLengths
     // For LVC VC: atomically appends light vertices to mLightPathLengths
     void StoreLightVertex(const VcmVertex vertex) {
@@ -117,16 +124,16 @@ struct VertexCM {
 	}
 
     void StoreAuxillaryData(const IntersectionResult isect, const float3 albedo) {
-        float2 pixelCoord = mIndex + 0.5;
+        float2 prevPixelCoord = mIndex + 0.5;
 
         float prevDepth = isect.mDistance;
         if (isect.instanceIndex != INVALID_INSTANCE) {
-            const float3 prevCameraPos = gCamera.prevInverseTransform.transformPoint(isect.mShadingData.mPosition);
+            const float3 prevCameraPos = gCamera.prevInverseTransform.transformPoint(gScene.mInstanceMotionTransforms[isect.instanceIndex].transformPoint(isect.mShadingData.mPosition));
             prevDepth = length(prevCameraPos);
-            gCamera.view.toRaster(prevCameraPos, pixelCoord);
+            gCamera.view.toRaster(prevCameraPos, prevPixelCoord);
         }
 
-        gRenderParams.mPrevUVs[mIndex] = pixelCoord / gPushConstants.mOutputExtent;
+        gRenderParams.mPrevUVs[mIndex] = prevPixelCoord / gPushConstants.mOutputExtent;
 
         VisibilityData v;
         v.mInstancePrimitiveIndex = isect.mInstancePrimitiveIndex;
@@ -140,273 +147,63 @@ struct VertexCM {
 		gRenderParams.mDepth[mIndex] = reinterpret<float4>(d);
 	}
 
-	// Range query methods used for PPM, BPT, and VCM. When HashGrid finds a vertex
-	// within range -- ProcessVertex() is called and vertex
-	// merging is performed. BSDF of the camera vertex is used.
-	void MergeVertices(const SubPathState aCameraState, const BSDF aCameraBsdf) {
-		const float3 queryPos = aCameraState.mVertex.mShadingData.mPosition;
 
-        const int3 offsetSign = sign(frac(queryPos / gRenderParams.mLightHashGrid.GetCellSize(queryPos)) - 0.5);
-
-        const float mergeRadiusSqr = pow2(gPushConstants.mMergeRadius);
-
-		for (int j = 0; j < 8; j++) {
-			const int3 offset = int3((j%2), (j%4)/2, j/4) * offsetSign;
-
-			const uint cellIndex = gRenderParams.mLightHashGrid.FindCellIndex<false>(queryPos, offset);
-			if (cellIndex == -1)
-				continue;
-
-            uint2 range = gRenderParams.mLightHashGrid.GetCellDataRange(cellIndex);
-			// limit number of merge candidates
-            range.y = min(range.y, range.x + 512);
-
-            for (; range.x < range.y; range.x++) {
-                LightVertex particle = gRenderParams.mLightVertices[gRenderParams.mLightHashGrid.mData[range.x]];
-
-				const float3 toParticle = particle.mShadingData.mPosition - queryPos;
-				const float distSqr     = dot(toParticle, toParticle);
-
-                //if (distSqr <= mergeRadiusSqr)
-                    ProcessVertex(aCameraState, aCameraBsdf, particle);
-			}
-		}
-	}
-
-	void ProcessVertex(const SubPathState aCameraState, const BSDF aCameraBsdf, inout LightVertex aLightVertex) {
-		// Reject if full path length below/above min/max path length
-        if ((aLightVertex.mPathLength + aCameraState.mVertex.mPathLength > gPushConstants.mMaxPathLength) ||
-            (aLightVertex.mPathLength + aCameraState.mVertex.mPathLength < gPushConstants.mMinPathLength))
-            return;
-
-        // Retrieve light incoming direction
-        const float3 localDirIn = unpackNormal(aCameraState.mVertex.mLocalDirectionIn);
-		const float3 localDirOut = aCameraState.mVertex.mShadingData.toLocal(aLightVertex.mShadingData.toWorld(unpackNormal(aLightVertex.mLocalDirectionIn)));
-
-        const MaterialEvalRecord eval = aCameraBsdf.evaluate<false>(localDirIn, localDirOut);
-        const float3 cameraBsdfFactor = eval.mReflectance * aCameraState.mVertex.mShadingData.shadingNormalCorrection<false>(localDirIn, localDirOut);
-		float cameraBsdfDirPdfW = eval.mFwdPdfW;
-        float cameraBsdfRevPdfW = eval.mRevPdfW;
-
-		if (all(cameraBsdfFactor <= 0))
-			return;
-
-		cameraBsdfDirPdfW *= aCameraBsdf.continuationProb();
-
-		const Material lightBsdf = Material(aLightVertex.mShadingData);
-
-		// Even though this is pdf from camera BSDF, the continuation probability
-		// must come from light BSDF, because that would govern it if light path
-		// actually continued
-		cameraBsdfRevPdfW *= lightBsdf.continuationProb();
-
-        // Partial light sub-path MIS weight [tech. rep. (38)]
-        const float wLight = aLightVertex.dVCM * gPushConstants.mMisVcWeightFactor + aLightVertex.dVM * Mis(cameraBsdfDirPdfW);
-
-        // Partial eye sub-path MIS weight [tech. rep. (39)]
-        const float wCamera = aCameraState.mVertex.dVCM * gPushConstants.mMisVcWeightFactor + aCameraState.mVertex.dVM * Mis(cameraBsdfRevPdfW);
-
-		// Full path MIS weight [tech. rep. (37)]. No MIS for PPM
-		const float misWeight = gPpm ? 1.f : 1.f / (wLight + 1.f + wCamera);
-
-		const float3 contrib = misWeight * cameraBsdfFactor * aLightVertex.mThroughput;
-		AddColor(mIndex, aCameraState.mVertex.mThroughput * gPushConstants.mVmNormalization * contrib, aCameraState.mVertex.mPathLength + 1, aLightVertex.mPathLength);
-	}
-
-
+    // Samples a scattering direction camera/light sample according to BSDF.
+    // Returns false for termination
     [mutating]
-    void GenerateLightPaths() {
-        if (gPathTraceOnly) return;
+    bool SampleScattering<let Adjoint : bool>(const BSDF aBsdf, inout SubPathState aoState) {
+		// Russian roulette
+        const float contProb = aBsdf.continuationProb();
+        if (mRng.nextFloat() > contProb)
+            return false;
 
-		SubPathState lightState;
-		GenerateLightSample(lightState);
+		const float3 localDirIn = unpackNormal(aoState.mVertex.mLocalDirectionIn);
+        const MaterialSampleRecord sampleRecord = aBsdf.sample<Adjoint>(mRng.nextFloat3(), localDirIn);
+        MaterialEvalRecord evaluateRecord = aBsdf.evaluate<Adjoint>(localDirIn, sampleRecord.mDirection);
+        evaluateRecord.mReflectance *= aoState.mVertex.mShadingData.shadingNormalCorrection<Adjoint>(localDirIn, sampleRecord.mDirection);
 
-		if (gUseVC && !gUseLVC)
-			gRenderParams.mLightPathLengths[mPathIndex] = 0;
+        if (all(evaluateRecord.mReflectance <= 0))
+            return false;
 
-		//////////////////////////////////////////////////////////////////////////
-		// Trace light path
-		for (;; ++lightState.mVertex.mPathLength) {
-            // Offset ray origin instead of setting tmin due to numeric
-            // issues in ray-sphere intersection. The isect.dist has to be
-            // extended by this EPS_RAY after hit point is determined
-            const RayDesc ray = makeRay(OffsetRayOrigin(lightState.mVertex, lightState.mDirection), lightState.mDirection);
+        const float cosThetaOut = sampleRecord.mDirection.z;
+        const float bsdfDirPdfW = sampleRecord.mFwdPdfW * contProb;
+        const float bsdfRevPdfW = sampleRecord.mRevPdfW * contProb;
 
-			IntersectionResult isect;
-			if (!gScene.traceRay(ray, true, isect))
-                break;
+        aoState.mDirection = aoState.mVertex.mShadingData.toWorld(sampleRecord.mDirection);
 
-            lightState.mVertex.mShadingData = isect.mShadingData;
-            lightState.mVertex.mShadingData.mTexcoordScreenSize = 0;
-            lightState.mVertex.mLocalDirectionIn = packNormal(lightState.mVertex.mShadingData.toLocal(-lightState.mDirection));
+        // Sub-path MIS quantities for the next vertex. Only partial - the
+        // evaluation is completed when the actual hit point is known,
+        // i.e. after tracing the ray, in the sub-path loop.
 
-			const Material bsdf = Material(lightState.mVertex.mShadingData);
-			if (!bsdf.canEvaluate())
-                break;
+        if (sampleRecord.isSingular()) {
+            // Specular scattering case [tech. rep. (53)-(55)] (partially, as noted above)
+            aoState.mVertex.dVCM = 0.f;
+            // aoState.mVertex.dVC *= Mis(cosThetaOut / bsdfDirPdfW) * Mis(bsdfRevPdfW);
+            // aoState.mVertex.dVM *= Mis(cosThetaOut / bsdfDirPdfW) * Mis(bsdfRevPdfW);
+            //assert(bsdfDirPdfW == bsdfRevPdfW);
+            aoState.mVertex.dVC *= Mis(cosThetaOut);
+            aoState.mVertex.dVM *= Mis(cosThetaOut);
 
-            // Update the MIS quantities before storing them at the vertex.
-			// These updates follow the initialization in GenerateLightSample() or
-			// SampleScattering(), and together implement equations [tech. rep. (31)-(33)]
-			// or [tech. rep. (34)-(36)], respectively.
-            {
-                const float cosTheta = -dot(lightState.mVertex.mShadingData.geometryNormal, lightState.mDirection);
+            // aoState.mSpecularPath &= 1;
+            aoState.mFwdBsdfPdfW = POS_INFINITY;
+        } else {
+            // Implements [tech. rep. (34)-(36)] (partially, as noted above)
+            aoState.mVertex.dVC = Mis(cosThetaOut / bsdfDirPdfW) * (aoState.mVertex.dVC * Mis(bsdfRevPdfW) + aoState.mVertex.dVCM + gPushConstants.mMisVmWeightFactor);
+            aoState.mVertex.dVM = Mis(cosThetaOut / bsdfDirPdfW) * (aoState.mVertex.dVM * Mis(bsdfRevPdfW) + aoState.mVertex.dVCM * gPushConstants.mMisVcWeightFactor + 1.f);
+            aoState.mVertex.dVCM = Mis(1.f / bsdfDirPdfW);
 
-				// Infinite lights use MIS handled via solid angle integration,
-				// so do not divide by the distance for such lights [tech. rep. Section 5.1]
-				if (lightState.mVertex.mPathLength > 1 || lightState.mIsFiniteLight == 1)
-					lightState.mVertex.dVCM *= Mis(pow2(isect.mDistance));
-				lightState.mVertex.dVCM /= Mis(abs(cosTheta));
-				lightState.mVertex.dVC /= Mis(abs(cosTheta));
-				lightState.mVertex.dVM /= Mis(abs(cosTheta));
-			}
+            aoState.mSpecularPath = false;
+            aoState.mFwdBsdfPdfW = bsdfDirPdfW;
+        }
 
-            if (!bsdf.isSingular()) {
-				// Store vertex, unless BSDF is purely specular, which prevents
-				// vertex connections and merging
-				if (gUseVC || gUseVM) {
-					StoreLightVertex(lightState.mVertex);
-				}
+        aoState.mVertex.mThroughput *= evaluateRecord.mReflectance / bsdfDirPdfW;
 
-				// Connect to camera, unless BSDF is purely specular
-				if (gUseVC || gLightTraceOnly) {
-					if (lightState.mVertex.mPathLength + 1 >= gPushConstants.mMinPathLength)
-						ConnectToCamera(lightState, bsdf);
-				}
-            }
-
-			// Terminate if the path would become too long after scattering
-			if (lightState.mVertex.mPathLength + 2 > gPushConstants.mMaxPathLength)
-				break;
-
-			// Continue random walk
-			if (!SampleScattering<true>(bsdf, lightState))
-				break;
-		}
-	}
-
-	[mutating]
-	void GenerateCameraPaths() {
-        // initialize with light trace sample
-        uint4 lightTraceSample = gRenderParams.mLightImage.Load4(int(mPathIndex*16));
-		// detect overflow from atomic adds
-        for (uint i = 0; i < 3; i++)
-            if ((lightTraceSample.w & BIT(i)) > 0)
-                lightTraceSample[i] = 0xFFFFFFFF;
-        gRenderParams.mOutput[mIndex] = float4(lightTraceSample.rgb / float(gPushConstants.mLightImageQuantization), 1);
-
-        // Unless rendering with traditional light tracing
-		if (gLightTraceOnly) return;
-
-		SubPathState cameraState;
-        const float2 screenSample = GenerateCameraSample(cameraState);
-
-		//////////////////////////////////////////////////////////////////////
-		// Trace camera path
-		for (;; ++cameraState.mVertex.mPathLength) {
-            // Offset ray origin instead of setting tmin due to numeric
-            // issues in ray-sphere intersection. The isect.dist has to be
-            // extended by this EPS_RAY after hit point is determined
-            const RayDesc ray = makeRay(OffsetRayOrigin(cameraState.mVertex, cameraState.mDirection), cameraState.mDirection);
-
-            IntersectionResult isect;
-            const bool hit = gScene.traceRay(ray, true, isect);
-
-			if (cameraState.mVertex.mPathLength == 1)
-                StoreAuxillaryData(isect, 1);
-
-            if (!hit) {
-                if (cameraState.mVertex.mPathLength == 1)
-	                gRenderParams.mAlbedo[mIndex] = 0;
-
-				// Get radiance from environment
-				const LightRadianceRecord background = GetBackgroundRadiance(cameraState.mDirection);
-				if (any(background.mRadiance > 0)) {
-					if (cameraState.mVertex.mPathLength >= gPushConstants.mMinPathLength) {
-						AddColor(mIndex, cameraState.mVertex.mThroughput * GetLightRadiance(background, cameraState, 1), cameraState.mVertex.mPathLength + 1, 0);
-					}
-				}
-
-				break;
-            }
-
-            cameraState.mVertex.mShadingData = isect.mShadingData;
-            cameraState.mVertex.mShadingData.mTexcoordScreenSize = 0;
-            cameraState.mVertex.mLocalDirectionIn = packNormal(cameraState.mVertex.mShadingData.toLocal(-cameraState.mDirection));
-
-            float fwdG;
-
-            // Update the MIS quantities, following the initialization in
-            // GenerateLightSample() or SampleScattering(). Implement equations
-            // [tech. rep. (31)-(33)] or [tech. rep. (34)-(36)], respectively.
-            {
-                const float cosTheta = -dot(cameraState.mVertex.mShadingData.geometryNormal, cameraState.mDirection);
-				cameraState.mVertex.dVCM *= Mis(pow2(isect.mDistance));
-				cameraState.mVertex.dVCM /= Mis(abs(cosTheta));
-				cameraState.mVertex.dVC  /= Mis(abs(cosTheta));
-                cameraState.mVertex.dVM  /= Mis(abs(cosTheta));
-
-                fwdG = cosTheta / pow2(isect.mDistance);
-			}
-
-            const Material bsdf = Material(cameraState.mVertex.mShadingData);
-
-            if (cameraState.mVertex.mPathLength == 1)
-                gRenderParams.mAlbedo[mIndex] = float4(bsdf.albedo(), 1);
-
-			// Light source has been hit; terminate afterwards, since
-			// our light sources do not have reflective properties
-            const LightRadianceRecord light = GetSurfaceRadiance(cameraState.mDirection, isect, bsdf);
-            if (any(light.mRadiance > 0)) {
-                if (cameraState.mVertex.mPathLength >= gPushConstants.mMinPathLength) {
-                    AddColor(mIndex, cameraState.mVertex.mThroughput * GetLightRadiance(light, cameraState, fwdG), cameraState.mVertex.mPathLength + 1, 0);
-				}
-				break;
-			}
-
-			if (!bsdf.canEvaluate())
-				break;
-
-			// Terminate if eye sub-path is too long for connections or merging
-			if (cameraState.mVertex.mPathLength >= gPushConstants.mMaxPathLength)
-				break;
-
-            if (!bsdf.isSingular()) {
-                ////////////////////////////////////////////////////////////////
-                // Vertex connection: Connect to a light source
-                if (gUseVC || gPathTraceOnly) {
-                    if (cameraState.mVertex.mPathLength + 1 >= gPushConstants.mMinPathLength) {
-                        AddColor(mIndex, cameraState.mVertex.mThroughput * DirectIllumination(cameraState, bsdf), cameraState.mVertex.mPathLength + 1, 1);
-					}
-				}
-
-                if (!gPathTraceOnly) {
-					////////////////////////////////////////////////////////////////
-					// Vertex connection: Connect to light vertices
-                    if (gUseVC) {
-                        ConnectToLightPath(cameraState, bsdf);
-					}
-
-					////////////////////////////////////////////////////////////////
-					// Vertex merging: Merge with light vertices
-					if (gUseVM) {
-						MergeVertices(cameraState, bsdf);
-
-						// PPM merges only at the first non-specular surface from camera
-						if (gPpm) break;
-					}
-                }
-            }
-
-			if (!SampleScattering<false>(bsdf, cameraState))
-				break;
-		}
+        return true;
     }
+}
 
-
-    //////////////////////////////////////////////////////////////////////////
-    // Camera tracing methods
-    //////////////////////////////////////////////////////////////////////////
-
+// Camera tracing methods
+extension VertexCM {
     // Generates new camera sample given a pixel index
     [mutating]
     float2 GenerateCameraSample(out SubPathState oCameraState) {
@@ -444,6 +241,7 @@ struct VertexCM {
         return sample;
     }
 
+
     // Returns the radiance of a light source when hit by a random ray,
     // multiplied by MIS weight. Can be used for both Background and Area lights.
     //
@@ -453,7 +251,7 @@ struct VertexCM {
     //
     // For Area lights:
     //    Has to be called AFTER updating the MIS quantities.
-    float3 GetLightRadiance(const LightRadianceRecord aLight, const SubPathState aCameraState, const float aFwdG) {
+    static float3 GetLightRadiance(const LightRadianceRecord aLight, const SubPathState aCameraState, const float aFwdG) {
         if (all(aLight.mRadiance <= 0))
             return 0;
 
@@ -490,19 +288,153 @@ struct VertexCM {
         return misWeight * aLight.mRadiance;
     }
 
-    [mutating]
-	IlluminationSampleRecord sampleIlluminationReSTIR(const SubPathState aCameraState) {
-		Reservoir reservior;
-		IlluminationSampleRecord s;
-		float sampleTargetPdf;
-		for (uint i = 0; i < 32; i++) {
-			const IlluminationSampleRecord si = gScene.sampleIllumination(aCameraState.mVertex.mShadingData.mPosition, mRng.nextFloat4());
-			if (reservior.update(mRng.nextFloat(), s.mDirectPdfW, luminance(si.mRadiance))) {
-				s = si;
+
+    ////////////////////////////////
+	// Direct illumination methods
+	////////////////////////////////
+
+    struct ReservoirStateDI {
+        float4 mSampleRnd;
+        float mSampleTargetPdf;
+        float mTotalWeight;
+        float M;
+
+        property float mIntegrationWeight { get { return mSampleTargetPdf > 0 ? mTotalWeight / mSampleTargetPdf : 0; } }
+
+        __init() {
+            mTotalWeight = 0;
+            mSampleTargetPdf = 0;
+		}
+
+        static float GetTargetPdf(const SubPathState aCameraState, const IlluminationSampleRecord aSample) {
+            const float3 localToLight = aCameraState.mVertex.mShadingData.toLocal(aSample.mDirectionToLight);
+            return luminance(aSample.mRadiance);// * abs(localToLight.z) * aSample.mCosLight / pow2(aSample.mDistance);
+		}
+
+		// assumes M has already been set to the correct sample count
+        [mutating]
+        void ProcessSample(const SubPathState aCameraState, const float4 aSampleRnd, const float aReservoirRnd, inout IlluminationSampleRecord oSample) {
+			const IlluminationSampleRecord si = gScene.sampleIllumination(aCameraState.mVertex.mShadingData.mPosition, aSampleRnd);
+            if (all(si.mRadiance <= 0))
+                return;
+
+            const float targetPdf = GetTargetPdf(aCameraState, si);
+            if (targetPdf <= 0)
+				return;
+
+            const float wi = targetPdf / (si.mDirectPdfA * M);
+            mTotalWeight += wi;
+            if (aReservoirRnd * mTotalWeight <= wi) {
+                mSampleRnd = aSampleRnd;
+                mSampleTargetPdf = targetPdf;
+                oSample = si;
 			}
 		}
-		s.mIntegrationWeight = reservior.W();
-		return s;
+
+        // turns this reservoir into a new one containing just the current and reused samples
+        [mutating]
+        void Reuse(const SubPathState aCameraState, const float aReservoirRnd, const uint aPrevPathIdx, inout IlluminationSampleRecord oSample) {
+            const DirectIlluminationReservoir prevReservoir = gRenderParams.mPrevDirectIlluminationReservoirs[aPrevPathIdx];
+            if (prevReservoir.mIntegrationWeight <= 0)
+                return;
+
+            // use stored rnd from previous reservoir to generate shifted sample
+            IlluminationSampleRecord shiftedSample = gScene.sampleIllumination(aCameraState.mVertex.mShadingData.mPosition, prevReservoir.mRnd);
+            if (all(shiftedSample.mRadiance <= 0))
+                return;
+
+            float targetPdf = GetTargetPdf(aCameraState, shiftedSample);
+            if (targetPdf <= 0)
+                return;
+
+            // visibility ray for shifted sample
+            {
+                IntersectionResult isect;
+                if (gScene.traceRay(makeRay(OffsetRayOrigin(aCameraState.mVertex, shiftedSample.mDirectionToLight), shiftedSample.mDirectionToLight, 0, AdjustDistance(shiftedSample.mDistance)), false, isect))
+                    return;
+                shiftedSample.visibilityKnown = true;
+            }
+
+            // compute RIS weights wCurr and wPrev
+
+            //*
+            float mCurr = M;
+            M += prevReservoir.M;
+            const float invM = 1 / M;
+            mCurr *= invM;
+			float mPrev = prevReservoir.M * invM;
+            /*/
+            float mCurr = Mis(shiftedSample.mSamplePdfA);
+            float mPrev = Mis(originalSample.mSamplePdfA);
+            //*/
+
+            const IlluminationSampleRecord originalSample = gScene.sampleIllumination(prevReservoir.mReferencePosition, prevReservoir.mRnd);
+            const float shiftJacobian = 1;
+
+			const float wCurr = mCurr * mSampleTargetPdf * mIntegrationWeight;
+            const float wPrev = mPrev * targetPdf * prevReservoir.mIntegrationWeight * shiftJacobian;
+
+            // create new reservoir from current and new reservoirs
+
+			mTotalWeight = wCurr + wPrev;
+            if (aReservoirRnd * mTotalWeight <= wPrev) {
+                mSampleRnd = prevReservoir.mRnd;
+                mSampleTargetPdf = targetPdf;
+                oSample = shiftedSample;
+            }
+        }
+    };
+
+    [mutating]
+    IlluminationSampleRecord SampleDirectIlluminationReservoir(const SubPathState aCameraState) {
+        ReservoirStateDI reservoir = ReservoirStateDI();
+
+		IlluminationSampleRecord currentSample;
+
+        // initial RIS
+        reservoir.M = gPushConstants.mDIReservoirParams.mSampleCount;
+        for (uint i = 0; i < reservoir.M; i++)
+            reservoir.ProcessSample(aCameraState, mRng.nextFloat4(), mRng.nextFloat(), currentSample);
+
+        // visibility ray
+        if (reservoir.mSampleTargetPdf > 0) {
+			IntersectionResult isect;
+            if (gScene.traceRay(makeRay(OffsetRayOrigin(aCameraState.mVertex, currentSample.mDirectionToLight), currentSample.mDirectionToLight, 0, AdjustDistance(currentSample.mDistance)), false, isect))
+                reservoir.mSampleTargetPdf = 0;
+			currentSample.visibilityKnown = true;
+        }
+
+        if (aCameraState.mVertex.mPathLength == 1 && gPushConstants.reservoirHistoryValid()) {
+            if (bool(gDIReservoirFlags & (uint)VcmReservoirFlags::eTemporalReuse)) {
+                const int2 prevPixelCoord = int2(gRenderParams.mPrevUVs[mIndex] * gPushConstants.mOutputExtent);
+				if (all(prevPixelCoord >= 0) && all(prevPixelCoord < gPushConstants.mOutputExtent)) {
+                    reservoir.Reuse(aCameraState, mRng.nextFloat(), prevPixelCoord.y * gPushConstants.mOutputExtent.x + prevPixelCoord.x, currentSample);
+				}
+            }
+
+            if (bool(gDIReservoirFlags & (uint)VcmReservoirFlags::eSpatialReuse)) {
+                const int2 prevPixelCoord = int2(gRenderParams.mPrevUVs[mIndex] * gPushConstants.mOutputExtent + (mRng.nextFloat2()*2-1)*gPushConstants.mDIReservoirParams.mSpatialRadius);
+                if (all(prevPixelCoord >= 0) && all(prevPixelCoord < gPushConstants.mOutputExtent))
+                    reservoir.Reuse(aCameraState, mRng.nextFloat(), prevPixelCoord.y * gPushConstants.mOutputExtent.x + prevPixelCoord.x, currentSample);
+            }
+		}
+
+		// store for reuse
+		if (bool(gDIReservoirFlags & ((uint)VcmReservoirFlags::eTemporalReuse|(uint)VcmReservoirFlags::eSpatialReuse))) {
+			DirectIlluminationReservoir storedReservoir;
+			storedReservoir.mRnd = reservoir.mSampleRnd;
+			storedReservoir.mReferencePosition       = aCameraState.mVertex.mShadingData.mPosition;
+			storedReservoir.mReferenceGeometryNormal = aCameraState.mVertex.mShadingData.mPackedGeometryNormal;
+			storedReservoir.M = min(reservoir.M, gPushConstants.mDIReservoirParams.mMaxM * gPushConstants.mDIReservoirParams.mSampleCount);
+			storedReservoir.mIntegrationWeight = reservoir.mIntegrationWeight;
+			gRenderParams.mDirectIlluminationReservoirs[mPathIndex] = storedReservoir;
+		}
+
+		// store integration weight, convert to solid angle measure
+		// since the integration weight W approximates 1/pdfA, we multiply by 1/pdfAtoW = 1/(1/G) = G
+        currentSample.mIntegrationWeight = reservoir.mIntegrationWeight * currentSample.mG;
+
+		return currentSample;
 	}
 
     // Connects camera vertex to randomly chosen light point.
@@ -510,10 +442,12 @@ struct VertexCM {
     // Has to be called AFTER updating the MIS quantities.
     [mutating]
     float3 DirectIllumination(const SubPathState aCameraState, const BSDF aBsdf) {
-        const IlluminationSampleRecord emissionSample = gScene.sampleIllumination(aCameraState.mVertex.mShadingData.mPosition, mRng.nextFloat4());
+        IlluminationSampleRecord emissionSample = bool(gDIReservoirFlags & (uint)VcmReservoirFlags::eRIS) ?
+            SampleDirectIlluminationReservoir(aCameraState) :
+            gScene.sampleIllumination(aCameraState.mVertex.mShadingData.mPosition, mRng.nextFloat4());
 
         // If radiance == 0, other values are undefined, so have to early exit
-        if (all(emissionSample.mRadiance <= 0))
+        if (all(emissionSample.mRadiance <= 0) || emissionSample.mIntegrationWeight <= 0)
             return 0;
 
         const float3 localDirIn   = unpackNormal(aCameraState.mVertex.mLocalDirectionIn);
@@ -529,7 +463,6 @@ struct VertexCM {
         // If the light is delta light, we can never hit it
         // by BSDF sampling, so the probability of this path is 0
         const float bsdfDirPdfW = evaluateRecord.mFwdPdfW * (emissionSample.isSingular ? 0.f : continuationProbability);
-
         const float bsdfRevPdfW = evaluateRecord.mRevPdfW * continuationProbability;
 
         // Partial light sub-path MIS weight [tech. rep. (44)].
@@ -575,16 +508,22 @@ struct VertexCM {
         if (all(contrib <= 0))
             return 0;
 
-        IntersectionResult isect;
-        if (gScene.traceRay(makeRay(OffsetRayOrigin(aCameraState.mVertex, emissionSample.mDirectionToLight), emissionSample.mDirectionToLight, 0, AdjustDistance(emissionSample.mDistance)), false, isect))
-            return 0;
+        if (!emissionSample.visibilityKnown) {
+			IntersectionResult isect;
+			if (gScene.traceRay(makeRay(OffsetRayOrigin(aCameraState.mVertex, emissionSample.mDirectionToLight), emissionSample.mDirectionToLight, 0, AdjustDistance(emissionSample.mDistance)), false, isect))
+				return 0;
+        }
 
         return contrib;
     }
 
+    ////////////////////////////////
+    // VC methods
+    ////////////////////////////////
+
     // Connects an eye and a light vertex. Result multiplied by MIS weight, but
     // not multiplied by vertex throughputs. Has to be called AFTER updating MIS constants.
-    float3 ConnectVertices(const SubPathState aCameraState, const BSDF aCameraBsdf, inout LightVertex aLightVertex) {
+    static float3 ConnectVertices(const SubPathState aCameraState, const BSDF aCameraBsdf, inout LightVertex aLightVertex) {
         // Get the connection
         float3 direction = aLightVertex.mShadingData.mPosition - aCameraState.mVertex.mShadingData.mPosition;
         const float dist2 = dot(direction, direction);
@@ -619,7 +558,7 @@ struct VertexCM {
         float lightBsdfDirPdfW = lightBsdfEval.mFwdPdfW;
         float lightBsdfRevPdfW = lightBsdfEval.mRevPdfW;
 
-        if (all(lightBsdfFactor <= 0) || cosLight < 0)
+        if (all(lightBsdfFactor <= 0))
             return 0;
 
         // Light continuation probability (for Russian roulette)
@@ -657,55 +596,278 @@ struct VertexCM {
         return contrib;
     }
 
-    // Connects an eye vertex to a light sub-path.
-    // Has to be called AFTER updating MIS constants.
+    // Connect to a light sub-path. Has to be called AFTER updating MIS constants.
     [mutating]
     void ConnectToLightPath(const SubPathState aCameraState, const BSDF aCameraBsdf) {
-        if (gUseLVC) {
-			// LVC: connect to a random light vertex
-            const uint i = mRng.next() % gRenderParams.mLightPathLengths[0];
-            LightVertex lightVertex = gRenderParams.mLightVertices[i];
+        // For VC, each light sub-path is assigned to a particular eye
+        // sub-path, as in traditional BPT. It is also possible to
+        // connect to vertices from any light path, but MIS should
+        // be revisited.
+
+        const uint pathIndex = mPathIndex % gPushConstants.mLightSubPathCount;
+        const uint count = gRenderParams.mLightPathLengths[pathIndex];
+
+        for (int i = 0; i < count; i++) {
+            LightVertex lightVertex = gRenderParams.mLightVertices[GetLightVertexIndex(pathIndex, i)];
             const uint fullPathLength = lightVertex.mPathLength + 1 + aCameraState.mVertex.mPathLength;
 
-            if (fullPathLength >= gPushConstants.mMinPathLength && fullPathLength <= gPushConstants.mMaxPathLength) {
-                const float3 contrib = aCameraState.mVertex.mThroughput * lightVertex.mThroughput * ConnectVertices(aCameraState, aCameraBsdf, lightVertex);
-				// the LVC paper connects to lightVertexCount/lightPathCount light vertices
-                // we only connect to one light vertex, therefore we weight its contribution by lightVertexCount/lightPathCount
-                const float w = gRenderParams.mLightPathLengths[0] / (float)gPushConstants.mLightSubPathCount;
-	            AddColor(mIndex, contrib * w, aCameraState.mVertex.mPathLength + 1, lightVertex.mPathLength + 1);
-            }
-        } else {
-			// For VC, each light sub-path is assigned to a particular eye
-			// sub-path, as in traditional BPT. It is also possible to
-			// connect to vertices from any light path, but MIS should
-			// be revisited.
+            if (fullPathLength < gPushConstants.mMinPathLength)
+                continue;
 
-            const uint pathIndex = mPathIndex % gPushConstants.mLightSubPathCount;
-            const uint count = gRenderParams.mLightPathLengths[pathIndex];
+            // Light vertices are stored in increasing path length
+            // order; once we go above the max path length, we can
+            // skip the rest
+            if (fullPathLength > gPushConstants.mMaxPathLength)
+                break;
 
-            for (int i = 0; i < count; i++) {
-                LightVertex lightVertex = gRenderParams.mLightVertices[GetLightVertexIndex(pathIndex, i)];
-				const uint fullPathLength = lightVertex.mPathLength + 1 + aCameraState.mVertex.mPathLength;
-
-				if (fullPathLength < gPushConstants.mMinPathLength)
-					continue;
-
-				// Light vertices are stored in increasing path length
-				// order; once we go above the max path length, we can
-				// skip the rest
-				if (fullPathLength > gPushConstants.mMaxPathLength)
-					break;
-
-				AddColor(mIndex, aCameraState.mVertex.mThroughput * lightVertex.mThroughput * ConnectVertices(aCameraState, aCameraBsdf, lightVertex), aCameraState.mVertex.mPathLength + 1, lightVertex.mPathLength + 1);
-			}
+            AddColor(mIndex, aCameraState.mVertex.mThroughput * lightVertex.mThroughput * ConnectVertices(aCameraState, aCameraBsdf, lightVertex), aCameraState.mVertex.mPathLength + 1, lightVertex.mPathLength + 1);
         }
+    }
+
+
+    [mutating]
+    LightVertex SampleLVCReservoir(const SubPathState aCameraState, const BSDF aCameraBsdf) {
+        return VcmVertex();
+    }
+
+    // Connect to a random light vertex. Called by LVC-BPT instead of ConnectToLightPath().
+    [mutating]
+    void ConnectToLVC(const SubPathState aCameraState, const BSDF aCameraBsdf) {
+		LightVertex lightVertex;
+        if (bool(gLVCReservoirFlags & (uint)VcmReservoirFlags::eRIS))
+            lightVertex = SampleLVCReservoir(aCameraState, aCameraBsdf);
+        else {
+			const uint i = mRng.next() % gRenderParams.mLightPathLengths[0];
+            lightVertex = gRenderParams.mLightVertices[i];
+        }
+        if (all(lightVertex.mThroughput <= 0))
+            return;
+
+        const uint fullPathLength = lightVertex.mPathLength + 1 + aCameraState.mVertex.mPathLength;
+        if (fullPathLength < gPushConstants.mMinPathLength || fullPathLength > gPushConstants.mMaxPathLength)
+            return;
+
+        const float3 contrib = aCameraState.mVertex.mThroughput * lightVertex.mThroughput * ConnectVertices(aCameraState, aCameraBsdf, lightVertex);
+
+        // the LVC paper connects to lightVertexCount/lightPathCount light vertices
+        // we only connect to one light vertex, therefore we weight its contribution by lightVertexCount/lightPathCount
+        const float w = gRenderParams.mLightPathLengths[0] / (float)gPushConstants.mLightSubPathCount;
+
+        AddColor(mIndex, contrib * w, aCameraState.mVertex.mPathLength + 1, lightVertex.mPathLength + 1);
+    }
+
+    ////////////////////////////////
+    // VM methods
+    ////////////////////////////////
+
+	// Range query methods used for PPM, BPT, and VCM. When HashGrid finds a vertex
+	// within range -- ProcessVertex() is called and vertex
+	// merging is performed. BSDF of the camera vertex is used.
+	void MergeVertices(const SubPathState aCameraState, const BSDF aCameraBsdf) {
+		const float3 queryPos = aCameraState.mVertex.mShadingData.mPosition;
+
+        const int3 offsetSign = sign(frac(queryPos / gRenderParams.mLightHashGrid.GetCellSize(queryPos)) - 0.5);
+
+        const float mergeRadiusSqr = pow2(gPushConstants.mMergeRadius);
+
+		for (int j = 0; j < 8; j++) {
+			const int3 offset = int3((j%2), (j%4)/2, j/4) * offsetSign;
+
+			const uint cellIndex = gRenderParams.mLightHashGrid.FindCellIndex<false>(queryPos, offset);
+			if (cellIndex == -1)
+				continue;
+
+            uint2 range = gRenderParams.mLightHashGrid.GetCellDataRange(cellIndex);
+			// limit number of merge candidates
+            range.y = min(range.y, range.x + 512);
+
+            for (; range.x < range.y; range.x++) {
+                LightVertex particle = gRenderParams.mLightVertices[gRenderParams.mLightHashGrid.mData[range.x]];
+
+				const float3 toParticle = particle.mShadingData.mPosition - queryPos;
+				const float distSqr     = dot(toParticle, toParticle);
+
+                //if (distSqr <= mergeRadiusSqr)
+                    ProcessVertex(aCameraState, aCameraBsdf, particle);
+			}
+		}
+	}
+	void ProcessVertex(const SubPathState aCameraState, const BSDF aCameraBsdf, inout LightVertex aLightVertex) {
+		// Reject if full path length below/above min/max path length
+        if ((aLightVertex.mPathLength + aCameraState.mVertex.mPathLength > gPushConstants.mMaxPathLength) ||
+            (aLightVertex.mPathLength + aCameraState.mVertex.mPathLength < gPushConstants.mMinPathLength))
+            return;
+
+        // Retrieve light incoming direction
+        const float3 localDirIn = unpackNormal(aCameraState.mVertex.mLocalDirectionIn);
+		const float3 localDirOut = aCameraState.mVertex.mShadingData.toLocal(aLightVertex.mShadingData.toWorld(unpackNormal(aLightVertex.mLocalDirectionIn)));
+
+        const MaterialEvalRecord eval = aCameraBsdf.evaluate<false>(localDirIn, localDirOut);
+        const float3 cameraBsdfFactor = eval.mReflectance * aCameraState.mVertex.mShadingData.shadingNormalCorrection<false>(localDirIn, localDirOut);
+		float cameraBsdfDirPdfW = eval.mFwdPdfW;
+        float cameraBsdfRevPdfW = eval.mRevPdfW;
+
+		if (all(cameraBsdfFactor <= 0))
+			return;
+
+		cameraBsdfDirPdfW *= aCameraBsdf.continuationProb();
+
+		const Material lightBsdf = Material(aLightVertex.mShadingData);
+
+		// Even though this is pdf from camera BSDF, the continuation probability
+		// must come from light BSDF, because that would govern it if light path
+		// actually continued
+		cameraBsdfRevPdfW *= lightBsdf.continuationProb();
+
+        // Partial light sub-path MIS weight [tech. rep. (38)]
+        const float wLight = aLightVertex.dVCM * gPushConstants.mMisVcWeightFactor + aLightVertex.dVM * Mis(cameraBsdfDirPdfW);
+
+        // Partial eye sub-path MIS weight [tech. rep. (39)]
+        const float wCamera = aCameraState.mVertex.dVCM * gPushConstants.mMisVcWeightFactor + aCameraState.mVertex.dVM * Mis(cameraBsdfRevPdfW);
+
+		// Full path MIS weight [tech. rep. (37)]. No MIS for PPM
+		const float misWeight = gPpm ? 1.f : 1.f / (wLight + 1.f + wCamera);
+
+		const float3 contrib = misWeight * cameraBsdfFactor * aLightVertex.mThroughput;
+		AddColor(mIndex, aCameraState.mVertex.mThroughput * gPushConstants.mVmNormalization * contrib, aCameraState.mVertex.mPathLength + 1, aLightVertex.mPathLength);
 	}
 
+    // Top-level methods
+    ////////////////////////////////
 
-    //////////////////////////////////////////////////////////////////////////
-    // Light tracing methods
-    //////////////////////////////////////////////////////////////////////////
+	[mutating]
+	void GenerateCameraPaths() {
+		if (gPathTraceOnly) {
+			gRenderParams.mOutput[mIndex] = float4(0, 0, 0, 1);
+		} else {
+			// initialize with light trace sample
+			uint4 lightTraceSample = gRenderParams.mLightImage.Load4(int(mPathIndex*16));
+			// detect overflow from atomic adds
+			for (uint i = 0; i < 3; i++)
+				if ((lightTraceSample.w & BIT(i)) > 0)
+					lightTraceSample[i] = 0xFFFFFFFF;
+			gRenderParams.mOutput[mIndex] = float4(lightTraceSample.rgb / float(gPushConstants.mLightImageQuantization), 1);
 
+			// Unless rendering with traditional light tracing
+			if (gLightTraceOnly) return;
+		}
+
+		// initialize reservoir sample for future frames
+		if (gUseVC && (bool)(gDIReservoirFlags & ((uint)VcmReservoirFlags::eTemporalReuse|(uint)VcmReservoirFlags::eSpatialReuse))) {
+			gRenderParams.mDirectIlluminationReservoirs[mPathIndex].mIntegrationWeight = 0;
+		}
+
+		SubPathState cameraState;
+		const float2 screenSample = GenerateCameraSample(cameraState);
+
+		//////////////////////////////////////////////////////////////////////
+		// Trace camera path
+		for (;; ++cameraState.mVertex.mPathLength) {
+			// Offset ray origin instead of setting tmin due to numeric
+			// issues in ray-sphere intersection. The isect.dist has to be
+			// extended by this EPS_RAY after hit point is determined
+			const RayDesc ray = makeRay(OffsetRayOrigin(cameraState.mVertex, cameraState.mDirection), cameraState.mDirection);
+
+			IntersectionResult isect;
+			const bool hit = gScene.traceRay(ray, true, isect);
+
+			if (cameraState.mVertex.mPathLength == 1)
+				StoreAuxillaryData(isect, 1);
+
+			if (!hit) {
+				if (cameraState.mVertex.mPathLength == 1)
+					gRenderParams.mAlbedo[mIndex] = 0;
+
+				// Get radiance from environment
+				const LightRadianceRecord background = GetBackgroundRadiance(cameraState.mDirection);
+				if (any(background.mRadiance > 0)) {
+					if (cameraState.mVertex.mPathLength >= gPushConstants.mMinPathLength) {
+						AddColor(mIndex, cameraState.mVertex.mThroughput * GetLightRadiance(background, cameraState, 1), cameraState.mVertex.mPathLength + 1, 0);
+					}
+				}
+
+				break;
+			}
+
+			cameraState.mVertex.mShadingData = isect.mShadingData;
+			cameraState.mVertex.mShadingData.mTexcoordScreenSize = 0;
+			cameraState.mVertex.mLocalDirectionIn = packNormal(cameraState.mVertex.mShadingData.toLocal(-cameraState.mDirection));
+
+			float fwdG;
+
+			// Update the MIS quantities, following the initialization in
+			// GenerateLightSample() or SampleScattering(). Implement equations
+			// [tech. rep. (31)-(33)] or [tech. rep. (34)-(36)], respectively.
+			{
+				const float cosTheta = -dot(cameraState.mVertex.mShadingData.geometryNormal, cameraState.mDirection);
+				cameraState.mVertex.dVCM *= Mis(pow2(isect.mDistance));
+				cameraState.mVertex.dVCM /= Mis(abs(cosTheta));
+				cameraState.mVertex.dVC  /= Mis(abs(cosTheta));
+				cameraState.mVertex.dVM  /= Mis(abs(cosTheta));
+
+				fwdG = cosTheta / pow2(isect.mDistance);
+			}
+
+			const Material bsdf = Material(cameraState.mVertex.mShadingData);
+
+			if (cameraState.mVertex.mPathLength == 1)
+				gRenderParams.mAlbedo[mIndex] = float4(bsdf.albedo(), 1);
+
+			// Light source has been hit; terminate afterwards, since
+			// our light sources do not have reflective properties
+			const LightRadianceRecord light = GetSurfaceRadiance(cameraState.mDirection, isect, bsdf);
+			if (any(light.mRadiance > 0)) {
+				if (cameraState.mVertex.mPathLength >= gPushConstants.mMinPathLength) {
+					AddColor(mIndex, cameraState.mVertex.mThroughput * GetLightRadiance(light, cameraState, fwdG), cameraState.mVertex.mPathLength + 1, 0);
+				}
+				break;
+			}
+
+			if (!bsdf.canEvaluate())
+				break;
+
+			// Terminate if eye sub-path is too long for connections or merging
+			if (cameraState.mVertex.mPathLength >= gPushConstants.mMaxPathLength)
+				break;
+
+			if (!bsdf.isSingular()) {
+				////////////////////////////////////////////////////////////////
+				// Vertex connection: Connect to a light source
+				if (gUseVC || gPathTraceOnly) {
+					if (cameraState.mVertex.mPathLength + 1 >= gPushConstants.mMinPathLength) {
+						AddColor(mIndex, cameraState.mVertex.mThroughput * DirectIllumination(cameraState, bsdf), cameraState.mVertex.mPathLength + 1, 1);
+					}
+				}
+
+				if (!gPathTraceOnly) {
+					////////////////////////////////////////////////////////////////
+					// Vertex connection: Connect to light vertices
+					if (gUseVC) {
+						if (gUseLVC)
+							ConnectToLVC(cameraState, bsdf);
+						else
+							ConnectToLightPath(cameraState, bsdf);
+					}
+
+					////////////////////////////////////////////////////////////////
+					// Vertex merging: Merge with light vertices
+					if (gUseVM) {
+						MergeVertices(cameraState, bsdf);
+
+						// PPM merges only at the first non-specular surface from camera
+						if (gPpm) break;
+					}
+				}
+			}
+
+			if (!SampleScattering<false>(bsdf, cameraState))
+				break;
+		}
+	}
+}
+
+// Light tracing methods
+extension VertexCM {
     // Samples light emission
     [mutating]
     void GenerateLightSample(out SubPathState oLightState) {
@@ -736,10 +898,11 @@ struct VertexCM {
         }
     }
 
+
     // Computes contribution of light sample to camera by splatting is onto the
     // framebuffer. Multiplies by throughput (obviously, as nothing is returned).
     [mutating]
-    void ConnectToCamera(const SubPathState aLightState, const BSDF aBsdf) {
+    static void ConnectToCamera(const SubPathState aLightState, const BSDF aBsdf) {
         const TransformData cameraTransform = gCamera.transform;
         const float3 cameraPosition = cameraTransform.transformPoint(0);
         const float3 cameraForward  = cameraTransform.transformVector(float3(0, 0, 1));
@@ -810,59 +973,80 @@ struct VertexCM {
         InterlockedAddColor(int2(imagePos), gPushConstants.mOutputExtent, contrib, 1, aLightState.mVertex.mPathLength + 1);
 	}
 
-    // Samples a scattering direction camera/light sample according to BSDF.
-    // Returns false for termination
-    [mutating]
-    bool SampleScattering<let Adjoint : bool>(const BSDF aBsdf, inout SubPathState aoState) {
-		// Russian roulette
-        const float contProb = aBsdf.continuationProb();
-        if (mRng.nextFloat() > contProb)
-            return false;
+	// Top-level methods
 
-		const float3 localDirIn = unpackNormal(aoState.mVertex.mLocalDirectionIn);
-        const MaterialSampleRecord sampleRecord = aBsdf.sample<Adjoint>(mRng.nextFloat3(), localDirIn);
-        MaterialEvalRecord evaluateRecord = aBsdf.evaluate<Adjoint>(localDirIn, sampleRecord.mDirection);
-        evaluateRecord.mReflectance *= aoState.mVertex.mShadingData.shadingNormalCorrection<Adjoint>(localDirIn, sampleRecord.mDirection);
+	[mutating]
+	void GenerateLightPaths() {
+		if (gPathTraceOnly) return;
 
-        if (all(evaluateRecord.mReflectance <= 0))
-            return false;
+		SubPathState lightState;
+		GenerateLightSample(lightState);
 
-        const float cosThetaOut = sampleRecord.mDirection.z;
-        const float bsdfDirPdfW = sampleRecord.mFwdPdfW * contProb;
-        const float bsdfRevPdfW = sampleRecord.mRevPdfW * contProb;
+		if (gUseVC && !gUseLVC)
+			gRenderParams.mLightPathLengths[mPathIndex] = 0;
 
-        aoState.mDirection = aoState.mVertex.mShadingData.toWorld(sampleRecord.mDirection);
+		//////////////////////////////////////////////////////////////////////////
+		// Trace light path
+		for (;; ++lightState.mVertex.mPathLength) {
+			// Offset ray origin instead of setting tmin due to numeric
+			// issues in ray-sphere intersection. The isect.dist has to be
+			// extended by this EPS_RAY after hit point is determined
+			const RayDesc ray = makeRay(OffsetRayOrigin(lightState.mVertex, lightState.mDirection), lightState.mDirection);
 
-        // Sub-path MIS quantities for the next vertex. Only partial - the
-        // evaluation is completed when the actual hit point is known,
-        // i.e. after tracing the ray, in the sub-path loop.
+			IntersectionResult isect;
+			if (!gScene.traceRay(ray, true, isect))
+				break;
 
-        if (sampleRecord.isSingular()) {
-            // Specular scattering case [tech. rep. (53)-(55)] (partially, as noted above)
-            aoState.mVertex.dVCM = 0.f;
-            // aoState.mVertex.dVC *= Mis(cosThetaOut / bsdfDirPdfW) * Mis(bsdfRevPdfW);
-            // aoState.mVertex.dVM *= Mis(cosThetaOut / bsdfDirPdfW) * Mis(bsdfRevPdfW);
-            //assert(bsdfDirPdfW == bsdfRevPdfW);
-            aoState.mVertex.dVC *= Mis(cosThetaOut);
-            aoState.mVertex.dVM *= Mis(cosThetaOut);
+			lightState.mVertex.mShadingData = isect.mShadingData;
+			lightState.mVertex.mShadingData.mTexcoordScreenSize = 0;
+			lightState.mVertex.mLocalDirectionIn = packNormal(lightState.mVertex.mShadingData.toLocal(-lightState.mDirection));
 
-            // aoState.mSpecularPath &= 1;
-            aoState.mFwdBsdfPdfW = POS_INFINITY;
-        } else {
-            // Implements [tech. rep. (34)-(36)] (partially, as noted above)
-            aoState.mVertex.dVC = Mis(cosThetaOut / bsdfDirPdfW) * (aoState.mVertex.dVC * Mis(bsdfRevPdfW) + aoState.mVertex.dVCM + gPushConstants.mMisVmWeightFactor);
-            aoState.mVertex.dVM = Mis(cosThetaOut / bsdfDirPdfW) * (aoState.mVertex.dVM * Mis(bsdfRevPdfW) + aoState.mVertex.dVCM * gPushConstants.mMisVcWeightFactor + 1.f);
-            aoState.mVertex.dVCM = Mis(1.f / bsdfDirPdfW);
+			const Material bsdf = Material(lightState.mVertex.mShadingData);
+			if (!bsdf.canEvaluate())
+				break;
 
-            aoState.mSpecularPath = false;
-            aoState.mFwdBsdfPdfW = bsdfDirPdfW;
-        }
+			// Update the MIS quantities before storing them at the vertex.
+			// These updates follow the initialization in GenerateLightSample() or
+			// SampleScattering(), and together implement equations [tech. rep. (31)-(33)]
+			// or [tech. rep. (34)-(36)], respectively.
+			{
+				const float cosTheta = -dot(lightState.mVertex.mShadingData.geometryNormal, lightState.mDirection);
 
-        aoState.mVertex.mThroughput *= evaluateRecord.mReflectance / bsdfDirPdfW;
+				// Infinite lights use MIS handled via solid angle integration,
+				// so do not divide by the distance for such lights [tech. rep. Section 5.1]
+				if (lightState.mVertex.mPathLength > 1 || lightState.mIsFiniteLight == 1)
+					lightState.mVertex.dVCM *= Mis(pow2(isect.mDistance));
+				lightState.mVertex.dVCM /= Mis(abs(cosTheta));
+				lightState.mVertex.dVC /= Mis(abs(cosTheta));
+				lightState.mVertex.dVM /= Mis(abs(cosTheta));
+			}
 
-        return true;
-    }
+			if (!bsdf.isSingular()) {
+				// Store vertex, unless BSDF is purely specular, which prevents
+				// vertex connections and merging
+				if (gUseVC || gUseVM) {
+					StoreLightVertex(lightState.mVertex);
+				}
+
+				// Connect to camera, unless BSDF is purely specular
+				if (gUseVC || gLightTraceOnly) {
+					if (lightState.mVertex.mPathLength + 1 >= gPushConstants.mMinPathLength)
+						ConnectToCamera(lightState, bsdf);
+				}
+			}
+
+			// Terminate if the path would become too long after scattering
+			if (lightState.mVertex.mPathLength + 2 > gPushConstants.mMaxPathLength)
+				break;
+
+			// Continue random walk
+			if (!SampleScattering<true>(bsdf, lightState))
+				break;
+		}
+	}
 };
+
+// entry points
 
 [shader("compute")]
 [numthreads(8, 8, 1)]
