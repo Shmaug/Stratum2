@@ -1,5 +1,36 @@
 #pragma once
 
+float Dm(const float alpha_x, const float alpha_y, const float3 h_l) {
+    const float alpha_x2 = alpha_x * alpha_x;
+    const float alpha_y2 = alpha_y * alpha_y;
+    const float3 h_l2 = h_l * h_l;
+    const float hh = h_l2.x / alpha_x2 + h_l2.y / alpha_y2 + h_l2.z;
+    return 1 / (M_PI * alpha_x * alpha_y * hh * hh);
+}
+float G1(const float alpha_x, const float alpha_y, const float3 w_l) {
+    const float alpha_x2 = alpha_x * alpha_x;
+    const float alpha_y2 = alpha_y * alpha_y;
+    const float3 w_l2 = w_l * w_l;
+    const float lambda = (sqrt(1 + (w_l2.x * alpha_x2 + w_l2.y * alpha_y2) / w_l2.z) - 1) / 2;
+    return 1 / (1 + lambda);
+}
+float R0(const float eta) {
+    const float num = eta - 1;
+    const float denom = eta + 1;
+    return (num * num) / (denom * denom);
+}
+
+float Dc(const float alpha_g, const float h_lz) {
+    const float alpha_g2 = alpha_g * alpha_g;
+    return (alpha_g2 - 1) / (M_PI * log(alpha_g2) * (1 + (alpha_g2 - 1) * h_lz * h_lz));
+}
+float Gc(const float3 w_l) {
+    const float wx = w_l.x * 0.25;
+    const float wy = w_l.y * 0.25;
+    const float lambda = (sqrt(1 + (wx * wx + wy * wy) / (w_l.z * w_l.z)) - 1) / 2;
+    return 1 / (1 + lambda);
+}
+
 /// A microfacet model assumes that the surface is composed of infinitely many little mirrors/glasses.
 /// The orientation of the mirrors determines the amount of lights reflected.
 /// The distribution of the orientation is determined empirically.

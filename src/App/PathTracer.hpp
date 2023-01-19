@@ -92,6 +92,10 @@ private:
 	bool mDebugPaths = false;
 	bool mDebugPathWeights = false;
 
+	bool mUseShadingNormals = true;
+	bool mUseNormalMaps = true;
+	bool mUseAlphaTesting = false;
+
 	float mVmRadiusAlpha  = 0.01f;
 	float mVmRadiusFactor = 0.025f;
 

@@ -71,17 +71,19 @@ struct DirectIlluminationReservoir {
     float4 mRnd;
     float3 mReferencePosition; // position that initially generated the sample
     uint mReferenceGeometryNormal;
-    float2 pad;
     float M;
     float mIntegrationWeight;
+    float pad0;
+    float pad1;
 };
 struct LVCReservoir {
     VcmVertex mLightVertex;
     float3 mReferencePosition;
     uint mReferenceGeometryNormal;
-    float2 pad;
     float M;
     float mIntegrationWeight;
+    float pad0;
+    float pad1;
 };
 
 

@@ -4,12 +4,12 @@
 
 #include <Shaders/compat/scene.h>
 #include <Shaders/compat/environment_image.h>
-#include <Shaders/compat/disney_data.h>
+#include <Shaders/compat/material.h>
 
 namespace stm2 {
 
 struct Material {
-    ImageValue<4> mValues[DisneyMaterialData::gDataCount];
+    ImageValue<4> mValues[MaterialData::gDataCount];
 	Image::View mAlphaMask;
 	Buffer::View<uint32_t> mMinAlpha;
 	Image::View mBumpImage;
@@ -29,7 +29,7 @@ struct Material {
 	float& eta()             { return mValues[2].mValue[3]; }
 
     inline void store(MaterialResources& resources) const {
-		for (uint32_t i = 0; i < DisneyMaterialData::gDataCount; i++)
+		for (uint32_t i = 0; i < MaterialData::gDataCount; i++)
         	mValues[i].store(resources);
 		resources.mMaterialData.Append(resources.getIndex(mAlphaMask));
 		resources.mMaterialData.Append(resources.getIndex(mBumpImage));

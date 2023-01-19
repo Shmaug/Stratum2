@@ -1,48 +1,41 @@
 #include "bsdf.hlsli"
 
-#include "compat/scene.h"
-#include "compat/disney_data.h"
 #include "compat/image_value.h"
+#include "compat/material.h"
+#include "compat/scene.h"
+
+
+void LoadNormalMap(inout ShadingData aoShadingData) {
+    if (!gNormalMaps) return;
+
+    const uint2 p = gScene.mMaterialData.Load<uint2>(aoShadingData.materialAddress + ImageValue4::PackedSize * MaterialData::gDataCount + 4);
+    ImageValue3 bump_img = { 1, p.x };
+    if (!bump_img.hasImage()) return;
+    const float scale = asfloat(p.y);
+    if (scale <= 0) return;
+
+    float3 bump = bump_img.eval(aoShadingData.mTexcoord, aoShadingData.mTexcoordScreenSize);
+    bump.xy = (bump.xy * 2 - 1) * scale;
+    bump = normalize(bump);
+
+    float3 n = aoShadingData.shadingNormal;
+    float3 t = aoShadingData.tangent;
+
+    n = normalize(t * bump.x + cross(n, t) * (aoShadingData.isBitangentFlipped ? -1 : 1) * bump.y + n * bump.z);
+    t = normalize(t - n * dot(n, t));
+
+    aoShadingData.mPackedShadingNormal = packNormal(n);
+    aoShadingData.mPackedTangent = packNormal(t);
+}
 
 struct LambertianMaterial : BSDF {
-	DisneyMaterialData bsdf;
+	MaterialData bsdf;
 
-    SLANG_MUTATING
-    void load(const uint address, const float2 uv, const float uvScreenSize, inout uint packedShadingNormal, inout uint packedTangent, const bool flipBitangent) {
-        for (int i = 0; i < DisneyMaterialData::gDataCount; i++)
-            bsdf.data[i] = ImageValue4(gScene.mMaterialData, address + i*ImageValue4::PackedSize).eval(uv, uvScreenSize);
-
-		// normal map
-        if (CHECK_FEATURE(NormalMaps)) {
-            const uint2 p = gScene.mMaterialData.Load<uint2>(address + (ImageValue4::PackedSize * DisneyMaterialData::gDataCount) + 4);
-			ImageValue3 bump_img = { 1, p.x };
-			if (bump_img.hasImage() && asfloat(p.y) > 0) {
-				float3 bump = bump_img.eval(uv, uvScreenSize)*2-1;
-				bump = normalize(float3(bump.xy * asfloat(p.y), bump.z > 0 ? bump.z : 1));
-
-				float3 n = unpackNormal(packedShadingNormal);
-				float3 t = unpackNormal(packedTangent);
-
-				n = normalize(t*bump.x + cross(n, t)*(flipBitangent ? -1 : 1)*bump.y + n*bump.z);
-				t = normalize(t - n*dot(n, t));
-
-				packedShadingNormal = packNormal(n);
-				packedTangent       = packNormal(t);
-			}
-		}
-	}
-
-	SLANG_MUTATING
-	void load(inout ShadingData sd) {
-		load(sd.materialAddress, sd.mTexcoord, sd.mTexcoordScreenSize, sd.mPackedShadingNormal, sd.mPackedTangent, sd.isBitangentFlipped);
-	}
-
-	__init(const uint address, const float2 uv, const float uvScreenSize, inout uint packedShadingNormal, inout uint packedTangent, const bool flipBitangent) {
-		load(address, uv, uvScreenSize, packedShadingNormal, packedTangent, flipBitangent);
-
-	}
 	__init(inout ShadingData sd) {
-		load(sd);
+        for (int i = 0; i < MaterialData::gDataCount; i++)
+            bsdf.data[i] = ImageValue4(gScene.mMaterialData, sd.materialAddress + i*ImageValue4::PackedSize).eval(sd.mTexcoord, sd.mTexcoordScreenSize);
+
+        LoadNormalMap(sd);
 	}
 
     float3 emission() { return bsdf.baseColor() * bsdf.emission(); }

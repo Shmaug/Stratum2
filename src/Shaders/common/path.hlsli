@@ -3,21 +3,6 @@
 #include "compat/path_tracer.h"
 #include "compat/scene.h"
 
-extension VcmVertex {
-    __init() {
-        mThroughput = 0;
-	}
-
-    property uint mPathLength {
-        get { return BF_GET(mPackedData, 0, 16); }
-        set { BF_SET(mPackedData, newValue, 0, 16); }
-    }
-    property float mPathPdfA {
-        get { return BF_GET(mPackedData, 0, 16); }
-        set { BF_SET(mPackedData, newValue, 0, 16); }
-    }
-}
-
 // shader parameters
 
 [[vk::push_constant]] ConstantBuffer<PathTracerPushConstants> gPushConstants;
@@ -62,8 +47,26 @@ ParameterBlock<RenderParams> gRenderParams;
 
 #include "intersection.hlsli"
 #include "materials/environment.hlsli"
-#include "materials/disney.hlsli"
-typedef DisneyMaterial Material;
+#include "materials/lambertian.hlsli"
+
+// useful types/methods
+
+typedef LambertianMaterial Material;
+
+extension VcmVertex {
+    __init() {
+        mThroughput = 0;
+	}
+
+    property uint mPathLength {
+        get { return BF_GET(mPackedData, 0, 16); }
+        set { BF_SET(mPackedData, newValue, 0, 16); }
+    }
+    property float mPathPdfA {
+        get { return BF_GET(mPackedData, 0, 16); }
+        set { BF_SET(mPackedData, newValue, 0, 16); }
+    }
+}
 
 extension ShadingData {
     float shadingNormalCorrection<let Adjoint : bool>(const float3 localDirIn, const float3 localDirOut) {
@@ -101,6 +104,14 @@ struct IlluminationSampleRecord {
     float mCosLight;
     uint mFlags;
 
+    float3 mPosition;
+    uint mPackedNormal;
+
+    property float3 mNormal {
+        get { return unpackNormal(mPackedNormal); }
+        set { mPackedNormal = packNormal(newValue); }
+	}
+
     property float mG {
         get { return mCosLight / pow2(mDistance); }
     }
@@ -116,10 +127,11 @@ struct IlluminationSampleRecord {
         get { return BF_GET(mFlags, 1, 1); }
         set { BF_SET(mFlags, (uint)newValue, 1, 1); }
     }
-    property bool visibilityKnown {
-        get { return BF_GET(mFlags, 2, 1); }
-        set { BF_SET(mFlags, (uint)newValue, 2, 1); }
-    }
+
+    __init() {
+		mRadiance = 0;
+		mFlags = 0;
+	}
 };
 struct EmissionSampleRecord {
     float3 mRadiance;
@@ -147,12 +159,13 @@ extension SceneParameters {
                 if (gPushConstants.mLightCount > 0)
                     r.mDirectPdfW *= gPushConstants.mEnvironmentSampleProbability;
                 r.mDistance = POS_INFINITY;
+                r.mPosition = r.mDirectionToLight;
+                r.mNormal = r.mDirectionToLight;
                 r.mEmissionPdfW = r.mDirectPdfW * concentricDiscPdfA() / pow2(gPushConstants.mSceneSphere.w);
                 r.mIntegrationWeight = 1 / r.mDirectPdfW;
                 r.mCosLight = 1;
                 r.isSingular = false;
                 r.isFinite = false;
-                r.visibilityKnown = false;
                 return r;
             }
         }
@@ -180,7 +193,7 @@ extension SceneParameters {
             const SphereInstanceData sphere = reinterpret<SphereInstanceData>(instance);
             shadingData = makeSphereShadingData(sphere, transform, sphere.radius() * sampleUniformSphereCartesian(rnd.x, rnd.y));
         } else
-            return { 0 }; // shouldn't happen
+            return { 0 }; // shouldn't happen as only environment, mesh and sphere lights are supported
 
         r.mDirectionToLight = shadingData.mPosition - referencePosition;
         r.mDistance = length(r.mDirectionToLight);
@@ -188,19 +201,17 @@ extension SceneParameters {
 
         r.mCosLight = -dot(shadingData.geometryNormal, r.mDirectionToLight);
 
-		if (r.mCosLight < 0)
-            return { 0 }; // point is behind the light surface
-
         const Material m = Material(shadingData);
         pdfA *= m.emissionPdf() / shadingData.mShapeArea;
 
-        r.mRadiance = m.emission();
+        r.mRadiance = r.mCosLight <= 0 ? 0 : m.emission();
         r.mDirectPdfW = pdfAtoW(pdfA, r.mCosLight / pow2(r.mDistance));
         r.mEmissionPdfW = pdfA * cosHemispherePdfW(r.mCosLight);
         r.mIntegrationWeight = 1 / r.mDirectPdfW;
+        r.mPosition = shadingData.mPosition;
+        r.mPackedNormal = shadingData.mPackedGeometryNormal;
         r.isSingular = false;
         r.isFinite = true;
-        r.visibilityKnown = false;
         return r;
     }
     EmissionSampleRecord sampleEmission(const float4 posRnd, const float2 dirRnd) {
@@ -305,20 +316,15 @@ float3 OffsetRayOrigin(const VcmVertex vertex, const float3 direction) {
 }
 
 void AddColor(const uint2 index, const float3 color, const uint cameraVertices, const uint lightVertices) {
-    if (gDebugPaths) {
-        if (cameraVertices == gPushConstants.debugCameraPathLength() && lightVertices == gPushConstants.debugLightPathLength())
-			gRenderParams.mOutput[index] += float4(color, 0);
-		return;
-    }
+    if (gDebugPaths && !(cameraVertices == gPushConstants.debugCameraPathLength() && lightVertices == gPushConstants.debugLightPathLength()))
+        return;
 
-    gRenderParams.mOutput[index] += float4(color, 0);
+	gRenderParams.mOutput[index] += float4(color, 0);
 }
 
 void InterlockedAddColor(const int2 ipos, const uint2 extent, const float3 color, const uint cameraVertices, const uint lightVertices) {
-    if (gDebugPaths) {
-        if (!(cameraVertices == gPushConstants.debugCameraPathLength() && lightVertices == gPushConstants.debugLightPathLength()))
-	        return;
-    }
+    if (gDebugPaths && !(cameraVertices == gPushConstants.debugCameraPathLength() && lightVertices == gPushConstants.debugLightPathLength()))
+		return;
 
     if (all(color <= 0) || any(ipos < 0) || any(ipos >= extent))
         return;

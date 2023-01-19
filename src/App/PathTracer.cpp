@@ -169,9 +169,13 @@ void PathTracer::drawGui() {
 	{
 		bool changed = false;
 		if (Gui::enumDropdown<VcmAlgorithmType>("Algorithm", mAlgorithm, VcmAlgorithmType::kNumVcmAlgorithmType)) changed = true;
+		if (ImGui::Checkbox("Shading normals", &mUseShadingNormals)) changed = true;
+		if (mUseShadingNormals) {
+			if (ImGui::Checkbox("Normal maps", &mUseNormalMaps)) changed = true;
+		}
+		if (ImGui::Checkbox("Alpha testing", &mUseAlphaTesting)) changed = true;
 		if (ImGui::Checkbox("Random frame seed", &mRandomPerFrame)) changed = true;
 		if (ImGui::Checkbox("Performance counters", &mUsePerformanceCounters)) changed = true;
-
 		ImGui::PushItemWidth(60);
 
 		if (ImGui::DragScalar("Max path length", ImGuiDataType_U32, &mPushConstants.mMaxPathLength)) changed = true;
@@ -185,12 +189,12 @@ void PathTracer::drawGui() {
 			if (ImGui::CheckboxFlags("DI reservoir resampling", reinterpret_cast<uint32_t*>(&mDIReservoirFlags), (uint32_t)VcmReservoirFlags::eRIS)) changed = true;
 			if (mDIReservoirFlags & VcmReservoirFlags::eRIS) {
 				ImGui::Indent();
-				ImGui::PushID(&mLVCReservoirFlags);
+				ImGui::PushID(&mDIReservoirFlags);
 				uint32_t mn = 1;
 				if (ImGui::DragScalar("RIS samples", ImGuiDataType_U32, &mPushConstants.mDIReservoirParams.mSampleCount, 1, &mn)) changed = true;
 				if (ImGui::CheckboxFlags("Temporal reuse", reinterpret_cast<uint32_t*>(&mDIReservoirFlags), (uint32_t)VcmReservoirFlags::eTemporalReuse)) changed = true;
 				if (ImGui::CheckboxFlags("Spatial reuse", reinterpret_cast<uint32_t*>(&mDIReservoirFlags), (uint32_t)VcmReservoirFlags::eSpatialReuse)) changed = true;
-				if (mDIReservoirFlags & VcmReservoirFlags::eTemporalReuse) {
+				if (mDIReservoirFlags & (VcmReservoirFlags::eTemporalReuse|VcmReservoirFlags::eSpatialReuse)) {
 					if (ImGui::DragFloat("Max M", &mPushConstants.mDIReservoirParams.mMaxM)) changed = true;
 				}
 				if (mDIReservoirFlags & VcmReservoirFlags::eSpatialReuse) {
@@ -209,7 +213,7 @@ void PathTracer::drawGui() {
 					if (ImGui::DragScalar("RIS samples", ImGuiDataType_U32, &mPushConstants.mLVCReservoirParams.mSampleCount, 1, &mn)) changed = true;
 					if (ImGui::CheckboxFlags("Temporal reuse", reinterpret_cast<uint32_t*>(&mLVCReservoirFlags), (uint32_t)VcmReservoirFlags::eTemporalReuse)) changed = true;
 					if (ImGui::CheckboxFlags("Spatial reuse", reinterpret_cast<uint32_t*>(&mLVCReservoirFlags), (uint32_t)VcmReservoirFlags::eSpatialReuse)) changed = true;
-					if (mLVCReservoirFlags & VcmReservoirFlags::eTemporalReuse) {
+					if (mLVCReservoirFlags & (VcmReservoirFlags::eTemporalReuse|VcmReservoirFlags::eSpatialReuse)) {
 						if (ImGui::DragFloat("Max M", &mPushConstants.mLVCReservoirParams.mMaxM)) changed = true;
 					}
 					if (mLVCReservoirFlags & VcmReservoirFlags::eSpatialReuse) {
@@ -262,7 +266,7 @@ void PathTracer::drawGui() {
 			if (ImGui::Checkbox("Enable denoiser", &mDenoise))
 				changed = true;
 
-			if (changed)
+			if (changed && !ImGui::GetIO().KeyAlt)
 				denoiser->resetAccumulation();
 		}
 
@@ -471,6 +475,9 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		{ "gDebugPathWeights", to_string(mDebugPathWeights) },
 		{ "gDIReservoirFlags", to_string((uint32_t)mDIReservoirFlags) },
 		{ "gLVCReservoirFlags", to_string((uint32_t)mLVCReservoirFlags) },
+		{ "gNormalMaps", to_string(mUseNormalMaps) },
+		{ "gShadingNormals", to_string(mUseShadingNormals) },
+		{ "gAlphaTest" ,to_string(mUseAlphaTesting) }
 	};
 	switch (mAlgorithm) {
 	case VcmAlgorithmType::kPathTrace:

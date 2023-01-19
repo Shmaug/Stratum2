@@ -13,13 +13,13 @@
 
 
 #include "compat/common.h"
-#include "compat/disney_data.h"
+#include "compat/material.h"
 
 Texture2D<float4> gDiffuse; // also base color
 Texture2D<float4> gSpecular;
 Texture2D<float3> gTransmittance;
 Texture2D<float> gRoughness;
-RWTexture2D<float4> gOutput[DisneyMaterialData::gDataCount];
+RWTexture2D<float4> gOutput[MaterialData::gDataCount];
 RWTexture2D<float> gOutputAlphaMask;
 RWStructuredBuffer<uint> gOutputMinAlpha;
 
@@ -42,8 +42,8 @@ void from_gltf_pbr(uint3 index : SV_DispatchThreadId) {
 
 	const float4 metallic_roughness = gUseSpecular ? gSpecular[index.xy] : 1;
 
-	DisneyMaterialData m;
-	for (uint i = 0; i < DisneyMaterialData::gDataCount; i++) m.data[i] = 1;
+	MaterialData m;
+	for (uint i = 0; i < MaterialData::gDataCount; i++) m.data[i] = 1;
 
 	m.baseColor(diffuse.rgb);
 	m.metallic(metallic_roughness.b);
@@ -52,7 +52,7 @@ void from_gltf_pbr(uint3 index : SV_DispatchThreadId) {
 	const float l = luminance(m.baseColor());
 	m.transmission(gUseTransmittance ? saturate(luminance(gTransmittance[index.xy].rgb)/(l > 0 ? l : 1)) : 0);
 
-	for (uint j = 0; j < DisneyMaterialData::gDataCount; j++)
+	for (uint j = 0; j < MaterialData::gDataCount; j++)
 		gOutput[j][index.xy] = m.data[j];
 }
 
@@ -72,8 +72,8 @@ void from_diffuse_specular(uint3 index : SV_DispatchThreadId) {
 			InterlockedMin(gOutputMinAlpha[0], uint(saturate(diffuse.a)*0xFFFFFFFF));
 	}
 
-	DisneyMaterialData m;
-	for (uint i = 0; i < DisneyMaterialData::gDataCount; i++)
+	MaterialData m;
+	for (uint i = 0; i < MaterialData::gDataCount; i++)
 		m.data[i] = 1;
 
 	const float3 specular = gUseSpecular ? gSpecular[index.xy].rgb : 0;
@@ -86,6 +86,6 @@ void from_diffuse_specular(uint3 index : SV_DispatchThreadId) {
 	if (gUseRoughness) m.roughness(gRoughness[index.xy]);
 	if (gUseTransmittance) m.transmission(saturate(lt / (ld + ls + lt)));
 
-	for (uint j = 0; j < DisneyMaterialData::gDataCount; j++)
+	for (uint j = 0; j < MaterialData::gDataCount; j++)
 		gOutput[j][index.xy] = m.data[j];
 }

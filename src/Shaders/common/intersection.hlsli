@@ -130,8 +130,8 @@ extension SceneParameters {
 
         bool shadingNormalValid = false;
         float3 shadingNormal;
-		float3 n0,n1,n2;
-        if (vertexInfo.normalBuffer() < gVertexBufferCount) {
+        float3 n0, n1, n2;
+        if (gShadingNormals && vertexInfo.normalBuffer() < gVertexBufferCount) {
 			loadTriangleAttribute(mVertexBuffers[NonUniformResourceIndex(vertexInfo.normalBuffer())], vertexInfo.normalOffset(), vertexInfo.normalStride(), tri, n0, n1, n2);
 
 			shadingNormal = n0 + (n1 - n0)*bary.x + (n2 - n0)*bary.y;
@@ -272,7 +272,7 @@ extension SceneParameters {
 						break;
 					}
                     const MeshInstanceData instance = reinterpret<MeshInstanceData>(mInstances[instanceIndex]);
-                    const uint alphaImage = mMaterialData.Load<uint>(instance.materialAddress() + ImageValue4::PackedSize * DisneyMaterialData::gDataCount);
+                    const uint alphaImage = mMaterialData.Load<uint>(instance.materialAddress() + ImageValue4::PackedSize * MaterialData::gDataCount);
 					if (alphaImage >= gImageCount)
 						break;
                     const MeshVertexInfo vertexInfo = mMeshVertexInfo[instance.vertexInfoIndex()];

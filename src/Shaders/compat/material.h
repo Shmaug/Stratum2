@@ -8,7 +8,7 @@
 
 STM_NAMESPACE_BEGIN
 
-struct DisneyMaterialData {
+struct MaterialData {
 	static const uint gDataCount = 3;
 	float4 data[gDataCount];
 
