@@ -397,13 +397,13 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 	}
 
 
-	auto makeHashGridBuffers = [&](const string& name, const uint32_t cellCount, const uint32_t maxElements) {
+	auto makeHashGridBuffers = [&]<typename T>(const string& name, const uint32_t cellCount, const uint32_t maxElements) {
 		frame->getBuffer<uint> (name + ".mChecksums"    , cellCount, vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
 		frame->getBuffer<uint> (name + ".mCounters"     , cellCount, vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
 		frame->getBuffer<uint2>(name + ".mAppendIndices", 1+maxElements, vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
-		frame->getBuffer<uint> (name + ".mAppendData"   , maxElements);
+		frame->getBuffer<T>    (name + ".mAppendData"   , maxElements);
 		frame->getBuffer<uint> (name + ".mIndices"      , cellCount);
-		frame->getBuffer<uint> (name + ".mData"         , maxElements);
+		frame->getBuffer<T>    (name + ".mData"         , maxElements);
 		frame->getBuffer<uint> (name + ".mStats", 2, vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
 	};
 
@@ -453,7 +453,7 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		frame->getBuffer<uint32_t>("mLightPathLengths", mPushConstants.mLightSubPathCount, vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
 		frame->getBuffer<DirectIlluminationReservoir>("mDirectIlluminationReservoirs", mPushConstants.mScreenPixelCount);
 
-		makeHashGridBuffers("mLightHashGrid", mPushConstants.mHashGridCellCount, maxLightVertices);
+		makeHashGridBuffers.operator()<uint>("mLightHashGrid", mPushConstants.mHashGridCellCount, maxLightVertices);
 
 		if (!frame->mSelectionData)
 			frame->mSelectionData = make_shared<Buffer>(commandBuffer.mDevice, "mSelectionData", sizeof(VisibilityData), vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);

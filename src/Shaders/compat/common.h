@@ -29,6 +29,8 @@ DECLARE_INTEGER_POW_FNS(float3)
 DECLARE_INTEGER_POW_FNS(float4)
 #undef DECLARE_INTEGER_POW_FNS
 
+inline float safe_divide(const float numerator, const float denominator, const float value = 0) { return denominator == 0 ? value : numerator / denominator; }
+
 inline float average(const float2 x) { return (x[0] + x[1])/2; }
 inline float average(const float3 x) { return (x[0] + x[1] + x[2])/3; }
 inline float average(const float4 x) { return (x[0] + x[1] + x[2] + x[3])/4; }

@@ -216,7 +216,7 @@ Material Scene::makeMetallicRoughnessMaterial(CommandBuffer& commandBuffer, cons
 		md.mLevels = Image::maxMipLevels(md.mExtent);
 		md.mFormat = vk::Format::eR8G8B8A8Unorm;
 		md.mUsage = vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage;
-		for (int i = 0; i < DisneyMaterialData::gDataCount; i++) {
+		for (int i = 0; i < MaterialData::gDataCount; i++) {
 			m.mValues[i].mImage = make_shared<Image>(commandBuffer.mDevice, "DisneyMaterialData[" + to_string(i) + "]", md);
 			descriptors[{ "gOutput", i }] = ImageDescriptor{ m.mValues[i].mImage, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 		}
@@ -242,7 +242,7 @@ Material Scene::makeMetallicRoughnessMaterial(CommandBuffer& commandBuffer, cons
 		if (transmission.mImage) defs["gUseTransmittance"] = "true";
 		mConvertPbrPipeline.get(commandBuffer.mDevice, defs)->dispatchTiled(commandBuffer, d.extent(), descriptors);
 
-		for (int i = 0; i < DisneyMaterialData::gDataCount; i++)
+		for (int i = 0; i < MaterialData::gDataCount; i++)
 			m.mValues[i].mImage.image()->generateMipMaps(commandBuffer);
 	}
 	return m;
@@ -278,7 +278,7 @@ Material Scene::makeDiffuseSpecularMaterial(CommandBuffer& commandBuffer, const 
 		md.mLevels = Image::maxMipLevels(md.mExtent);
 		md.mFormat = vk::Format::eR8G8B8A8Unorm;
 		md.mUsage = vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage;
-		for (int i = 0; i < DisneyMaterialData::gDataCount; i++) {
+		for (int i = 0; i < MaterialData::gDataCount; i++) {
 			m.mValues[i].mImage = make_shared<Image>(commandBuffer.mDevice, "material data", md);
 			descriptors[{"gOutput", i}] = ImageDescriptor{ m.mValues[i].mImage, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 		}
@@ -306,7 +306,7 @@ Material Scene::makeDiffuseSpecularMaterial(CommandBuffer& commandBuffer, const 
 
 		mConvertDiffuseSpecularPipeline.get(commandBuffer.mDevice, defs)->dispatchTiled(commandBuffer, d.extent(), descriptors);
 
-		for (int i = 0; i < DisneyMaterialData::gDataCount; i++)
+		for (int i = 0; i < MaterialData::gDataCount; i++)
 			m.mValues[i].mImage.image()->generateMipMaps(commandBuffer);
 	}
 	return m;
@@ -1096,7 +1096,7 @@ void Material::drawGui(Node& node) {
 	ImGui::PopItemWidth();
 
 	const float w = ImGui::CalcItemWidth() - 4;
-	for (uint i = 0; i < DisneyMaterialData::gDataCount; i++)
+	for (uint i = 0; i < MaterialData::gDataCount; i++)
 		if (mValues[i].mImage) {
 			ImGui::Text(mValues[i].mImage.image()->resourceName().c_str());
 			ImGui::Image(Gui::getTextureID(mValues[i].mImage), ImVec2(w, w * mValues[i].mImage.extent().height / (float)mValues[i].mImage.extent().width));

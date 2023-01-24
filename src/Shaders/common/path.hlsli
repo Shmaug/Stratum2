@@ -275,12 +275,6 @@ extension SceneParameters {
         return r;
     }
 }
-extension DirectIlluminationReservoir {
-    IlluminationSampleRecord get() {
-        return gScene.sampleIllumination(mReferencePosition, mRnd);
-	}
-}
-
 struct LightRadianceRecord {
 	float3 mRadiance;
     float mDirectPdfA;

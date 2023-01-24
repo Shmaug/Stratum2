@@ -254,7 +254,6 @@ extension VertexCM {
 	////////////////////////////////
 
     struct ReservoirStateDI {
-        IlluminationSampleRecord mSample;
         float4 mSampleRnd;
         float mSampleTargetPdf;
         float mTotalWeight;
@@ -265,98 +264,79 @@ extension VertexCM {
         __init() {
             mTotalWeight = 0;
             mSampleTargetPdf = 0;
+            M = 0;
 		}
 
-        static float GetTargetPdf(const SubPathState aCameraState, inout IlluminationSampleRecord aSample, const bool visibility = false) {
-            //const float3 localToLight = aCameraState.mVertex.mShadingData.toLocal(aSample.mDirectionToLight);
-            const float targetPdf = luminance(aSample.mRadiance); // * abs(localToLight.z) * aSample.mG;
+        static float GetTargetPdf<let bVisibility : bool>(const float3 aRefPos, const uint aGeometryNormal, const uint aShadingNormal, const float4 aSample, out float oSourcePdfA) {
+            IlluminationSampleRecord sample = gScene.sampleIllumination(aRefPos, aSample);
+            const float cosTheta = dot(unpackNormal(aShadingNormal), sample.mDirectionToLight);
+            const float targetPdf = luminance(sample.mRadiance) * abs(cosTheta) * sample.mG;
+            oSourcePdfA = sample.mDirectPdfA;
 
-			if (targetPdf > 0) {
-				IntersectionResult isect;
-				if (gScene.traceRay(makeRay(OffsetRayOrigin(aCameraState.mVertex, aSample.mDirectionToLight), aSample.mDirectionToLight, 0, AdjustDistance(aSample.mDistance)), false, isect)) {
-					aSample.mRadiance = 0;
-					return 0;
+			if (bVisibility && targetPdf > 0) {
+                IntersectionResult isect;
+                if (gScene.traceRay(makeRay(rayOffset(aRefPos, unpackNormal(aGeometryNormal), sample.mDirectionToLight), sample.mDirectionToLight, 0, AdjustDistance(sample.mDistance)), false, isect)) {
+                    oSourcePdfA = 0;
+                    return 0;
 				}
             }
 
             return targetPdf;
-		}
-
-        static bool TestVisibility(const DirectIlluminationReservoir aOtherReservoir, const IlluminationSampleRecord aSample) {
-			float3 toSample;
-			float dist;
-			if (aSample.isFinite) {
-				toSample = aSample.mPosition - aOtherReservoir.mReferencePosition;
-				dist = length(toSample);
-				toSample /= dist;
-                if (-dot(toSample, aSample.mNormal) <= 0)
-                    return false;
-			} else {
-				toSample = aSample.mDirectionToLight;
-				dist = POS_INFINITY;
-			}
-
-			// note: this ray should actually be traced through the previous frame's scene
-			IntersectionResult isect;
-            if (gScene.traceRay(makeRay(rayOffset(aOtherReservoir.mReferencePosition, unpackNormal(aOtherReservoir.mReferenceGeometryNormal), toSample), toSample, 0, AdjustDistance(dist)), false, isect))
-                return false;
-
-            return true;
+        }
+        static float GetTargetPdf<let bVisibility : bool>(const ShadingData aRefPos, const float4 aSample, out float oSourcePdfA) {
+            return GetTargetPdf<bVisibility>(aRefPos.mPosition, aRefPos.mPackedGeometryNormal, aRefPos.mPackedShadingNormal, aSample, oSourcePdfA);
+        }
+        static float GetTargetPdf<let bVisibility : bool>(const DirectIlluminationReservoir aRefPos, const float4 aSample, out float oSourcePdfA) {
+            return GetTargetPdf<bVisibility>(aRefPos.mReferencePosition, aRefPos.mReferenceGeometryNormal, aRefPos.mReferenceShadingNormal, aSample, oSourcePdfA);
         }
 
 		// assumes M has already been set to the correct sample count
         [mutating]
-        void ProcessSample(const SubPathState aCameraState, const float4 aSampleRnd, const float aReservoirRnd) {
-			IlluminationSampleRecord si = gScene.sampleIllumination(aCameraState.mVertex.mShadingData.mPosition, aSampleRnd);
-            if (all(si.mRadiance <= 0))
-                return;
-
-            const float targetPdf = GetTargetPdf(aCameraState, si);
+        void ProcessSample(const SubPathState aCameraState, const float4 aSampleRnd, const float aRnd) {
+            float sourcePdfA;
+            const float targetPdf = GetTargetPdf<false>(aCameraState.mVertex.mShadingData, aSampleRnd, sourcePdfA);
             if (targetPdf <= 0)
 				return;
 
-            const float wi = targetPdf / (si.mDirectPdfW * M);
+            const float wi = targetPdf / (sourcePdfA * M);
             mTotalWeight += wi;
-            if (aReservoirRnd * mTotalWeight <= wi) {
+            if (aRnd * mTotalWeight <= wi) {
                 mSampleRnd = aSampleRnd;
                 mSampleTargetPdf = targetPdf;
-                mSample = si;
 			}
 		}
 
         // turns this reservoir into a new one containing just the current and reused samples
         [mutating]
-        void Reuse(const SubPathState aCameraState, const float aReservoirRnd, const DirectIlluminationReservoir aReservoir) {
-            if (aReservoir.mIntegrationWeight <= 0)
+        void Reuse(const SubPathState aCameraState, const float aRnd, const DirectIlluminationReservoir aReservoir) {
+            if (aReservoir.M <= 0)
                 return;
 
-            IlluminationSampleRecord shiftedSample = gScene.sampleIllumination(aCameraState.mVertex.mShadingData.mPosition, aReservoir.mRnd);
-            const float targetPdf = GetTargetPdf(aCameraState, shiftedSample, true);
+            const float shiftJacobian = 1;
 
-            // MIS weights
+			// target pdfs
 
-            const float m0 = TestVisibility(aReservoir, mSample)       ? .5 : 1.0;
-            const float m1 = TestVisibility(aReservoir, shiftedSample) ? .5 : 1.0;
+            float tmpSrcPdfA;
+            const float phat_i_old = GetTargetPdf<true>(aReservoir, mSampleRnd, tmpSrcPdfA);
+            const float phat_i_new = GetTargetPdf<false>(aReservoir, aReservoir.mRnd, tmpSrcPdfA);
+            const float phat_new   = GetTargetPdf<true>(aCameraState.mVertex.mShadingData, aReservoir.mRnd, tmpSrcPdfA);
+
+			// MIS weights
+
+            const float m0 = safe_divide(mSampleTargetPdf, mSampleTargetPdf + phat_i_old);
+            const float m1 = safe_divide(phat_i_new, phat_i_new + phat_new);
 
             // RIS weights
 
             float w0 = m0 * mSampleTargetPdf * mIntegrationWeight;
-            float w1 = m1 * targetPdf * aReservoir.mIntegrationWeight;
-
-			// shift map jacobian
-			{
-				const IlluminationSampleRecord originalSample = gScene.sampleIllumination(aReservoir.mReferencePosition, aReservoir.mRnd);
-				const float shiftJacobian = shiftedSample.mG / originalSample.mG;
-				w1 *= shiftJacobian;
-			}
+            float w1 = m1 * phat_new * aReservoir.mIntegrationWeight * shiftJacobian;
 
             // create new reservoir from current and new reservoirs
 
 			mTotalWeight = w0 + w1;
-            if (aReservoirRnd * mTotalWeight <= w1) {
-				mSampleRnd = aReservoir.mRnd;
-                mSampleTargetPdf = targetPdf;
-                mSample = shiftedSample;
+            if (aRnd * mTotalWeight <= w1) {
+                mSampleRnd = aReservoir.mRnd;
+                mSampleTargetPdf = phat_new;
             }
 
 			M += aReservoir.M;
@@ -369,7 +349,8 @@ extension VertexCM {
 		storedReservoir.mReferencePosition       = aCameraState.mVertex.mShadingData.mPosition;
 		storedReservoir.mReferenceGeometryNormal = aCameraState.mVertex.mShadingData.mPackedGeometryNormal;
 		storedReservoir.M = min(aReservoir.M, gPushConstants.mDIReservoirParams.mMaxM * gPushConstants.mDIReservoirParams.mSampleCount);
-		storedReservoir.mIntegrationWeight = aReservoir.mIntegrationWeight;
+        storedReservoir.mIntegrationWeight = aReservoir.mIntegrationWeight;
+        storedReservoir.mReferenceShadingNormal = aCameraState.mVertex.mShadingData.mPackedShadingNormal;
 		gRenderParams.mDirectIlluminationReservoirs[mPathIndex] = storedReservoir;
 	}
 
@@ -384,9 +365,9 @@ extension VertexCM {
 
         // visibility ray for canonical samples
         if (reservoir.mSampleTargetPdf > 0) {
+            const IlluminationSampleRecord s = gScene.sampleIllumination(aCameraState.mVertex.mShadingData.mPosition, reservoir.mSampleRnd);
             IntersectionResult isect;
-            if (gScene.traceRay(makeRay(OffsetRayOrigin(aCameraState.mVertex, reservoir.mSample.mDirectionToLight), reservoir.mSample.mDirectionToLight, 0, AdjustDistance(reservoir.mSample.mDistance)), false, isect)) {
-                reservoir.mSample.mRadiance = 0;
+            if (gScene.traceRay(makeRay(OffsetRayOrigin(aCameraState.mVertex, s.mDirectionToLight), s.mDirectionToLight, 0, AdjustDistance(s.mDistance)), false, isect)) {
                 reservoir.mSampleTargetPdf = 0;
 			}
         }
@@ -411,8 +392,9 @@ extension VertexCM {
                 StoreReservoir(aCameraState, reservoir);
         }
 
-        reservoir.mSample.mIntegrationWeight = reservoir.mIntegrationWeight;
-        return reservoir.mSample;
+        IlluminationSampleRecord s = gScene.sampleIllumination(aCameraState.mVertex.mShadingData.mPosition, reservoir.mSampleRnd);
+        s.mIntegrationWeight = reservoir.mIntegrationWeight * s.mG;
+        return s;
 	}
 
     // Connects camera vertex to randomly chosen light point.
@@ -421,9 +403,11 @@ extension VertexCM {
     [mutating]
     float3 DirectIllumination(const SubPathState aCameraState, const BSDF aBsdf) {
         IlluminationSampleRecord emissionSample;
-        if (bool(gDIReservoirFlags & (uint)VcmReservoirFlags::eRIS))
+        if (bool(gDIReservoirFlags & (uint)VcmReservoirFlags::eRIS)) {
             emissionSample = SampleDirectIlluminationReservoir(aCameraState);
-		else
+            if (emissionSample.mIntegrationWeight <= 0)
+                return 0;
+        } else
             emissionSample = gScene.sampleIllumination(aCameraState.mVertex.mShadingData.mPosition, mRng.nextFloat4());
 
         // If radiance == 0, other values are undefined, so have to early exit
@@ -488,6 +472,7 @@ extension VertexCM {
         if (all(contrib <= 0))
             return 0;
 
+		// for reservoir samples, visibility is handled by the reservoir's integration weight
         if (!bool(gDIReservoirFlags & (uint)VcmReservoirFlags::eRIS)) {
 			IntersectionResult isect;
 			if (gScene.traceRay(makeRay(OffsetRayOrigin(aCameraState.mVertex, emissionSample.mDirectionToLight), emissionSample.mDirectionToLight, 0, AdjustDistance(emissionSample.mDistance)), false, isect))
@@ -735,7 +720,14 @@ extension VertexCM {
         d.mDepth     = isect.mDistance;
         d.mPrevDepth = prevDepth;
         d.mDepthDerivative = 1;
-		gRenderParams.mDepth[mIndex] = reinterpret<float4>(d);
+        gRenderParams.mDepth[mIndex] = reinterpret<float4>(d);
+
+        if (bool(gDIReservoirFlags & ((uint)VcmReservoirFlags::eSpatialReuse | (uint)VcmReservoirFlags::eTemporalReuse))) {
+            DirectIlluminationReservoir r;
+            r.M = 0;
+            r.mIntegrationWeight = 0;
+            gRenderParams.mDirectIlluminationReservoirs[mPathIndex] = r;
+        }
 	}
 
     // Top-level methods
@@ -1095,11 +1087,13 @@ void GenerateCameraPaths(uint3 index: SV_DispatchThreadID) {
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void ComputeHashGridIndices(uint3 index: SV_DispatchThreadID) {
-    gRenderParams.mLightHashGrid.ComputeIndices(index.y * gPushConstants.mOutputExtent.x + index.x);
+	if (gUseVM)
+    	gRenderParams.mLightHashGrid.ComputeIndices(index.y * gPushConstants.mOutputExtent.x + index.x);
 }
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void SwizzleHashGrid(uint3 index: SV_DispatchThreadID) {
-    gRenderParams.mLightHashGrid.Swizzle(index.y * gPushConstants.mOutputExtent.x + index.x);
+	if (gUseVM)
+    	gRenderParams.mLightHashGrid.Swizzle(index.y * gPushConstants.mOutputExtent.x + index.x);
 }

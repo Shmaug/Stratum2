@@ -73,8 +73,8 @@ struct DirectIlluminationReservoir {
     uint mReferenceGeometryNormal;
     float M;
     float mIntegrationWeight;
-    float pad0;
-    float pad1;
+    uint mReferenceShadingNormal;
+    uint pad;
 };
 struct LVCReservoir {
     VcmVertex mLightVertex;
@@ -82,8 +82,8 @@ struct LVCReservoir {
     uint mReferenceGeometryNormal;
     float M;
     float mIntegrationWeight;
-    float pad0;
-    float pad1;
+    uint mReferenceShadingNormal;
+    uint pad;
 };
 
 
