@@ -29,21 +29,19 @@ struct RenderParams {
     RWStructuredBuffer<DirectIlluminationReservoir> mDirectIlluminationReservoirs;
     RWStructuredBuffer<DirectIlluminationReservoir> mPrevDirectIlluminationReservoirs;
 
-    //RWStructuredBuffer<LVCReservoir> mLVCReservoirs;
-    //RWStructuredBuffer<LVCReservoir> mPrevLVCReservoirs;
-
     RWStructuredBuffer<VcmVertex> mLightVertices;
     RWStructuredBuffer<uint> mLightPathLengths;
+
+    ConstantBuffer<VcmConstants> mVcmConstants;
 	HashGrid<uint> mLightHashGrid;
 };
 
 ParameterBlock<SceneParameters> gScene;
 ParameterBlock<RenderParams> gRenderParams;
 
+#define gHasEnvironment (gPushConstants.mEnvironmentMaterialAddress != -1)
 
 // includes which reference shader parameters
-
-#define gHasEnvironment (gPushConstants.mEnvironmentMaterialAddress != -1)
 
 #include "intersection.hlsli"
 #include "materials/environment.hlsli"
@@ -93,6 +91,8 @@ extension ShadingData {
         return G;
     }
 }
+
+// light sampling
 
 struct IlluminationSampleRecord {
     float3 mRadiance;
@@ -161,7 +161,7 @@ extension SceneParameters {
                 r.mDistance = POS_INFINITY;
                 r.mPosition = r.mDirectionToLight;
                 r.mNormal = r.mDirectionToLight;
-                r.mEmissionPdfW = r.mDirectPdfW * concentricDiscPdfA() / pow2(gPushConstants.mSceneSphere.w);
+                r.mEmissionPdfW = r.mDirectPdfW * concentricDiscPdfA() / pow2(gRenderParams.mVcmConstants.mSceneSphere.w);
                 r.mIntegrationWeight = 1 / r.mDirectPdfW;
                 r.mCosLight = 1;
                 r.isSingular = false;
@@ -224,8 +224,8 @@ extension SceneParameters {
                 if (gPushConstants.mLightCount > 0)
                     r.mDirectPdfA *= gPushConstants.mEnvironmentSampleProbability;
                 const float3x3 frame = makeOrthonormal(r.mDirection);
-                r.mPosition = gPushConstants.mSceneSphere.xyz + gPushConstants.mSceneSphere.w * (frame[0] * posRnd.x + frame[1] * posRnd.y - r.mDirection);
-                r.mEmissionPdfW = r.mDirectPdfA * concentricDiscPdfA() / pow2(gPushConstants.mSceneSphere.w);
+                r.mPosition = gRenderParams.mVcmConstants.mSceneSphere.xyz + gRenderParams.mVcmConstants.mSceneSphere.w * (frame[0] * posRnd.x + frame[1] * posRnd.y - r.mDirection);
+                r.mEmissionPdfW = r.mDirectPdfA * concentricDiscPdfA() / pow2(gRenderParams.mVcmConstants.mSceneSphere.w);
                 r.mPackedNormal = packNormal(r.mDirection);
 				r.mCosLight = 1;
                 r.isSingular = false;
@@ -287,7 +287,7 @@ LightRadianceRecord GetBackgroundRadiance(const float3 aDirection) {
     EnvironmentImage().evaluate(aDirection, cartesianToSphericalUv(aDirection), r.mRadiance, r.mDirectPdfA);
     if (gPushConstants.mLightCount > 0)
         r.mDirectPdfA *= gPushConstants.mEnvironmentSampleProbability;
-    r.mEmissionPdfW = r.mDirectPdfA * concentricDiscPdfA() / pow2(gPushConstants.mSceneSphere.w);
+    r.mEmissionPdfW = r.mDirectPdfA * concentricDiscPdfA() / pow2(gRenderParams.mVcmConstants.mSceneSphere.w);
 	return r;
 }
 LightRadianceRecord GetSurfaceRadiance(const float3 aDirection, const IntersectionResult aIsect, const BSDF aBsdf) {
@@ -304,6 +304,8 @@ LightRadianceRecord GetSurfaceRadiance(const float3 aDirection, const Intersecti
     r.mEmissionPdfW = r.mDirectPdfA * cosHemispherePdfW(cosTheta);
 	return r;
 }
+
+// misc
 
 float3 OffsetRayOrigin(const VcmVertex vertex, const float3 direction) {
 	return rayOffset(vertex.mShadingData.mPosition, vertex.mShadingData.geometryNormal, direction);

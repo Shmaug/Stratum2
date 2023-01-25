@@ -4,6 +4,19 @@
 
 STM_NAMESPACE_BEGIN
 
+// Mis power
+inline float Mis(float aPdf) {
+    return pow2(aPdf);
+}
+
+struct VcmConstants {
+    float4 mSceneSphere;
+    float mMergeRadius;
+    float mMisVmWeightFactor;
+    float mMisVcWeightFactor;
+    float mVmNormalization;
+};
+
 struct ReservoirParameters {
     float mMaxM;
     float mSpatialRadius;
@@ -16,8 +29,6 @@ struct PathTracerPushConstants {
 	uint mScreenPixelCount;  // Number of pixels
 	uint mLightSubPathCount; // Number of light sub-paths
 
-    float4 mSceneSphere;
-
 	uint mViewCount;
 	uint mLightCount;
     uint mEnvironmentMaterialAddress;
@@ -27,11 +38,6 @@ struct PathTracerPushConstants {
     uint mMaxPathLength;
 	uint mLightImageQuantization;
 	uint mHashGridCellCount;
-
-    float mMergeRadius;
-    float mMisVmWeightFactor;
-    float mMisVcWeightFactor;
-    float mVmNormalization;
 
     uint mRandomSeed;
     uint mDebugPathLengths;
@@ -125,11 +131,6 @@ enum VcmReservoirFlags {
 	eTemporalReuse = BIT(1),
 	eSpatialReuse  = BIT(2)
 };
-
-// Mis power
-inline float Mis(float aPdf) {
-    return pow2(aPdf);
-}
 
 STM_NAMESPACE_END
 

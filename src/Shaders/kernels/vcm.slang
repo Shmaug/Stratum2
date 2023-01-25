@@ -76,20 +76,26 @@ float AdjustDistance(const float dist) {
     //else
         return dist * 0.99;
 }
+uint GetLightVertexIndex(const uint lightPathIndex, const uint vertexIndex) {
+	// store light paths individually, so specific path vertices can be found
+	// i.e. { path0.vertex0, ..., pathN.vertex0, path0.vertex1, ..., pathN.vertex1, ... }
+	return vertexIndex * gPushConstants.mLightSubPathCount + lightPathIndex;
+}
+
 
 typedef VcmVertex CameraVertex;
 typedef VcmVertex LightVertex;
 
-struct VertexCM {
-	// The sole point of this structure is to make carrying around the ray baggage easier.
-	struct SubPathState {
-		VcmVertex mVertex;
-		float3 mDirection; // Where to go next
-		float mFwdBsdfPdfW; // for NEE MIS when doing regular path tracing. Other techniques use MIS quantities in mVertex.
-		bool mIsFiniteLight; // Just generate by finite light
-		bool mSpecularPath; // All scattering events so far were specular
-	};
+// The sole point of this structure is to make carrying around the ray baggage easier.
+struct SubPathState {
+	VcmVertex mVertex;
+	float3 mDirection; // Where to go next
+	float mFwdBsdfPdfW; // for NEE MIS when doing regular path tracing. Other techniques use MIS quantities in mVertex.
+	bool mIsFiniteLight; // Just generate by finite light
+	bool mSpecularPath; // All scattering events so far were specular
+};
 
+struct VertexCM {
     uint2 mIndex;
     RandomSampler mRng;
 
@@ -99,14 +105,6 @@ struct VertexCM {
         mIndex = index;
         mRng = RandomSampler(gPushConstants.mRandomSeed, index, aRngOffset);
     }
-
-
-    static uint GetLightVertexIndex(const uint lightPathIndex, const uint vertexIndex) {
-        // store light paths individually, so specific path vertices can be found
-		// i.e. { path0.vertex0, ..., pathN.vertex0, path0.vertex1, ..., pathN.vertex1, ... }
-        return vertexIndex * gPushConstants.mLightSubPathCount + lightPathIndex;
-    }
-
 
     // Samples a scattering direction camera/light sample according to BSDF.
     // Returns false for termination
@@ -148,8 +146,8 @@ struct VertexCM {
             aoState.mFwdBsdfPdfW = POS_INFINITY;
         } else {
             // Implements [tech. rep. (34)-(36)] (partially, as noted above)
-            aoState.mVertex.dVC = Mis(cosThetaOut / bsdfDirPdfW) * (aoState.mVertex.dVC * Mis(bsdfRevPdfW) + aoState.mVertex.dVCM + gPushConstants.mMisVmWeightFactor);
-            aoState.mVertex.dVM = Mis(cosThetaOut / bsdfDirPdfW) * (aoState.mVertex.dVM * Mis(bsdfRevPdfW) + aoState.mVertex.dVCM * gPushConstants.mMisVcWeightFactor + 1.f);
+            aoState.mVertex.dVC = Mis(cosThetaOut / bsdfDirPdfW) * (aoState.mVertex.dVC * Mis(bsdfRevPdfW) + aoState.mVertex.dVCM + gRenderParams.mVcmConstants.mMisVmWeightFactor);
+            aoState.mVertex.dVM = Mis(cosThetaOut / bsdfDirPdfW) * (aoState.mVertex.dVM * Mis(bsdfRevPdfW) + aoState.mVertex.dVCM * gRenderParams.mVcmConstants.mMisVcWeightFactor + 1.f);
             aoState.mVertex.dVCM = Mis(1.f / bsdfDirPdfW);
 
             aoState.mSpecularPath = false;
@@ -200,6 +198,37 @@ extension VertexCM {
 
         return sample;
     }
+
+    void StoreAuxillaryData(const IntersectionResult isect, const float3 albedo) {
+        float2 prevPixelCoord = mIndex + 0.5;
+
+        float prevDepth = isect.mDistance;
+        if (isect.instanceIndex != INVALID_INSTANCE) {
+            const float3 prevCameraPos = gCamera.prevInverseTransform.transformPoint(gScene.mInstanceMotionTransforms[isect.instanceIndex].transformPoint(isect.mShadingData.mPosition));
+            prevDepth = length(prevCameraPos);
+            gCamera.view.toRaster(prevCameraPos, prevPixelCoord);
+        }
+
+        gRenderParams.mPrevUVs[mIndex] = prevPixelCoord / gPushConstants.mOutputExtent;
+
+        VisibilityData v;
+        v.mInstancePrimitiveIndex = isect.mInstancePrimitiveIndex;
+        v.mPackedNormal           = isect.mShadingData.mPackedShadingNormal;
+        gRenderParams.mVisibility[mIndex] = reinterpret<uint2>(v);
+
+        DepthData d;
+        d.mDepth     = isect.mDistance;
+        d.mPrevDepth = prevDepth;
+        d.mDepthDerivative = 1;
+        gRenderParams.mDepth[mIndex] = reinterpret<float4>(d);
+
+        if (bool(gDIReservoirFlags & ((uint)VcmReservoirFlags::eSpatialReuse | (uint)VcmReservoirFlags::eTemporalReuse))) {
+            DirectIlluminationReservoir r;
+            r.M = 0;
+            r.mIntegrationWeight = 0;
+            gRenderParams.mDirectIlluminationReservoirs[mPathIndex] = r;
+        }
+	}
 
 
     // Returns the radiance of a light source when hit by a random ray,
@@ -452,7 +481,7 @@ extension VertexCM {
         // Also note that both emissionPdfW and directPdfW should be
         // multiplied by lightPickProb, so it cancels out.
         const float wCamera = Mis(emissionSample.mEmissionPdfW * abs(localToLight.z) / (emissionSample.mDirectPdfW * emissionSample.mCosLight)) * (
-			gPushConstants.mMisVmWeightFactor + aCameraState.mVertex.dVCM + aCameraState.mVertex.dVC * Mis(bsdfRevPdfW));
+			gRenderParams.mVcmConstants.mMisVmWeightFactor + aCameraState.mVertex.dVCM + aCameraState.mVertex.dVC * Mis(bsdfRevPdfW));
 
         float misWeight;
 
@@ -481,6 +510,7 @@ extension VertexCM {
 
         return contrib;
     }
+
 
     ////////////////////////////////
     // VC methods
@@ -539,10 +569,10 @@ extension VertexCM {
         const float lightBsdfDirPdfA  = pdfWtoA(lightBsdfDirPdfW, abs(cosCamera)/pow2(distance));
 
         // Partial light sub-path MIS weight [tech. rep. (40)]
-        const float wLight = Mis(cameraBsdfDirPdfA) * (gPushConstants.mMisVmWeightFactor + aLightVertex.dVCM + aLightVertex.dVC * Mis(lightBsdfRevPdfW));
+        const float wLight = Mis(cameraBsdfDirPdfA) * (gRenderParams.mVcmConstants.mMisVmWeightFactor + aLightVertex.dVCM + aLightVertex.dVC * Mis(lightBsdfRevPdfW));
 
         // Partial eye sub-path MIS weight [tech. rep. (41)]
-        const float wCamera = Mis(lightBsdfDirPdfA) * (gPushConstants.mMisVmWeightFactor + aCameraState.mVertex.dVCM + aCameraState.mVertex.dVC * Mis(cameraBsdfRevPdfW));
+        const float wCamera = Mis(lightBsdfDirPdfA) * (gRenderParams.mVcmConstants.mMisVmWeightFactor + aCameraState.mVertex.dVCM + aCameraState.mVertex.dVC * Mis(cameraBsdfRevPdfW));
 
         // Full path MIS weight [tech. rep. (37)]
         const float misWeight = (gDebugPaths && !gDebugPathWeights) ?
@@ -621,6 +651,7 @@ extension VertexCM {
         AddColor(mIndex, contrib * w, aCameraState.mVertex.mPathLength + 1, lightVertex.mPathLength + 1);
     }
 
+
     ////////////////////////////////
     // VM methods
     ////////////////////////////////
@@ -633,12 +664,12 @@ extension VertexCM {
 
         const int3 offsetSign = sign(frac(queryPos / gRenderParams.mLightHashGrid.GetCellSize(queryPos)) - 0.5);
 
-        const float mergeRadiusSqr = pow2(gPushConstants.mMergeRadius);
+        const float mergeRadiusSqr = pow2(gRenderParams.mVcmConstants.mMergeRadius);
 
 		for (int j = 0; j < 8; j++) {
 			const int3 offset = int3((j%2), (j%4)/2, j/4) * offsetSign;
 
-			const uint cellIndex = gRenderParams.mLightHashGrid.FindCellIndex<false>(queryPos, offset);
+			const uint cellIndex = gRenderParams.mLightHashGrid.FindCellIndex(queryPos, gRenderParams.mLightHashGrid.GetCellSize(queryPos), offset);
 			if (cellIndex == -1)
 				continue;
 
@@ -652,8 +683,8 @@ extension VertexCM {
 				const float3 toParticle = particle.mShadingData.mPosition - queryPos;
 				const float distSqr     = dot(toParticle, toParticle);
 
-                //if (distSqr <= mergeRadiusSqr)
-                    ProcessVertex(aCameraState, aCameraBsdf, particle);
+				if (distSqr <= mergeRadiusSqr)
+					ProcessVertex(aCameraState, aCameraBsdf, particle);
 			}
 		}
 	}
@@ -685,51 +716,20 @@ extension VertexCM {
 		cameraBsdfRevPdfW *= lightBsdf.continuationProb();
 
         // Partial light sub-path MIS weight [tech. rep. (38)]
-        const float wLight = aLightVertex.dVCM * gPushConstants.mMisVcWeightFactor + aLightVertex.dVM * Mis(cameraBsdfDirPdfW);
+        const float wLight = aLightVertex.dVCM * gRenderParams.mVcmConstants.mMisVcWeightFactor + aLightVertex.dVM * Mis(cameraBsdfDirPdfW);
 
         // Partial eye sub-path MIS weight [tech. rep. (39)]
-        const float wCamera = aCameraState.mVertex.dVCM * gPushConstants.mMisVcWeightFactor + aCameraState.mVertex.dVM * Mis(cameraBsdfRevPdfW);
+        const float wCamera = aCameraState.mVertex.dVCM * gRenderParams.mVcmConstants.mMisVcWeightFactor + aCameraState.mVertex.dVM * Mis(cameraBsdfRevPdfW);
 
 		// Full path MIS weight [tech. rep. (37)]. No MIS for PPM
 		const float misWeight = gPpm ? 1.f : 1.f / (wLight + 1.f + wCamera);
 
 		const float3 contrib = misWeight * cameraBsdfFactor * aLightVertex.mThroughput;
-		AddColor(mIndex, aCameraState.mVertex.mThroughput * gPushConstants.mVmNormalization * contrib, aCameraState.mVertex.mPathLength + 1, aLightVertex.mPathLength);
+		AddColor(mIndex, aCameraState.mVertex.mThroughput * gRenderParams.mVcmConstants.mVmNormalization * contrib, aCameraState.mVertex.mPathLength + 1, aLightVertex.mPathLength);
 	}
 
 
-
-    void StoreAuxillaryData(const IntersectionResult isect, const float3 albedo) {
-        float2 prevPixelCoord = mIndex + 0.5;
-
-        float prevDepth = isect.mDistance;
-        if (isect.instanceIndex != INVALID_INSTANCE) {
-            const float3 prevCameraPos = gCamera.prevInverseTransform.transformPoint(gScene.mInstanceMotionTransforms[isect.instanceIndex].transformPoint(isect.mShadingData.mPosition));
-            prevDepth = length(prevCameraPos);
-            gCamera.view.toRaster(prevCameraPos, prevPixelCoord);
-        }
-
-        gRenderParams.mPrevUVs[mIndex] = prevPixelCoord / gPushConstants.mOutputExtent;
-
-        VisibilityData v;
-        v.mInstancePrimitiveIndex = isect.mInstancePrimitiveIndex;
-        v.mPackedNormal           = isect.mShadingData.mPackedShadingNormal;
-        gRenderParams.mVisibility[mIndex] = reinterpret<uint2>(v);
-
-        DepthData d;
-        d.mDepth     = isect.mDistance;
-        d.mPrevDepth = prevDepth;
-        d.mDepthDerivative = 1;
-        gRenderParams.mDepth[mIndex] = reinterpret<float4>(d);
-
-        if (bool(gDIReservoirFlags & ((uint)VcmReservoirFlags::eSpatialReuse | (uint)VcmReservoirFlags::eTemporalReuse))) {
-            DirectIlluminationReservoir r;
-            r.M = 0;
-            r.mIntegrationWeight = 0;
-            gRenderParams.mDirectIlluminationReservoirs[mPathIndex] = r;
-        }
-	}
-
+    ////////////////////////////////
     // Top-level methods
     ////////////////////////////////
 
@@ -892,7 +892,7 @@ extension VertexCM {
                 oLightState.mVertex.dVC = 0.f;
             }
 
-            oLightState.mVertex.dVM = oLightState.mVertex.dVC * gPushConstants.mMisVcWeightFactor;
+            oLightState.mVertex.dVM = oLightState.mVertex.dVC * gRenderParams.mVcmConstants.mMisVcWeightFactor;
         }
     }
 
@@ -940,7 +940,7 @@ extension VertexCM {
         // Partial light sub-path weight [tech. rep. (46)]. Note the division by
         // mLightPathCount, which is the number of samples this technique uses.
         // This division also appears a few lines below in the framebuffer accumulation.
-        const float wLight = Mis(cameraPdfA / gPushConstants.mLightSubPathCount) * (gPushConstants.mMisVmWeightFactor + aLightState.mVertex.dVCM + aLightState.mVertex.dVC * Mis(bsdfRevPdfW));
+        const float wLight = Mis(cameraPdfA / gPushConstants.mLightSubPathCount) * (gRenderParams.mVcmConstants.mMisVmWeightFactor + aLightState.mVertex.dVCM + aLightState.mVertex.dVC * Mis(bsdfRevPdfW));
 
         // Partial eye sub-path weight is 0 [tech. rep. (47)]
 
@@ -975,11 +975,12 @@ extension VertexCM {
     void StoreLightVertex(const VcmVertex vertex) {
         uint idx;
         if (gUseLVC) {
+			// append to mLightVertices
             InterlockedAdd(gRenderParams.mLightPathLengths[0], 1, idx);
         } else {
+			// append to path's vertex list
 			const uint storedVertices = gRenderParams.mLightPathLengths[mPathIndex];
 			gRenderParams.mLightPathLengths[mPathIndex] = storedVertices + 1;
-
             idx = GetLightVertexIndex(mPathIndex, storedVertices);
         }
 
@@ -1069,9 +1070,8 @@ extension VertexCM {
 void GenerateLightPaths(uint3 index: SV_DispatchThreadID) {
     if (index.y * gPushConstants.mOutputExtent.x + index.x >= gPushConstants.mLightSubPathCount) return;
 
-    VertexCM pt = VertexCM(index.xy, 0);
-
-    pt.GenerateLightPaths();
+    VertexCM vcm = VertexCM(index.xy, 0);
+    vcm.GenerateLightPaths();
 }
 
 [shader("compute")]
@@ -1079,21 +1079,18 @@ void GenerateLightPaths(uint3 index: SV_DispatchThreadID) {
 void GenerateCameraPaths(uint3 index: SV_DispatchThreadID) {
     if (any(index.xy >= gPushConstants.mOutputExtent)) return;
 
-    VertexCM pt = VertexCM(index.xy, 16384);
-
-    pt.GenerateCameraPaths();
+    VertexCM vcm = VertexCM(index.xy, 16384);
+    vcm.GenerateCameraPaths();
 }
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void ComputeHashGridIndices(uint3 index: SV_DispatchThreadID) {
-	if (gUseVM)
-    	gRenderParams.mLightHashGrid.ComputeIndices(index.y * gPushConstants.mOutputExtent.x + index.x);
+	gRenderParams.mLightHashGrid._ComputeIndices(index.y * gPushConstants.mOutputExtent.x + index.x);
 }
 
 [shader("compute")]
 [numthreads(64, 1, 1)]
 void SwizzleHashGrid(uint3 index: SV_DispatchThreadID) {
-	if (gUseVM)
-    	gRenderParams.mLightHashGrid.Swizzle(index.y * gPushConstants.mOutputExtent.x + index.x);
+	gRenderParams.mLightHashGrid._Swizzle(index.y * gPushConstants.mOutputExtent.x + index.x);
 }
