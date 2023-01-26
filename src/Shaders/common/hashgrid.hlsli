@@ -2,7 +2,7 @@
 
 #include "rng.hlsli"
 
-struct HashGrid<T> {
+struct HashGrid<T, let bUseMergeRadius : bool> {
 	RWStructuredBuffer<uint> mChecksums;
 	RWStructuredBuffer<uint> mCounters;
 
@@ -23,16 +23,17 @@ struct HashGrid<T> {
 	property uint mCellCount { get { return gPushConstants.mHashGridCellCount; } }
 
     float GetCellSize(const float3 aPosition) {
-        return gRenderParams.mVcmConstants.mMergeRadius * 2;
-        /*
-		if (gPushConstants.mHashGridCellPixelRadius <= 0)
-			return gPushConstants.mHashGridMinCellSize;
-		const AbstractCamera gCamera = { 0 };
-		const float cameraDistance = length(gCamera.transform.transformPoint(0) - aPosition);
-		const float2 extent = gCamera.view.extent();
-		const float step = cameraDistance * tan(gPushConstants.mHashGridCellPixelRadius * gCamera.view.mProjection.mVerticalFoV * max(1/extent.y, extent.y/pow2(extent.x)));
-		return gPushConstants.mHashGridMinCellSize * (1 << uint(log2(step / gPushConstants.mHashGridMinCellSize)));
-		*/
+        if (bUseMergeRadius) {
+            return gRenderParams.mVcmConstants.mMergeRadius * 2;
+        } else {
+			if (gPushConstants.mHashGridCellPixelRadius <= 0)
+				return gPushConstants.mHashGridMinCellSize;
+			const AbstractCamera gCamera = { 0 };
+			const float cameraDistance = length(gCamera.transform.transformPoint(0) - aPosition);
+			const float2 extent = gCamera.view.extent();
+			const float step = cameraDistance * tan(gPushConstants.mHashGridCellPixelRadius * gCamera.view.mProjection.mVerticalFoV * max(1/extent.y, extent.y/pow2(extent.x)));
+			return gPushConstants.mHashGridMinCellSize * (1 << uint(log2(step / gPushConstants.mHashGridMinCellSize)));
+        }
 	}
 
 	uint2 GetCellDataRange(const uint cellIndex) {
@@ -40,11 +41,11 @@ struct HashGrid<T> {
         return uint2(start, start + mCounters[cellIndex]);
     }
 
-    uint FindCellIndex(const float3 aPosition, const float aCellSize, const int3 aOffset, const bool insert = false) {
+    uint FindCellIndex(const float3 aPosition, const float aCellSize, const int3 aOffset = 0, const bool insert = false) {
         // compute index in hash grid
         const int3 p = int3(floor(aPosition / aCellSize)) + aOffset;
-        const uint checksum = max(1, xxhash32(asuint(aCellSize) + xxhash32(p.z + xxhash32(p.y + xxhash32(p.x)))));
-        const uint baseCellIndex = pcg(asuint(aCellSize) + pcg(p.z + pcg(p.y + pcg(p.x)))) % mCellCount;
+        const uint checksum = max(1, xxhash32(xxhash32(asuint(aCellSize)) + xxhash32(p.z + xxhash32(p.y + xxhash32(p.x)))));
+        const uint baseCellIndex = pcg(pcg(asuint(aCellSize)) + pcg(p.z + pcg(p.y + pcg(p.x)))) % mCellCount;
 
         // resolve hash collisions with linear probing
         for (uint i = 0; i < 32; i++) {

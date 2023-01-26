@@ -26,14 +26,14 @@ struct RenderParams {
 	RWTexture2D<uint2> mVisibility;
     RWTexture2D<float4> mDepth;
 
-    RWStructuredBuffer<DirectIlluminationReservoir> mDirectIlluminationReservoirs;
-    RWStructuredBuffer<DirectIlluminationReservoir> mPrevDirectIlluminationReservoirs;
-
     RWStructuredBuffer<VcmVertex> mLightVertices;
     RWStructuredBuffer<uint> mLightPathLengths;
 
     ConstantBuffer<VcmConstants> mVcmConstants;
-	HashGrid<uint> mLightHashGrid;
+    HashGrid<uint, true> mLightHashGrid;
+
+    HashGrid<DirectIlluminationReservoir, false> mDirectIlluminationReservoirs;
+    HashGrid<DirectIlluminationReservoir, false> mPrevDirectIlluminationReservoirs;
 };
 
 ParameterBlock<SceneParameters> gScene;
