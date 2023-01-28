@@ -195,7 +195,6 @@ void PathTracer::drawGui() {
 				if (ImGui::DragScalar("RIS samples", ImGuiDataType_U32, &mPushConstants.mDIReservoirParams.mSampleCount, 1, &mn)) changed = true;
 				if (ImGui::CheckboxFlags("Reuse", reinterpret_cast<uint32_t*>(&mDIReservoirFlags), (uint32_t)VcmReservoirFlags::eReuse)) changed = true;
 				if (mDIReservoirFlags & VcmReservoirFlags::eReuse) {
-					if (ImGui::CheckboxFlags("Talbot MIS", reinterpret_cast<uint32_t*>(&mDIReservoirFlags), (uint32_t)VcmReservoirFlags::eTalbotMis)) changed = true;
 					if (ImGui::DragFloat("Max M", &mPushConstants.mDIReservoirParams.mMaxM)) changed = true;
 				}
 				ImGui::PopID();
@@ -211,7 +210,6 @@ void PathTracer::drawGui() {
 					if (ImGui::DragScalar("RIS samples", ImGuiDataType_U32, &mPushConstants.mLVCReservoirParams.mSampleCount, 1, &mn)) changed = true;
 					if (ImGui::CheckboxFlags("Reuse", reinterpret_cast<uint32_t*>(&mLVCReservoirFlags), (uint32_t)VcmReservoirFlags::eReuse)) changed = true;
 					if (mLVCReservoirFlags & VcmReservoirFlags::eReuse) {
-						if (ImGui::CheckboxFlags("Talbot MIS", reinterpret_cast<uint32_t*>(&mLVCReservoirFlags), (uint32_t)VcmReservoirFlags::eTalbotMis)) changed = true;
 						if (ImGui::DragFloat("Max M", &mPushConstants.mLVCReservoirParams.mMaxM)) changed = true;
 					}
 					ImGui::PopID();
@@ -527,7 +525,7 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		frame->getImage("mDepth" ,     extent, vk::Format::eR32G32B32A32Sfloat, usage);
 
 		frame->getBuffer<uint4>("mLightImage", mPushConstants.mScreenPixelCount*sizeof(uint4), vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
-		frame->getBuffer<VcmVertex>("mLightVertices", maxLightVertices);
+		frame->getBuffer<PackedVcmVertex>("mLightVertices", maxLightVertices);
 		frame->getBuffer<uint32_t>("mLightPathLengths", mPushConstants.mLightSubPathCount, vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
 
 		makeHashGridBuffers.operator()<uint>("mLightHashGrid", mPushConstants.mHashGridCellCount, maxLightVertices);

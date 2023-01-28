@@ -87,12 +87,35 @@ typedef VcmVertex CameraVertex;
 typedef VcmVertex LightVertex;
 
 // The sole point of this structure is to make carrying around the ray baggage easier.
+// 128 bytes
 struct SubPathState {
 	VcmVertex mVertex;
 	float3 mDirection; // Where to go next
-	float mFwdBsdfPdfW; // for NEE MIS when doing regular path tracing. Other techniques use MIS quantities in mVertex.
-	bool mIsFiniteLight; // Just generate by finite light
-	bool mSpecularPath; // All scattering events so far were specular
+    float mFwdBsdfPdfW; // for NEE MIS when doing regular path tracing. Other techniques use MIS quantities in mVertex.
+    uint mInstancePrimitiveIndex;
+	uint mFlags;
+    //uint pad;
+    //uint4 pad1;
+
+	// Just generate by finite light
+	property bool mIsFiniteLight {
+		get { return BF_GET(mFlags, 0, 1); }
+		set { BF_SET(mFlags, uint(newValue), 0, 1); }
+	}
+	// All scattering events so far were specular
+	property bool mSpecularPath {
+		get { return BF_GET(mFlags, 1, 1); }
+		set { BF_SET(mFlags, uint(newValue), 1, 1); }
+    }
+
+    property uint mInstanceIndex {
+        get { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
+        set { BF_SET(mInstancePrimitiveIndex, uint(newValue), 0, 16); }
+    }
+    property uint mPrimitiveIndex {
+        get { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
+        set { BF_SET(mInstancePrimitiveIndex, uint(newValue), 16, 16); }
+    }
 };
 
 struct VertexCM {
@@ -223,7 +246,6 @@ extension VertexCM {
         gRenderParams.mDepth[mIndex] = reinterpret<float4>(d);
 	}
 
-
     // Returns the radiance of a light source when hit by a random ray,
     // multiplied by MIS weight. Can be used for both Background and Area lights.
     //
@@ -276,6 +298,7 @@ extension VertexCM {
 	////////////////////////////////
 
     struct ReservoirStateDI {
+        IlluminationSampleRecord mCachedSample;
         float4 mSampleRnd;
         float mCachedTargetPdf;
         float mTotalWeight;
@@ -289,42 +312,35 @@ extension VertexCM {
             M = 0;
 		}
 
-        static float GetTargetPdf<let bVisibility : bool>(const float3 aRefPos, const uint aGeometryNormal, const uint aShadingNormal, const float4 aSample, out float oSourcePdfA) {
-            IlluminationSampleRecord sample = gScene.sampleIllumination(aRefPos, aSample);
-            const float cosTheta = dot(unpackNormal(aShadingNormal), sample.mDirectionToLight);
-            const float targetPdf = luminance(sample.mRadiance) * abs(cosTheta) * sample.mG;
-            oSourcePdfA = sample.mDirectPdfA;
+        static float GetTargetPdf<let bVisibility : bool>(const ShadingData aRefPos, const float4 aSample, out IlluminationSampleRecord oSampleRecord) {
+            oSampleRecord = gScene.sampleIllumination(aRefPos.mPosition, aSample);
+            const float cosTheta = dot(aRefPos.shadingNormal, oSampleRecord.mDirectionToLight);
+            const float targetPdf = luminance(oSampleRecord.mRadiance) * abs(cosTheta) * oSampleRecord.mG;
 
-			if (bVisibility && targetPdf > 0) {
+            if (bVisibility && targetPdf > 0) {
                 IntersectionResult isect;
-                if (gScene.traceRay(makeRay(rayOffset(aRefPos, unpackNormal(aGeometryNormal), sample.mDirectionToLight), sample.mDirectionToLight, 0, AdjustDistance(sample.mDistance)), false, isect)) {
-                    oSourcePdfA = 0;
+                if (gScene.traceRay(makeRay(rayOffset(aRefPos.mPosition, aRefPos.geometryNormal, oSampleRecord.mDirectionToLight), oSampleRecord.mDirectionToLight, 0, AdjustDistance(oSampleRecord.mDistance)), false, isect)) {
                     return 0;
-				}
+                }
             }
 
             return targetPdf;
         }
-        static float GetTargetPdf<let bVisibility : bool>(const ShadingData aRefPos, const float4 aSample, out float oSourcePdfA) {
-            return GetTargetPdf<bVisibility>(aRefPos.mPosition, aRefPos.mPackedGeometryNormal, aRefPos.mPackedShadingNormal, aSample, oSourcePdfA);
-        }
-        static float GetTargetPdf<let bVisibility : bool>(const DirectIlluminationReservoir aRefPos, const float4 aSample, out float oSourcePdfA) {
-            return GetTargetPdf<bVisibility>(aRefPos.mReferencePosition, aRefPos.mReferenceGeometryNormal, aRefPos.mReferenceShadingNormal, aSample, oSourcePdfA);
-        }
 
 		// assumes M has already been set to the correct sample count
         [mutating]
-        bool ProcessSample(const SubPathState aCameraState, const float4 aSampleRnd, const float aRnd) {
-            float sourcePdfA;
-            const float targetPdf = GetTargetPdf<false>(aCameraState.mVertex.mShadingData, aSampleRnd, sourcePdfA);
+        bool ProcessSample(const SubPathState aCameraState, const BSDF aCameraBsdf, const float4 aSampleRnd, const float aRnd) {
+            IlluminationSampleRecord sample;
+            const float targetPdf = GetTargetPdf<false>(aCameraState.mVertex.mShadingData, aSampleRnd, sample);
             if (targetPdf <= 0)
 				return false;
 
-            const float wi = targetPdf / (sourcePdfA * M);
+            const float wi = targetPdf / (sample.mDirectPdfA * M);
             mTotalWeight += wi;
             if (aRnd * mTotalWeight <= wi) {
                 mSampleRnd = aSampleRnd;
                 mCachedTargetPdf = targetPdf;
+                mCachedSample = sample;
                 return true;
 			}
 			return false;
@@ -332,7 +348,7 @@ extension VertexCM {
 
         // turns this reservoir into a new one containing just the current and reused samples
         [mutating]
-        bool Reuse(const SubPathState aCameraState, const float aRnd, const DirectIlluminationReservoir aReservoir) {
+        bool Reuse(const SubPathState aCameraState, const BSDF aCameraBsdf, const DirectIlluminationReservoir aReservoir, const float aRnd) {
             if (aReservoir.M <= 0)
                 return false;
 
@@ -340,9 +356,10 @@ extension VertexCM {
 
 			// target pdfs
 
-            float tmpSrcPdfA;
-            const float phat_i_old = GetTargetPdf<true>(aReservoir, mSampleRnd, tmpSrcPdfA);
-            const float phat_new   = GetTargetPdf<true>(aCameraState.mVertex.mShadingData, aReservoir.mRnd, tmpSrcPdfA);
+            IlluminationSampleRecord tmp, sample;
+            const ShadingData sd_i = gScene.makeShadingData(gScene.mInstances[aReservoir.mInstanceIndex], gScene.mInstanceTransforms[aReservoir.mInstanceIndex], aReservoir.mLocalPosition, aReservoir.mPrimitiveIndex);
+            const float phat_i_old = GetTargetPdf<true>(sd_i, mSampleRnd, tmp);
+            const float phat_new   = GetTargetPdf<true>(aCameraState.mVertex.mShadingData, aReservoir.mRnd, sample);
 
 			// MIS weights
 
@@ -362,39 +379,26 @@ extension VertexCM {
             if (aRnd * mTotalWeight <= w1) {
                 mSampleRnd = aReservoir.mRnd;
                 mCachedTargetPdf = phat_new;
+                mCachedSample = sample;
                 return true;
             }
             return false;
         }
     };
 
-    void StoreReservoir(const SubPathState aCameraState, const ReservoirStateDI aReservoir) {
-        if (aReservoir.mIntegrationWeight <= 0) return;
-        DirectIlluminationReservoir storedReservoir = {};
-		storedReservoir.mRnd = aReservoir.mSampleRnd;
-		storedReservoir.mReferencePosition       = aCameraState.mVertex.mShadingData.mPosition;
-		storedReservoir.mReferenceGeometryNormal = aCameraState.mVertex.mShadingData.mPackedGeometryNormal;
-		storedReservoir.M = min(aReservoir.M, gPushConstants.mDIReservoirParams.mMaxM * gPushConstants.mDIReservoirParams.mSampleCount);
-        storedReservoir.mIntegrationWeight = aReservoir.mIntegrationWeight;
-        storedReservoir.mCachedTargetPdf = aReservoir.mCachedTargetPdf;
-        storedReservoir.mReferenceShadingNormal = aCameraState.mVertex.mShadingData.mPackedShadingNormal;
-        gRenderParams.mDirectIlluminationReservoirs.Append(storedReservoir.mReferencePosition, storedReservoir);
-    }
-
     [mutating]
-    IlluminationSampleRecord SampleDirectIlluminationReservoir(const SubPathState aCameraState) {
+    IlluminationSampleRecord SampleDirectIlluminationReservoir(const SubPathState aCameraState, const BSDF aCameraBsdf) {
         ReservoirStateDI reservoir = ReservoirStateDI();
 
         // canonical samples
         reservoir.M = gPushConstants.mDIReservoirParams.mSampleCount;
         for (uint i = 0; i < gPushConstants.mDIReservoirParams.mSampleCount; i++)
-            reservoir.ProcessSample(aCameraState, mRng.nextFloat4(), mRng.nextFloat());
+            reservoir.ProcessSample(aCameraState, aCameraBsdf, mRng.nextFloat4(), mRng.nextFloat());
 
         // visibility ray for canonical samples
         if (reservoir.mCachedTargetPdf > 0) {
-            const IlluminationSampleRecord s = gScene.sampleIllumination(aCameraState.mVertex.mShadingData.mPosition, reservoir.mSampleRnd);
             IntersectionResult isect;
-            if (gScene.traceRay(makeRay(OffsetRayOrigin(aCameraState.mVertex, s.mDirectionToLight), s.mDirectionToLight, 0, AdjustDistance(s.mDistance)), false, isect))
+            if (gScene.traceRay(makeRay(OffsetRayOrigin(aCameraState.mVertex, reservoir.mCachedSample.mDirectionToLight), reservoir.mCachedSample.mDirectionToLight, 0, AdjustDistance(reservoir.mCachedSample.mDistance)), false, isect))
                 reservoir.mCachedTargetPdf = 0;
         }
 
@@ -408,16 +412,24 @@ extension VertexCM {
                 if (cellIndex != -1) {
 					const uint2 range = gRenderParams.mPrevDirectIlluminationReservoirs.GetCellDataRange(cellIndex);
                     if (range.y > range.x)
-                        reservoir.Reuse(aCameraState, mRng.nextFloat(), gRenderParams.mPrevDirectIlluminationReservoirs.mData[range.x + mRng.next() % (range.y - range.x)]);
+                        reservoir.Reuse(aCameraState, aCameraBsdf, gRenderParams.mPrevDirectIlluminationReservoirs.mData[range.x + mRng.next() % (range.y - range.x)], mRng.nextFloat());
                 }
 			}
 
-			StoreReservoir(aCameraState, reservoir);
+            if (reservoir.mIntegrationWeight > 0) {
+                DirectIlluminationReservoir storedReservoir = {};
+                storedReservoir.mRnd = reservoir.mSampleRnd;
+                storedReservoir.mLocalPosition = gScene.mInstanceInverseTransforms[aCameraState.mInstanceIndex].transformPoint(aCameraState.mVertex.mShadingData.mPosition);
+                storedReservoir.mInstancePrimitiveIndex = aCameraState.mInstancePrimitiveIndex;
+                storedReservoir.M = min(reservoir.M, gPushConstants.mDIReservoirParams.mMaxM * gPushConstants.mDIReservoirParams.mSampleCount);
+                storedReservoir.mIntegrationWeight = reservoir.mIntegrationWeight;
+                storedReservoir.mCachedTargetPdf = reservoir.mCachedTargetPdf;
+                gRenderParams.mDirectIlluminationReservoirs.Append(aCameraState.mVertex.mShadingData.mPosition, storedReservoir);
+            }
         }
 
-        IlluminationSampleRecord s = gScene.sampleIllumination(aCameraState.mVertex.mShadingData.mPosition, reservoir.mSampleRnd);
-        s.mIntegrationWeight = reservoir.mIntegrationWeight * s.mG;
-        return s;
+        reservoir.mCachedSample.mIntegrationWeight = reservoir.mIntegrationWeight * reservoir.mCachedSample.mG;
+        return reservoir.mCachedSample;
 	}
 
     // Connects camera vertex to randomly chosen light point.
@@ -427,7 +439,7 @@ extension VertexCM {
     float3 DirectIllumination(const SubPathState aCameraState, const BSDF aBsdf) {
         IlluminationSampleRecord emissionSample;
         if (bool(gDIReservoirFlags & (uint)VcmReservoirFlags::eRIS)) {
-            emissionSample = SampleDirectIlluminationReservoir(aCameraState);
+            emissionSample = SampleDirectIlluminationReservoir(aCameraState, aBsdf);
             if (emissionSample.mIntegrationWeight <= 0)
                 return 0;
         } else
@@ -512,7 +524,7 @@ extension VertexCM {
 
     // Connects an eye and a light vertex. Result multiplied by MIS weight, but
     // not multiplied by vertex throughputs. Has to be called AFTER updating MIS constants.
-    static float3 ConnectVertices(const SubPathState aCameraState, const BSDF aCameraBsdf, inout LightVertex aLightVertex) {
+    static float3 ConnectVertices(const SubPathState aCameraState, const BSDF aCameraBsdf, inout LightVertex aLightVertex, out RayDesc oVisibilityRay) {
         // Get the connection
         float3 direction = aLightVertex.mShadingData.mPosition - aCameraState.mVertex.mShadingData.mPosition;
         const float dist2 = dot(direction, direction);
@@ -578,12 +590,22 @@ extension VertexCM {
         if (all(contrib <= 0))
             return 0;
 
+        oVisibilityRay = makeRay(OffsetRayOrigin(aCameraState.mVertex, direction), direction, 0, AdjustDistance(distance));
         IntersectionResult isect;
-        if (gScene.traceRay(makeRay(OffsetRayOrigin(aCameraState.mVertex, direction), direction, 0, AdjustDistance(distance)), false, isect))
+        if (gScene.traceRay(oVisibilityRay, false, isect))
             return 0;
 
         return contrib;
     }
+
+    static float3 ConnectVertices(const SubPathState aCameraState, const BSDF aCameraBsdf, inout LightVertex aLightVertex) {
+        RayDesc ray;
+        const float3 contrib = ConnectVertices(aCameraState, aCameraBsdf, aLightVertex, ray);
+        IntersectionResult isect;
+        if (gScene.traceRay(ray, false, isect))
+            return 0;
+        return contrib;
+	}
 
     // Connect to a light sub-path. Has to be called AFTER updating MIS constants.
     [mutating]
@@ -597,7 +619,7 @@ extension VertexCM {
         const uint count = gRenderParams.mLightPathLengths[pathIndex];
 
         for (int i = 0; i < count; i++) {
-            LightVertex lightVertex = gRenderParams.mLightVertices[GetLightVertexIndex(pathIndex, i)];
+            LightVertex lightVertex = VcmVertex(gRenderParams.mLightVertices[GetLightVertexIndex(pathIndex, i)]);
             const uint fullPathLength = lightVertex.mPathLength + 1 + aCameraState.mVertex.mPathLength;
 
             if (fullPathLength < gPushConstants.mMinPathLength)
@@ -613,23 +635,98 @@ extension VertexCM {
         }
     }
 
+    struct ReservoirStateLVC {
+        PackedVcmVertex mSample;
+        float3 mCachedContribution;
+        float mCachedTargetPdf;
+        float mTotalWeight;
+        float M;
+
+        property float mIntegrationWeight { get { return mCachedTargetPdf > 0? mTotalWeight / mCachedTargetPdf : 0; } }
+
+        __init() {
+            mTotalWeight = 0;
+            mCachedTargetPdf = 0;
+            M = 0;
+        }
+
+        [mutating]
+        bool ProcessSample(const SubPathState aCameraState, const BSDF aCameraBsdf, const PackedVcmVertex aSample, const float aRnd) {
+            return false;
+        }
+
+        [mutating]
+        bool Reuse(const SubPathState aCameraState, const BSDF aCameraBsdf, const LVCReservoir aReservoir, const float aRnd) {
+            return false;
+        }
+    }
 
     [mutating]
-    LightVertex SampleLVCReservoir(const SubPathState aCameraState, const BSDF aCameraBsdf) {
-		// TODO
-        return VcmVertex();
+    void ConnectToLVCReservoir(const SubPathState aCameraState, const BSDF aCameraBsdf) {
+        ReservoirStateLVC reservoir = ReservoirStateLVC();
+
+		// TODO: cached contribution, visibility ray
+
+        // canonical samples
+        reservoir.M = gPushConstants.mDIReservoirParams.mSampleCount;
+        for (uint i = 0; i < gPushConstants.mDIReservoirParams.mSampleCount; i++) {
+            const PackedVcmVertex lightVertex = gRenderParams.mLightVertices[mRng.next() % gRenderParams.mLightPathLengths[0]];
+            reservoir.ProcessSample(aCameraState, aCameraBsdf, lightVertex, mRng.nextFloat());
+        }
+
+        // visibility ray for canonical samples
+        if (reservoir.mCachedTargetPdf > 0) {
+			// TODO
+        }
+
+        if (bool(gDIReservoirFlags & (uint)VcmReservoirFlags::eReuse)) {
+            if (gPushConstants.reservoirHistoryValid()) {
+                const float2 jitter = mRng.nextFloat2() * 2 - 1;
+                const float3x3 frame = makeOrthonormal(aCameraState.mVertex.mShadingData.geometryNormal);
+                const float3 queryPos = aCameraState.mVertex.mShadingData.mPosition + gPushConstants.mHashGridJitterRadius * (frame[0] * jitter.x + frame[1] * jitter.y);
+                const float cellSize = gRenderParams.mPrevLVCReservoirs.GetCellSize(queryPos);
+                const uint cellIndex = gRenderParams.mPrevLVCReservoirs.FindCellIndex(queryPos, cellSize);
+                if (cellIndex != -1) {
+                    const uint2 range = gRenderParams.mPrevLVCReservoirs.GetCellDataRange(cellIndex);
+                    if (range.y > range.x)
+                        reservoir.Reuse(aCameraState, aCameraBsdf, gRenderParams.mPrevLVCReservoirs.mData[range.x + mRng.next() % (range.y - range.x)], mRng.nextFloat());
+                }
+            }
+
+            if (reservoir.mIntegrationWeight > 0) {
+                LVCReservoir storedReservoir = {};
+                storedReservoir.mLightVertex = reservoir.mSample;
+                storedReservoir.mLocalPosition = gScene.mInstanceInverseTransforms[aCameraState.mInstanceIndex].transformPoint(aCameraState.mVertex.mShadingData.mPosition);
+                storedReservoir.mInstancePrimitiveIndex = aCameraState.mInstanceIndex;
+                storedReservoir.M = min(reservoir.M, gPushConstants.mDIReservoirParams.mMaxM * gPushConstants.mDIReservoirParams.mSampleCount);
+                storedReservoir.mIntegrationWeight = reservoir.mIntegrationWeight;
+                storedReservoir.mCachedTargetPdf = reservoir.mCachedTargetPdf;
+                gRenderParams.mLVCReservoirs.Append(aCameraState.mVertex.mShadingData.mPosition, storedReservoir);
+            }
+        }
+
+        LightVertex lightVertex = VcmVertex(reservoir.mSample);
+        lightVertex.mThroughput *= reservoir.mIntegrationWeight;
+        if (all(lightVertex.mThroughput <= 0))
+            return;
+
+        const uint fullPathLength = lightVertex.mPathLength + 1 + aCameraState.mVertex.mPathLength;
+        if (fullPathLength < gPushConstants.mMinPathLength || fullPathLength > gPushConstants.mMaxPathLength)
+            return;
+
+        const float3 contrib = aCameraState.mVertex.mThroughput * lightVertex.mThroughput * ConnectVertices(aCameraState, aCameraBsdf, lightVertex);
+
+        // the LVC paper connects to lightVertexCount/lightPathCount light vertices
+        // we only connect to one light vertex, therefore we weight its contribution by lightVertexCount/lightPathCount
+        const float w = gRenderParams.mLightPathLengths[0] / (float)gPushConstants.mLightSubPathCount;
+
+        AddColor(mIndex, contrib * w, aCameraState.mVertex.mPathLength + 1, lightVertex.mPathLength + 1);
     }
 
     // Connect to a random light vertex. Called by LVC-BPT instead of ConnectToLightPath().
     [mutating]
     void ConnectToLVC(const SubPathState aCameraState, const BSDF aCameraBsdf) {
-		LightVertex lightVertex;
-        if (bool(gLVCReservoirFlags & (uint)VcmReservoirFlags::eRIS))
-            lightVertex = SampleLVCReservoir(aCameraState, aCameraBsdf);
-        else {
-			const uint i = mRng.next() % gRenderParams.mLightPathLengths[0];
-            lightVertex = gRenderParams.mLightVertices[i];
-        }
+		LightVertex lightVertex = VcmVertex(gRenderParams.mLightVertices[mRng.next() % gRenderParams.mLightPathLengths[0]]);
         if (all(lightVertex.mThroughput <= 0))
             return;
 
@@ -673,7 +770,7 @@ extension VertexCM {
             range.y = min(range.y, range.x + 512);
 
             for (; range.x < range.y; range.x++) {
-                LightVertex particle = gRenderParams.mLightVertices[gRenderParams.mLightHashGrid.mData[range.x]];
+                LightVertex particle = VcmVertex(gRenderParams.mLightVertices[gRenderParams.mLightHashGrid.mData[range.x]]);
 
 				const float3 toParticle = particle.mShadingData.mPosition - queryPos;
 				const float distSqr     = dot(toParticle, toParticle);
@@ -758,6 +855,7 @@ extension VertexCM {
 
 			IntersectionResult isect;
 			const bool hit = gScene.traceRay(ray, true, isect);
+            cameraState.mInstancePrimitiveIndex = isect.mInstancePrimitiveIndex;
 
 			if (cameraState.mVertex.mPathLength == 1)
 				StoreAuxillaryData(isect, 1);
@@ -830,10 +928,13 @@ extension VertexCM {
 				if (!gPathTraceOnly) {
 					////////////////////////////////////////////////////////////////
 					// Vertex connection: Connect to light vertices
-					if (gUseVC) {
-						if (gUseLVC)
-							ConnectToLVC(cameraState, bsdf);
-						else
+                    if (gUseVC) {
+                        if (gUseLVC) {
+                            if (bool(gLVCReservoirFlags & (uint)VcmReservoirFlags::eRIS))
+                                ConnectToLVCReservoir(cameraState, bsdf);
+							else
+                            	ConnectToLVC(cameraState, bsdf);
+                        } else
 							ConnectToLightPath(cameraState, bsdf);
 					}
 
@@ -962,10 +1063,10 @@ extension VertexCM {
 
     // For regular VC: uses GetLightVertexIndex to find index in mLightPathLengths
     // For LVC VC: atomically appends light vertices to mLightPathLengths
-    void StoreLightVertex(const VcmVertex vertex) {
+    void StoreLightVertex(const SubPathState aLightState) {
         uint idx;
         if (gUseLVC) {
-            if (all(vertex.mThroughput <= 0))
+            if (all(aLightState.mVertex.mThroughput <= 0))
             	return;
 			// append to mLightVertices
             InterlockedAdd(gRenderParams.mLightPathLengths[0], 1, idx);
@@ -976,10 +1077,10 @@ extension VertexCM {
             idx = GetLightVertexIndex(mPathIndex, storedVertices);
         }
 
-		gRenderParams.mLightVertices[idx] = vertex;
+        gRenderParams.mLightVertices[idx] = PackedVcmVertex(aLightState.mVertex, aLightState.mInstancePrimitiveIndex);
         if (gUseVM) {
-			if (any(vertex.mThroughput > 0))
-				gRenderParams.mLightHashGrid.Append(vertex.mShadingData.mPosition, idx);
+            if (any(aLightState.mVertex.mThroughput > 0))
+                gRenderParams.mLightHashGrid.Append(aLightState.mVertex.mShadingData.mPosition, idx);
         }
 	}
 
@@ -1004,8 +1105,9 @@ extension VertexCM {
 			const RayDesc ray = makeRay(OffsetRayOrigin(lightState.mVertex, lightState.mDirection), lightState.mDirection);
 
 			IntersectionResult isect;
-			if (!gScene.traceRay(ray, true, isect))
-				break;
+            if (!gScene.traceRay(ray, true, isect))
+                break;
+            lightState.mInstancePrimitiveIndex = isect.mInstancePrimitiveIndex;
 
 			lightState.mVertex.mShadingData = isect.mShadingData;
 			lightState.mVertex.mShadingData.mTexcoordScreenSize = 0;
@@ -1035,7 +1137,7 @@ extension VertexCM {
 				// Store vertex, unless BSDF is purely specular, which prevents
 				// vertex connections and merging
 				if (gUseVC || gUseVM) {
-					StoreLightVertex(lightState.mVertex);
+					StoreLightVertex(lightState);
 				}
 
 				// Connect to camera, unless BSDF is purely specular

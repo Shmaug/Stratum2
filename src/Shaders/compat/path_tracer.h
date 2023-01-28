@@ -87,27 +87,17 @@ struct PackedVcmVertex {
 
 struct DirectIlluminationReservoir {
     float4 mRnd;
-    float3 mReferencePosition; // position that initially generated the sample
-    uint mReferenceGeometryNormal;
+	// source domain location
+    float3 mLocalPosition;
+    uint mInstancePrimitiveIndex;
     float4 mPacked;
-	#ifdef __SLANG__
-    property float M                      { get { return mPacked[0]; } set { mPacked[0] = newValue; } }
-    property float mIntegrationWeight     { get { return mPacked[1]; } set { mPacked[1] = newValue; } }
-    property float mCachedTargetPdf       { get { return mPacked[2]; } set { mPacked[2] = newValue; } }
-    property uint mReferenceShadingNormal { get { return asuint(mPacked[3]); } set { mPacked[3] = asfloat(newValue); } }
-	#endif
 };
 struct LVCReservoir {
     PackedVcmVertex mLightVertex;
-    float3 mReferencePosition;
-    uint mReferenceGeometryNormal;
+    // source domain location
+    float3 mLocalPosition;
+    uint mInstancePrimitiveIndex;
     float4 mPacked;
-	#ifdef __SLANG__
-    property float M                      { get { return mPacked[0]; } set { mPacked[0] = newValue; } }
-    property float mIntegrationWeight     { get { return mPacked[1]; } set { mPacked[1] = newValue; } }
-    property float mCachedTargetPdf       { get { return mPacked[2]; } set { mPacked[2] = newValue; } }
-    property uint mReferenceShadingNormal { get { return asuint(mPacked[3]); } set { mPacked[3] = asfloat(newValue); } }
-	#endif
 };
 
 
@@ -146,8 +136,7 @@ enum VcmAlgorithmType {
 enum VcmReservoirFlags {
 	eNone      = 0,
 	eRIS       = BIT(0),
-	eReuse     = BIT(1),
-	eTalbotMis = BIT(2)
+	eReuse     = BIT(1)
 };
 
 STM_NAMESPACE_END

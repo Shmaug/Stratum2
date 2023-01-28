@@ -26,7 +26,7 @@ struct RenderParams {
 	RWTexture2D<uint2> mVisibility;
     RWTexture2D<float4> mDepth;
 
-    RWStructuredBuffer<VcmVertex> mLightVertices;
+    RWStructuredBuffer<PackedVcmVertex> mLightVertices;
     RWStructuredBuffer<uint> mLightPathLengths;
 
     ConstantBuffer<VcmConstants> mVcmConstants;
@@ -34,6 +34,9 @@ struct RenderParams {
 
     HashGrid<DirectIlluminationReservoir, false> mDirectIlluminationReservoirs;
     HashGrid<DirectIlluminationReservoir, false> mPrevDirectIlluminationReservoirs;
+
+    HashGrid<LVCReservoir, false> mLVCReservoirs;
+    HashGrid<LVCReservoir, false> mPrevLVCReservoirs;
 };
 
 ParameterBlock<SceneParameters> gScene;
@@ -51,9 +54,25 @@ ParameterBlock<RenderParams> gRenderParams;
 
 typedef LambertianMaterial Material;
 
-extension VcmVertex {
-    __init() {
-        mThroughput = 0;
+extension PackedVcmVertex {
+    __init(const VcmVertex v, const uint instancePrimitiveIndex) {
+        mLocalPosition = gScene.mInstanceInverseTransforms[BF_GET(instancePrimitiveIndex, 0, 16)].transformPoint(v.mShadingData.mPosition);
+        mInstancePrimitiveIndex = instancePrimitiveIndex;
+        mThroughput = v.mThroughput;
+        mPackedData = v.mPackedData;
+        dVCM = v.dVCM;
+        dVC = v.dVC;
+        dVM = v.dVM;
+        mLocalDirectionIn = v.mLocalDirectionIn;
+    }
+
+    property uint mInstanceIndex {
+		get { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
+		set { BF_SET(mInstancePrimitiveIndex, newValue, 0, 16); }
+	}
+    property uint mPrimitiveIndex {
+		get { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
+		set { BF_SET(mInstancePrimitiveIndex, newValue, 16, 16); }
 	}
 
     property uint mPathLength {
@@ -61,8 +80,61 @@ extension VcmVertex {
         set { BF_SET(mPackedData, newValue, 0, 16); }
     }
     property float mPathPdfA {
+        get { return f16tof32(mPackedData); }
+        set { BF_SET(mPackedData, f32tof16(newValue), 0, 16); }
+    }
+}
+
+extension VcmVertex {
+    __init() {
+        mThroughput = 0;
+    }
+    __init(PackedVcmVertex v) {
+        mShadingData = gScene.makeShadingData(gScene.mInstances[v.mInstanceIndex], gScene.mInstanceTransforms[v.mInstanceIndex], v.mLocalPosition, v.mPrimitiveIndex);
+        mThroughput = v.mThroughput;
+        mPackedData = v.mPackedData;
+        dVCM = v.dVCM;
+        dVC = v.dVC;
+        dVM = v.dVM;
+        mLocalDirectionIn = v.mLocalDirectionIn;
+	}
+
+    property uint mPathLength {
         get { return BF_GET(mPackedData, 0, 16); }
         set { BF_SET(mPackedData, newValue, 0, 16); }
+    }
+    property float mPathPdfA {
+        get { return f16tof32(mPackedData); }
+        set { BF_SET(mPackedData, f32tof16(newValue), 0, 16); }
+    }
+}
+
+extension DirectIlluminationReservoir {
+    property float M                      { get { return mPacked[0]; } set { mPacked[0] = newValue; } }
+    property float mIntegrationWeight     { get { return mPacked[1]; } set { mPacked[1] = newValue; } }
+    property float mCachedTargetPdf       { get { return mPacked[2]; } set { mPacked[2] = newValue; } }
+
+    property uint mInstanceIndex {
+        get { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
+        set { BF_SET(mInstancePrimitiveIndex, newValue, 0, 16); }
+    }
+    property uint mPrimitiveIndex {
+        get { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
+        set { BF_SET(mInstancePrimitiveIndex, newValue, 16, 16); }
+    }
+}
+extension LVCReservoir {
+    property float M                      { get { return mPacked[0]; } set { mPacked[0] = newValue; } }
+    property float mIntegrationWeight     { get { return mPacked[1]; } set { mPacked[1] = newValue; } }
+    property float mCachedTargetPdf       { get { return mPacked[2]; } set { mPacked[2] = newValue; } }
+
+    property uint mInstanceIndex {
+        get { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
+        set { BF_SET(mInstancePrimitiveIndex, newValue, 0, 16); }
+    }
+    property uint mPrimitiveIndex {
+        get { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
+        set { BF_SET(mInstancePrimitiveIndex, newValue, 16, 16); }
     }
 }
 

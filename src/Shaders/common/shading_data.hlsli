@@ -171,4 +171,16 @@ extension SceneParameters {
 		r.mTexcoordScreenSize = 0;
 		return r;
     }
+
+    ShadingData makeShadingData(const InstanceData instance, const TransformData transform, const float3 localPosition, const uint primitiveIndex = -1) {
+        switch (instance.type()) {
+        case InstanceType::eMesh:
+            return makeTriangleShadingData(reinterpret<MeshInstanceData>(instance), transform, primitiveIndex, localPosition);
+        case InstanceType::eSphere:
+            return makeSphereShadingData(reinterpret<SphereInstanceData>(instance), transform, localPosition);
+		default:
+		case InstanceType::eVolume:
+			return makeVolumeShadingData(reinterpret<VolumeInstanceData>(instance), transform.transformPoint(localPosition));
+		}
+	}
 }
