@@ -71,14 +71,14 @@ Shader::Shader(Device& device, const filesystem::path& sourceFile, const string&
 
 	slang::IBlob* blob;
 	SlangResult r = request->getEntryPointCodeBlob(entryPointIndex, targetIndex, &blob);
-	//if (SLANG_FAILED(r)) {
-	//	std::stringstream stream;
-	//	stream << "facility 0x" << std::setfill('0') << std::setw(4) << std::hex << SLANG_GET_RESULT_FACILITY(r);
-	//	stream << ", result 0x" << std::setfill('0') << std::setw(4) << std::hex << SLANG_GET_RESULT_CODE(r);
-	//	const string msg = stream.str();
-	//	cerr << "Error: Failed to get code blob for " << resourceName() << ": " << msg << endl;
-	//	throw runtime_error(msg);
-	//}
+	/*if (SLANG_FAILED(r)) {
+		std::stringstream stream;
+		stream << "facility 0x" << std::setfill('0') << std::setw(4) << std::hex << SLANG_GET_RESULT_FACILITY(r);
+		stream << ", result 0x" << std::setfill('0') << std::setw(4) << std::hex << SLANG_GET_RESULT_CODE(r);
+		const string msg = stream.str();
+		cerr << "Error: Failed to get code blob for " << resourceName() << ": " << msg << endl;
+		throw runtime_error(msg);
+	}*/
 
 	vector<uint32_t> spirv(blob->getBufferSize()/sizeof(uint32_t));
 	memcpy(spirv.data(), blob->getBufferPointer(), blob->getBufferSize());
@@ -119,7 +119,7 @@ Shader::Shader(Device& device, const filesystem::path& sourceFile, const string&
 		{ SLANG_BINDING_TYPE_COMBINED_TEXTURE_SAMPLER, "CombinedTextureSampler" },
 		{ SLANG_BINDING_TYPE_INPUT_RENDER_TARGET, "InputRenderTarget" },
 		{ SLANG_BINDING_TYPE_INLINE_UNIFORM_DATA, "InlineUniformData" },
-		{ SLANG_BINDING_TYPE_RAY_TRACTING_ACCELERATION_STRUCTURE, "RayTracingAccelerationStructure" },
+		{ SLANG_BINDING_TYPE_RAY_TRACING_ACCELERATION_STRUCTURE, "RayTracingAccelerationStructure" },
 		{ SLANG_BINDING_TYPE_VARYING_INPUT, "VaryingInput" },
 		{ SLANG_BINDING_TYPE_VARYING_OUTPUT, "VaryingOutput" },
 		{ SLANG_BINDING_TYPE_EXISTENTIAL_VALUE, "ExistentialValue" },
@@ -178,7 +178,7 @@ Shader::Shader(Device& device, const filesystem::path& sourceFile, const string&
 		{ SLANG_BINDING_TYPE_COMBINED_TEXTURE_SAMPLER, vk::DescriptorType::eCombinedImageSampler },
 		{ SLANG_BINDING_TYPE_INPUT_RENDER_TARGET, vk::DescriptorType::eInputAttachment },
 		{ SLANG_BINDING_TYPE_INLINE_UNIFORM_DATA, vk::DescriptorType::eInlineUniformBlock },
-		{ SLANG_BINDING_TYPE_RAY_TRACTING_ACCELERATION_STRUCTURE, vk::DescriptorType::eAccelerationStructureKHR },
+		{ SLANG_BINDING_TYPE_RAY_TRACING_ACCELERATION_STRUCTURE, vk::DescriptorType::eAccelerationStructureKHR },
 		{ SLANG_BINDING_TYPE_MUTABLE_TETURE, vk::DescriptorType::eStorageImage },
 		{ SLANG_BINDING_TYPE_MUTABLE_TYPED_BUFFER, vk::DescriptorType::eStorageTexelBuffer },
 		{ SLANG_BINDING_TYPE_MUTABLE_RAW_BUFFER, vk::DescriptorType::eStorageBuffer },

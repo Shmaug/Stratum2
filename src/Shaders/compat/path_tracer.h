@@ -17,11 +17,6 @@ struct VcmConstants {
     float mVmNormalization;
 };
 
-struct ReservoirParameters {
-    float mMaxM;
-    uint mSampleCount;
-};
-
 struct PathTracerPushConstants {
     uint2 mOutputExtent;
 	uint mScreenPixelCount;  // Number of pixels
@@ -45,10 +40,12 @@ struct PathTracerPushConstants {
     float mHashGridCellPixelRadius;
     float mHashGridMinCellSize;
 	float mHashGridJitterRadius;
-	uint mHashGridCellCount;
+    uint mHashGridCellCount;
 
-    ReservoirParameters mDIReservoirParams;
-    ReservoirParameters mLVCReservoirParams;
+    float mDIReservoirMaxM;
+    float mLVCReservoirMaxM;
+    uint mDIReservoirSampleCount;
+    uint mLVCReservoirSampleCount;
 
 	SLANG_MUTATING
     void reservoirHistoryValid(const bool v) { BF_SET(mFlags, v, 0, 1); }
@@ -85,19 +82,26 @@ struct PackedVcmVertex {
     uint mLocalDirectionIn;
 };
 
+// 48 bytes
 struct DirectIlluminationReservoir {
     float4 mRnd;
 	// source domain location
     float3 mLocalPosition;
     uint mInstancePrimitiveIndex;
-    float4 mPacked;
+    float M;
+    float mIntegrationWeight;
+    float mCachedTargetPdf;
+	float pad;
 };
+// pad to 128 bytes
 struct LVCReservoir {
     PackedVcmVertex mLightVertex;
-    // source domain location
-    float3 mLocalPosition;
-    uint mInstancePrimitiveIndex;
-    float4 mPacked;
+    float4 pad1;
+    PackedVcmVertex mCameraVertex;
+    float M;
+	float mIntegrationWeight;
+	float mCachedTargetPdf;
+    float pad;
 };
 
 

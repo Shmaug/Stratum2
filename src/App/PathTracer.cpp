@@ -30,10 +30,10 @@ PathTracer::PathTracer(Node& node) : mNode(node) {
 	mPushConstants.mHashGridMinCellSize = .1f;
 	mPushConstants.mHashGridJitterRadius = 0.05f;
 	mPushConstants.mLightImageQuantization = 16384;
-	mPushConstants.mDIReservoirParams.mSampleCount = 32;
-	mPushConstants.mDIReservoirParams.mMaxM = 3;
-	mPushConstants.mLVCReservoirParams.mSampleCount = 8;
-	mPushConstants.mLVCReservoirParams.mMaxM = 3;
+	mPushConstants.mDIReservoirSampleCount = 32;
+	mPushConstants.mDIReservoirMaxM = 3;
+	mPushConstants.mLVCReservoirSampleCount = 8;
+	mPushConstants.mLVCReservoirMaxM = 3;
 
 	// initialize constants
 	if (auto arg = device.mInstance.findArgument("minPathLength"); arg) mPushConstants.mMinPathLength = atoi(arg->c_str());
@@ -179,8 +179,9 @@ void PathTracer::drawGui() {
 		if (ImGui::Checkbox("Performance counters", &mUsePerformanceCounters)) changed = true;
 		ImGui::PushItemWidth(60);
 
-		if (ImGui::DragScalar("Max path length", ImGuiDataType_U32, &mPushConstants.mMaxPathLength)) changed = true;
-		if (ImGui::DragScalar("Min path length", ImGuiDataType_U32, &mPushConstants.mMinPathLength)) changed = true;
+		uint32_t one = 1;
+		if (ImGui::DragScalar("Max path length", ImGuiDataType_U32, &mPushConstants.mMaxPathLength, 1, &one)) changed = true;
+		if (ImGui::DragScalar("Min path length", ImGuiDataType_U32, &mPushConstants.mMinPathLength, 1, &one)) changed = true;
 
 		if (mPushConstants.mEnvironmentMaterialAddress != -1 && mPushConstants.mLightCount > 0)
 			if (ImGui::SliderFloat("Environment sample probability", &mPushConstants.mEnvironmentSampleProbability, 0, 1)) changed = true;
@@ -191,11 +192,10 @@ void PathTracer::drawGui() {
 			if (mDIReservoirFlags & VcmReservoirFlags::eRIS) {
 				ImGui::Indent();
 				ImGui::PushID(&mDIReservoirFlags);
-				uint32_t mn = 1;
-				if (ImGui::DragScalar("RIS samples", ImGuiDataType_U32, &mPushConstants.mDIReservoirParams.mSampleCount, 1, &mn)) changed = true;
+				if (ImGui::DragScalar("RIS samples", ImGuiDataType_U32, &mPushConstants.mDIReservoirSampleCount, 1, &one)) changed = true;
 				if (ImGui::CheckboxFlags("Reuse", reinterpret_cast<uint32_t*>(&mDIReservoirFlags), (uint32_t)VcmReservoirFlags::eReuse)) changed = true;
 				if (mDIReservoirFlags & VcmReservoirFlags::eReuse) {
-					if (ImGui::DragFloat("Max M", &mPushConstants.mDIReservoirParams.mMaxM)) changed = true;
+					if (ImGui::DragFloat("Max M", &mPushConstants.mDIReservoirMaxM)) changed = true;
 				}
 				ImGui::PopID();
 				ImGui::Unindent();
@@ -206,11 +206,10 @@ void PathTracer::drawGui() {
 				if (mLVCReservoirFlags & VcmReservoirFlags::eRIS) {
 					ImGui::Indent();
 					ImGui::PushID(&mLVCReservoirFlags);
-					uint32_t mn = 1;
-					if (ImGui::DragScalar("RIS samples", ImGuiDataType_U32, &mPushConstants.mLVCReservoirParams.mSampleCount, 1, &mn)) changed = true;
+					if (ImGui::DragScalar("RIS samples", ImGuiDataType_U32, &mPushConstants.mLVCReservoirSampleCount, 1, &one)) changed = true;
 					if (ImGui::CheckboxFlags("Reuse", reinterpret_cast<uint32_t*>(&mLVCReservoirFlags), (uint32_t)VcmReservoirFlags::eReuse)) changed = true;
 					if (mLVCReservoirFlags & VcmReservoirFlags::eReuse) {
-						if (ImGui::DragFloat("Max M", &mPushConstants.mLVCReservoirParams.mMaxM)) changed = true;
+						if (ImGui::DragFloat("Max M", &mPushConstants.mLVCReservoirMaxM)) changed = true;
 					}
 					ImGui::PopID();
 					ImGui::Unindent();
@@ -530,6 +529,7 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 
 		makeHashGridBuffers.operator()<uint>("mLightHashGrid", mPushConstants.mHashGridCellCount, maxLightVertices);
 		makeHashGridBuffers.operator()<DirectIlluminationReservoir>("mDirectIlluminationReservoirs", mPushConstants.mHashGridCellCount, maxCameraVertices);
+		makeHashGridBuffers.operator()<LVCReservoir>("mLVCReservoirs", mPushConstants.mHashGridCellCount, maxCameraVertices);
 
 		if (!frame->mSelectionData)
 			frame->mSelectionData = make_shared<Buffer>(commandBuffer.mDevice, "mSelectionData", sizeof(VisibilityData), vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
@@ -544,6 +544,7 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		"mData",
 		"mStats" }) {
 		frame->mBuffers["mPrevDirectIlluminationReservoirs."+d] = (mPrevFrame ? mPrevFrame : frame)->mBuffers.at("mDirectIlluminationReservoirs."+d);
+		frame->mBuffers["mPrevLVCReservoirs."+d] = (mPrevFrame ? mPrevFrame : frame)->mBuffers.at("mLVCReservoirs."+d);
 	}
 
 	mPushConstants.reservoirHistoryValid((bool)mPrevFrame && !ImGui::IsKeyPressed(ImGuiKey_F5));
@@ -605,6 +606,8 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 
 	if ((mDIReservoirFlags & VcmReservoirFlags::eReuse) && mAlgorithm != VcmAlgorithmType::kPpm && mAlgorithm != VcmAlgorithmType::kLightTrace)
 		clearHashGrid("mDirectIlluminationReservoirs");
+	if ((mLVCReservoirFlags & VcmReservoirFlags::eReuse) && mAlgorithm == VcmAlgorithmType::kBptLvc)
+		clearHashGrid("mLVCReservoirs");
 
 	// clear light image
 	if (mAlgorithm != VcmAlgorithmType::kPathTrace) {
@@ -653,9 +656,11 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		mRenderPipelines[eGenerateCameraPaths].get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, extent, frame->mDescriptorSets, {}, { { "", PushConstantValue(mPushConstants) } });
 	}
 
-	// build hashgrid
+	// build hashgrids
 	if ((mDIReservoirFlags & VcmReservoirFlags::eReuse) && mAlgorithm != VcmAlgorithmType::kPpm && mAlgorithm != VcmAlgorithmType::kLightTrace)
 		buildHashGrid("mDirectIlluminationReservoirs", maxLightVertices);
+	if ((mLVCReservoirFlags & VcmReservoirFlags::eReuse) && mAlgorithm == VcmAlgorithmType::kBptLvc)
+		buildHashGrid("mLVCReservoirs", maxLightVertices);
 
 
 	Image::View renderResult = get<Image::View>(frame->mImages.at("mOutput"));

@@ -73,15 +73,15 @@ extension PackedVcmVertex {
     property uint mPrimitiveIndex {
 		get { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
 		set { BF_SET(mInstancePrimitiveIndex, newValue, 16, 16); }
-	}
+    }
 
     property uint mPathLength {
         get { return BF_GET(mPackedData, 0, 16); }
         set { BF_SET(mPackedData, newValue, 0, 16); }
     }
     property float mPathPdfA {
-        get { return f16tof32(mPackedData); }
-        set { BF_SET(mPackedData, f32tof16(newValue), 0, 16); }
+        get { return f16tof32(BF_GET(mPackedData, 16, 16)); }
+        set { BF_SET(mPackedData, f32tof16(newValue), 16, 16); }
     }
 }
 
@@ -104,16 +104,12 @@ extension VcmVertex {
         set { BF_SET(mPackedData, newValue, 0, 16); }
     }
     property float mPathPdfA {
-        get { return f16tof32(mPackedData); }
-        set { BF_SET(mPackedData, f32tof16(newValue), 0, 16); }
+        get { return f16tof32(BF_GET(mPackedData, 16, 16)); }
+        set { BF_SET(mPackedData, f32tof16(newValue), 16, 16); }
     }
 }
 
 extension DirectIlluminationReservoir {
-    property float M                      { get { return mPacked[0]; } set { mPacked[0] = newValue; } }
-    property float mIntegrationWeight     { get { return mPacked[1]; } set { mPacked[1] = newValue; } }
-    property float mCachedTargetPdf       { get { return mPacked[2]; } set { mPacked[2] = newValue; } }
-
     property uint mInstanceIndex {
         get { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
         set { BF_SET(mInstancePrimitiveIndex, newValue, 0, 16); }
@@ -123,28 +119,13 @@ extension DirectIlluminationReservoir {
         set { BF_SET(mInstancePrimitiveIndex, newValue, 16, 16); }
     }
 }
-extension LVCReservoir {
-    property float M                      { get { return mPacked[0]; } set { mPacked[0] = newValue; } }
-    property float mIntegrationWeight     { get { return mPacked[1]; } set { mPacked[1] = newValue; } }
-    property float mCachedTargetPdf       { get { return mPacked[2]; } set { mPacked[2] = newValue; } }
-
-    property uint mInstanceIndex {
-        get { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
-        set { BF_SET(mInstancePrimitiveIndex, newValue, 0, 16); }
-    }
-    property uint mPrimitiveIndex {
-        get { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
-        set { BF_SET(mInstancePrimitiveIndex, newValue, 16, 16); }
-    }
-}
-
 extension ShadingData {
     float shadingNormalCorrection<let Adjoint : bool>(const float3 localDirIn, const float3 localDirOut) {
         if (isMedium)
             return 1;
 
         const float3 localGeometryNormal = toLocal(geometryNormal);
-        const float ngdotin = dot(localGeometryNormal, localDirIn);
+        const float ngdotin  = dot(localGeometryNormal, localDirIn);
         const float ngdotout = dot(localGeometryNormal, localDirOut);
 
         // light leak fix
@@ -154,7 +135,7 @@ extension ShadingData {
         float G = 1;
 
         if (Adjoint) {
-            const float num = ngdotout * localDirIn.z;
+            const float num   = ngdotout * localDirIn.z;
             const float denom = localDirOut.z * ngdotin;
             if (abs(denom) > 1e-5)
                 G *= abs(num / denom);

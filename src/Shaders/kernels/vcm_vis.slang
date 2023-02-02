@@ -8,6 +8,8 @@ struct PushConstants {
     float mLineRadius;
     float mLineLength;
     float mMergeRadius;
+    float mHashGridMinCellSize;
+    float mHashGridCellPixelRadius;
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> gPushConstants;
 
