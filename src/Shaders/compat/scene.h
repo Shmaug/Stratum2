@@ -31,8 +31,8 @@ struct InstanceData {
 	uint mTypeMaterialAddress;
 	uint mData;
 
-    inline InstanceType type() CONST_CPP { return (InstanceType)BF_GET(mTypeMaterialAddress, 0, 4); }
-	inline uint materialAddress() CONST_CPP { return BF_GET(mTypeMaterialAddress, 4, 28); }
+    inline InstanceType getType() CONST_CPP { return (InstanceType)BF_GET(mTypeMaterialAddress, 0, 4); }
+	inline uint getMaterialAddress() CONST_CPP { return BF_GET(mTypeMaterialAddress, 4, 28); }
 
 #ifdef __cplusplus
     inline InstanceData(const InstanceType type, const uint materialAddress) {

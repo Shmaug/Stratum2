@@ -119,31 +119,6 @@ extension DirectIlluminationReservoir {
         set { BF_SET(mInstancePrimitiveIndex, newValue, 16, 16); }
     }
 }
-extension ShadingData {
-    float shadingNormalCorrection<let Adjoint : bool>(const float3 localDirIn, const float3 localDirOut) {
-        if (isMedium)
-            return 1;
-
-        const float3 localGeometryNormal = toLocal(geometryNormal);
-        const float ngdotin  = dot(localGeometryNormal, localDirIn);
-        const float ngdotout = dot(localGeometryNormal, localDirOut);
-
-        // light leak fix
-        if (sign(ngdotout) != sign(localDirOut.z) || sign(ngdotin) != sign(localDirIn.z))
-            return 0;
-
-        float G = 1;
-
-        if (Adjoint) {
-            const float num   = ngdotout * localDirIn.z;
-            const float denom = localDirOut.z * ngdotin;
-            if (abs(denom) > 1e-5)
-                G *= abs(num / denom);
-        }
-
-        return G;
-    }
-}
 
 // light sampling
 
@@ -165,11 +140,11 @@ struct IlluminationSampleRecord {
         set { mPackedNormal = packNormal(newValue); }
 	}
 
-    property float mG {
-        get { return mCosLight / pow2(mDistance); }
+    float getG() {
+        return mCosLight / pow2(mDistance);
     }
-    property float mDirectPdfA {
-        get { return pdfWtoA(mDirectPdfW, mG); }
+    float getDirectPdfA() {
+        return pdfWtoA(mDirectPdfW, getG());
 	}
 
     property bool isSingular {
@@ -235,13 +210,13 @@ extension SceneParameters {
             pdfA *= 1 - gPushConstants.mEnvironmentSampleProbability;
 
         ShadingData shadingData;
-        if (instance.type() == InstanceType::eMesh) {
+        if (instance.getType() == InstanceType::eMesh) {
 			// triangle
             const MeshInstanceData mesh = reinterpret<MeshInstanceData>(instance);
             const uint primitiveIndex = uint(rnd.w * mesh.primitiveCount()) % mesh.primitiveCount();
             shadingData = makeTriangleShadingData(mesh, transform, primitiveIndex, sampleUniformTriangle(rnd.x, rnd.y));
             pdfA /= mesh.primitiveCount();
-        } else if (instance.type() == InstanceType::eSphere) {
+        } else if (instance.getType() == InstanceType::eSphere) {
 			// sphere
             const SphereInstanceData sphere = reinterpret<SphereInstanceData>(instance);
             shadingData = makeSphereShadingData(sphere, transform, sphere.radius() * sampleUniformSphereCartesian(rnd.x, rnd.y));
@@ -252,7 +227,7 @@ extension SceneParameters {
         r.mDistance = length(r.mDirectionToLight);
         r.mDirectionToLight /= r.mDistance;
 
-        r.mCosLight = -dot(shadingData.geometryNormal, r.mDirectionToLight);
+        r.mCosLight = -dot(shadingData.getGeometryNormal(), r.mDirectionToLight);
 
         const Material m = Material(shadingData);
         pdfA *= m.emissionPdf() / shadingData.mShapeArea;
@@ -300,12 +275,12 @@ extension SceneParameters {
             pdfA *= 1 - gPushConstants.mEnvironmentSampleProbability;
 
         ShadingData shadingData;
-        if (instance.type() == InstanceType::eMesh) {
+        if (instance.getType() == InstanceType::eMesh) {
 			const MeshInstanceData mesh = reinterpret<MeshInstanceData>(instance);
             const uint primitiveIndex = uint(posRnd.w * mesh.primitiveCount()) % mesh.primitiveCount();
             shadingData = makeTriangleShadingData(mesh, transform, primitiveIndex, sampleUniformTriangle(posRnd.x, posRnd.y));
             pdfA /= mesh.primitiveCount();
-        } else if (instance.type() == InstanceType::eSphere) {
+        } else if (instance.getType() == InstanceType::eSphere) {
             const SphereInstanceData sphere = reinterpret<SphereInstanceData>(instance);
             shadingData = makeSphereShadingData(sphere, transform, sphere.radius() * sampleUniformSphereCartesian(posRnd.x, posRnd.y));
         } else
@@ -346,7 +321,7 @@ LightRadianceRecord GetBackgroundRadiance(const float3 aDirection) {
 LightRadianceRecord GetSurfaceRadiance(const float3 aDirection, const IntersectionResult aIsect, const BSDF aBsdf) {
     if (gPushConstants.mLightCount == 0) return { 0 };
 
-    const float cosTheta = -dot(aDirection, aIsect.mShadingData.geometryNormal);
+    const float cosTheta = -dot(aDirection, aIsect.mShadingData.getGeometryNormal());
     if (cosTheta < 0) return { 0 };
 
 	LightRadianceRecord r;
@@ -361,7 +336,7 @@ LightRadianceRecord GetSurfaceRadiance(const float3 aDirection, const Intersecti
 // misc
 
 float3 OffsetRayOrigin(const VcmVertex vertex, const float3 direction) {
-	return rayOffset(vertex.mShadingData.mPosition, vertex.mShadingData.geometryNormal, direction);
+	return rayOffset(vertex.mShadingData.mPosition, vertex.mShadingData.getGeometryNormal(), direction);
 }
 
 void AddColor(const uint2 index, const float3 color, const uint cameraVertices, const uint lightVertices) {
@@ -396,8 +371,8 @@ void InterlockedAddColor(const int2 ipos, const uint2 extent, const float3 color
 struct AbstractCamera {
     uint mViewIndex;
 
-    property ViewData view { get { return gRenderParams.mViews[mViewIndex]; } }
-    property TransformData transform { get { return gRenderParams.mViewTransforms[mViewIndex]; } }
-    property TransformData inverseTransform { get { return gRenderParams.mViewInverseTransforms[mViewIndex]; } }
-    property TransformData prevInverseTransform { get { return gRenderParams.mPrevInverseViewTransforms[mViewIndex]; } }
+    ViewData getView() { return gRenderParams.mViews[mViewIndex]; }
+    TransformData getTransform() { return gRenderParams.mViewTransforms[mViewIndex]; }
+    TransformData getInverseTransform() { return gRenderParams.mViewInverseTransforms[mViewIndex]; }
+    TransformData getPrevInverseTransform() { return gRenderParams.mPrevInverseViewTransforms[mViewIndex]; }
 };

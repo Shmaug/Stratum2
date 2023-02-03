@@ -20,7 +20,7 @@ struct HashGrid<T, let bUseMergeRadius : bool> {
 	RWStructuredBuffer<uint> mStats;
 
 
-	property uint mCellCount { get { return gPushConstants.mHashGridCellCount; } }
+	uint GetCellCount() { return gPushConstants.mHashGridCellCount; }
 
     float GetCellSize(const float3 aPosition) {
         if (bUseMergeRadius) {
@@ -29,9 +29,9 @@ struct HashGrid<T, let bUseMergeRadius : bool> {
 			if (gPushConstants.mHashGridCellPixelRadius <= 0)
 				return gPushConstants.mHashGridMinCellSize;
 			const AbstractCamera gCamera = { 0 };
-			const float cameraDistance = length(gCamera.transform.transformPoint(0) - aPosition);
-			const float2 extent = gCamera.view.extent();
-			const float step = cameraDistance * tan(gPushConstants.mHashGridCellPixelRadius * gCamera.view.mProjection.mVerticalFoV * max(1/extent.y, extent.y/pow2(extent.x)));
+			const float cameraDistance = length(gCamera.getTransform().transformPoint(0) - aPosition);
+			const float2 extent = gCamera.getView().extent();
+			const float step = cameraDistance * tan(gPushConstants.mHashGridCellPixelRadius * gCamera.getView().mProjection.mVerticalFoV * max(1/extent.y, extent.y/pow2(extent.x)));
 			return gPushConstants.mHashGridMinCellSize * (1 << uint(log2(step / gPushConstants.mHashGridMinCellSize)));
         }
 	}
@@ -45,11 +45,11 @@ struct HashGrid<T, let bUseMergeRadius : bool> {
         // compute index in hash grid
         const int3 p = int3(floor(aPosition / aCellSize)) + aOffset;
         const uint checksum = max(1, xxhash32(xxhash32(asuint(aCellSize)) + xxhash32(p.z + xxhash32(p.y + xxhash32(p.x)))));
-        const uint baseCellIndex = pcg(pcg(asuint(aCellSize)) + pcg(p.z + pcg(p.y + pcg(p.x)))) % mCellCount;
+        const uint baseCellIndex = pcg(pcg(asuint(aCellSize)) + pcg(p.z + pcg(p.y + pcg(p.x)))) % GetCellCount();
 
         // resolve hash collisions with linear probing
         for (uint i = 0; i < 32; i++) {
-            const uint cellIndex = (baseCellIndex + i) % mCellCount;
+            const uint cellIndex = (baseCellIndex + i) % GetCellCount();
             // find cell with matching checksum, or empty cell if inserting
             if (insert) {
                 uint prevChecksum;
@@ -92,7 +92,7 @@ struct HashGrid<T, let bUseMergeRadius : bool> {
 
 	// Prefix sum over cell counter values to determine indices. Should be called with 1 thread per cell.
 	void _ComputeIndices(const uint aCellIndex) {
-		if (aCellIndex >= mCellCount) return;
+		if (aCellIndex >= GetCellCount()) return;
 
 		uint offset;
 		InterlockedAdd(mAppendIndices[0][1], mCounters[aCellIndex], offset);

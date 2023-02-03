@@ -8,12 +8,12 @@
 #ifdef __SLANG__
 
 #define SLANG_MUTATING [mutating]
-#define SLANG_CTOR(type) __init
+#define SLANG_CTOR(TYPE) __init
 
 #else // __SLANG__
 
 #define SLANG_MUTATING
-#define SLANG_CTOR(type) inline type
+#define SLANG_CTOR(TYPE) inline TYPE
 
 #endif
 

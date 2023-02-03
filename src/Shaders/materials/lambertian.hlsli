@@ -3,12 +3,13 @@
 #include "compat/image_value.h"
 #include "compat/material.h"
 #include "compat/scene.h"
+#include "common/shading_data.hlsli"
 
 
 void LoadNormalMap(inout ShadingData aoShadingData) {
     if (!gNormalMaps) return;
 
-    const uint2 p = gScene.mMaterialData.Load<uint2>(aoShadingData.materialAddress + ImageValue4::PackedSize * MaterialData::gDataCount + 4);
+    const uint2 p = gScene.mMaterialData.Load<uint2>(aoShadingData.getMaterialAddress() + ImageValue4::PackedSize * MaterialData::gDataCount + 4);
     ImageValue3 bump_img = { 1, p.x };
     if (!bump_img.hasImage()) return;
     const float scale = asfloat(p.y);
@@ -18,10 +19,10 @@ void LoadNormalMap(inout ShadingData aoShadingData) {
     bump.xy = (bump.xy * 2 - 1) * scale;
     bump = normalize(bump);
 
-    float3 n = aoShadingData.shadingNormal;
-    float3 t = aoShadingData.tangent;
+    float3 n = aoShadingData.getShadingNormal();
+    float3 t = aoShadingData.getTangent();
 
-    n = normalize(t * bump.x + cross(n, t) * (aoShadingData.isBitangentFlipped ? -1 : 1) * bump.y + n * bump.z);
+    n = normalize(t * bump.x + cross(n, t) * (aoShadingData.isBitangentFlipped() ? -1 : 1) * bump.y + n * bump.z);
     t = normalize(t - n * dot(n, t));
 
     aoShadingData.mPackedShadingNormal = packNormal(n);
@@ -33,7 +34,7 @@ struct LambertianMaterial : BSDF {
 
 	__init(inout ShadingData sd) {
         for (int i = 0; i < MaterialData::gDataCount; i++)
-            bsdf.data[i] = ImageValue4(gScene.mMaterialData, sd.materialAddress + i*ImageValue4::PackedSize).eval(sd.mTexcoord, sd.mTexcoordScreenSize);
+            bsdf.data[i] = ImageValue4(gScene.mMaterialData, sd.getMaterialAddress() + i*ImageValue4::PackedSize).eval(sd.mTexcoord, sd.mTexcoordScreenSize);
 
         LoadNormalMap(sd);
 	}

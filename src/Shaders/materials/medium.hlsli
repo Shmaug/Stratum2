@@ -1,6 +1,7 @@
 #ifndef MEDIUM_H
 #define MEDIUM_H
 
+#include "common/rng.hlsli"
 #include "bsdf.hlsli"
 
 #include "compat/scene.h"
@@ -80,8 +81,8 @@ struct Medium : BSDF {
 			return readAlbedo(albedo_accessor, pnanovdb_readaccessor_get_value_address(PNANOVDB_GRID_TYPE_FLOAT, gScene.mVolumes[mAlbedoVolumeIndex], albedo_accessor, (int3)floor(pos_index)));
 	}
 
-    property StructuredBuffer<uint> densityVolume { get { return gScene.mVolumes[mDensityVolumeIndex]; } }
-    property StructuredBuffer<uint> albedoVolume { get { return gScene.mVolumes[mAlbedoVolumeIndex]; } }
+    StructuredBuffer<uint> getDensityVolume() { return gScene.mVolumes[mDensityVolumeIndex]; }
+	StructuredBuffer<uint> getAlbedoVolume() { return gScene.mVolumes[mAlbedoVolumeIndex]; }
 
 	// returns hit position inside medium. multiplies beta by transmittance*sigma_s
     float3 deltaTrack<let Scattering : bool>(inout RandomSampler rng, float3 origin, float3 direction, float tmax, inout float3 beta, out float3 dirPdf, out float3 neePdf, out bool scattered) {
@@ -89,19 +90,19 @@ struct Medium : BSDF {
 		scattered = false;
 
 		pnanovdb_readaccessor_t density_accessor, albedo_accessor;
-		pnanovdb_readaccessor_init(density_accessor, pnanovdb_tree_get_root(densityVolume, pnanovdb_grid_get_tree(densityVolume, gridHandle)));
+		pnanovdb_readaccessor_init(density_accessor, pnanovdb_tree_get_root(getDensityVolume(), pnanovdb_grid_get_tree(getDensityVolume(), gridHandle)));
         if (mAlbedoVolumeIndex != -1)
-            pnanovdb_readaccessor_init(albedo_accessor, pnanovdb_tree_get_root(albedoVolume, pnanovdb_grid_get_tree(albedoVolume, gridHandle)));
+            pnanovdb_readaccessor_init(albedo_accessor, pnanovdb_tree_get_root(getAlbedoVolume(), pnanovdb_grid_get_tree(getAlbedoVolume(), gridHandle)));
 
 		dirPdf = 1;
 		neePdf = 1;
 
-		const float3 majorant = mDensityScale * readDensity(density_accessor, pnanovdb_root_get_max_address(PNANOVDB_GRID_TYPE_FLOAT, densityVolume, density_accessor.root));
+		const float3 majorant = mDensityScale * readDensity(density_accessor, pnanovdb_root_get_max_address(PNANOVDB_GRID_TYPE_FLOAT, getDensityVolume(), density_accessor.root));
         const uint channel = rng.next() % 3;
         if (majorant[channel] < 1e-6) return 0;
 
-		origin    = pnanovdb_grid_world_to_indexf    (densityVolume, gridHandle, origin);
-		direction = pnanovdb_grid_world_to_index_dirf(densityVolume, gridHandle, direction);
+		origin    = pnanovdb_grid_world_to_indexf    (getDensityVolume(), gridHandle, origin);
+		direction = pnanovdb_grid_world_to_index_dirf(getDensityVolume(), gridHandle, direction);
 
 		for (uint iteration = 0; iteration < gMaxNullCollisions && any(beta > 0); iteration++) {
             const float t = mAttenuationUnit * -log(1 - rng.nextFloat()) / majorant[channel];
@@ -131,7 +132,7 @@ struct Medium : BSDF {
                 beta *= tr * localSigmaS; // note: multiplication by localSigmaS is really part of BSDF computation
                 dirPdf *= tr * majorant * realProb;
                 scattered = true;
-				return pnanovdb_grid_index_to_worldf(densityVolume, gridHandle, origin);
+				return pnanovdb_grid_index_to_worldf(getDensityVolume(), gridHandle, origin);
 			} else {
 				// fake particle
 				beta *= tr * (majorant - localSigmaT);

@@ -67,10 +67,10 @@ struct TransformData {
 
 #else // __SLANG__
 
-	__init(const float3x4 t) {
+	SLANG_CTOR(TransformData) (const float3x4 t) {
 		m = t;
 	}
-	__init(const float3 t, const quatf r, const float3 s) {
+	SLANG_CTOR(TransformData) (const float3 t, const quatf r, const float3 s) {
 		// https://www.euclideanspace.com/maths/geometry/rotations/conversions/quaternionToMatrix/index.htm
 		float sqw = r.w * r.w;
 		float sqx = r.xyz[0] * r.xyz[0];
@@ -102,7 +102,7 @@ struct TransformData {
 		m[1][3] = t[1];
 		m[2][3] = t[2];
 	}
-	#endif
+#endif
 
 	inline float3x4 to_float3x4() CONST_CPP { return m; }
 };

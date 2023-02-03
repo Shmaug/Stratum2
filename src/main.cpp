@@ -178,6 +178,7 @@ struct App {
 		CommandBuffer& commandBuffer = *commandBufferPtr;
 
 		if (commandBuffer.fence()) {
+			ProfilerScope ps("waitForFences");
 			if ((*mDevice)->waitForFences(**commandBuffer.fence(), true, ~0ull) != vk::Result::eSuccess)
 				throw runtime_error("Error: waitForFences failed");
 		}

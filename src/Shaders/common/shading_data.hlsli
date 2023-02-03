@@ -2,6 +2,57 @@
 
 #include "scene.hlsli"
 
+#define SHADING_FLAG_FLIP_BITANGENT BIT(0)
+
+extension ShadingData {
+    bool isSurface() { return mShapeArea > 0; }
+	bool isMedium() { return mShapeArea == 0; }
+	bool isEnvironment() { return mShapeArea < 0; }
+	uint getMaterialAddress() { return BF_GET(mFlagsMaterialAddress, 4, 28); }
+
+	bool isBitangentFlipped() { return (bool)(mFlagsMaterialAddress & SHADING_FLAG_FLIP_BITANGENT); }
+	int getBitangentDirection() { return isBitangentFlipped() ? -1 : 1; }
+
+	float3 getGeometryNormal() { return unpackNormal(mPackedGeometryNormal); }
+	float3 getShadingNormal() { return unpackNormal(mPackedShadingNormal); }
+	float3 getTangent() { return unpackNormal(mPackedTangent); }
+
+	float3 toWorld(const float3 v) {
+		const float3 n = getShadingNormal();
+		const float3 t = getTangent();
+		return v.x * t + v.y * cross(n, t) * getBitangentDirection() + v.z * n;
+	}
+	float3 toLocal(const float3 v) {
+		const float3 n = getShadingNormal();
+		const float3 t = getTangent();
+		return float3(dot(v, t), dot(v, cross(n, t) * getBitangentDirection()), dot(v, n));
+    }
+
+    float shadingNormalCorrection<let Adjoint : bool>(const float3 localDirIn, const float3 localDirOut) {
+        if (isMedium())
+            return 1;
+
+        const float3 localGeometryNormal = toLocal(getGeometryNormal());
+        const float ngdotin = dot(localGeometryNormal, localDirIn);
+        const float ngdotout = dot(localGeometryNormal, localDirOut);
+
+        // light leak fix
+        if (sign(ngdotout) != sign(localDirOut.z) || sign(ngdotin) != sign(localDirIn.z))
+            return 0;
+
+        float G = 1;
+
+        if (Adjoint) {
+            const float num = ngdotout * localDirIn.z;
+            const float denom = localDirOut.z * ngdotin;
+            if (abs(denom) > 1e-5)
+                G *= abs(num / denom);
+        }
+
+        return G;
+    }
+};
+
 uint3 loadTriangleIndices(ByteAddressBuffer indices, const uint offset, const uint indexStride, const uint primitiveIndex) {
 	const int offsetBytes = (int)(offset + primitiveIndex*3*indexStride);
 	uint3 tri;
@@ -120,7 +171,7 @@ extension SceneParameters {
 		float3 v0,v1,v2;
 		loadTriangleAttribute(mVertexBuffers[NonUniformResourceIndex(vertexInfo.positionBuffer())], vertexInfo.positionOffset(), vertexInfo.positionStride(), tri, v0, v1, v2);
 
-		ShadingData r = makeTriangleShadingDataWithoutPosition(instance.materialAddress(), transform, vertexInfo, tri, bary, v0, v1, v2);
+		ShadingData r = makeTriangleShadingDataWithoutPosition(instance.getMaterialAddress(), transform, vertexInfo, tri, bary, v0, v1, v2);
 		r.mPosition = transform.transformPoint(v0 + (v1 - v0)*bary.x + (v2 - v0)*bary.y);
 		return r;
 	}
@@ -141,7 +192,7 @@ extension SceneParameters {
 		const float d21 = dot(p_v0, v2v0);
 		const float2 bary = float2(d11 * d20 - d01 * d21, d00 * d21 - d01 * d20) / (d00 * d11 - d01 * d01);
 
-		ShadingData r = makeTriangleShadingDataWithoutPosition(instance.materialAddress(), transform, vertexInfo, tri, bary, v0, v1, v2);
+		ShadingData r = makeTriangleShadingDataWithoutPosition(instance.getMaterialAddress(), transform, vertexInfo, tri, bary, v0, v1, v2);
 		r.mPosition = transform.transformPoint(localPosition);
 		return r;
 	}
@@ -150,7 +201,7 @@ extension SceneParameters {
 		const float3 normal = normalize(transform.transformVector(localPosition));
 		r.mPosition = transform.transformPoint(localPosition);
 		r.mFlagsMaterialAddress = 0;
-		BF_SET(r.mFlagsMaterialAddress, instance.materialAddress(), 4, 28);
+		BF_SET(r.mFlagsMaterialAddress, instance.getMaterialAddress(), 4, 28);
 		r.mPackedGeometryNormal = r.mPackedShadingNormal = packNormal(normal);
 		const float radius = instance.radius();
 		r.mShapeArea = 4*M_PI*radius*radius;
@@ -166,14 +217,14 @@ extension SceneParameters {
 		ShadingData r;
 		r.mPosition = position;
 		r.mFlagsMaterialAddress = 0;
-		BF_SET(r.mFlagsMaterialAddress, instance.materialAddress(), 4, 28);
+		BF_SET(r.mFlagsMaterialAddress, instance.getMaterialAddress(), 4, 28);
 		r.mShapeArea = 0;
 		r.mTexcoordScreenSize = 0;
 		return r;
     }
 
     ShadingData makeShadingData(const InstanceData instance, const TransformData transform, const float3 localPosition, const uint primitiveIndex = -1) {
-        switch (instance.type()) {
+        switch (instance.getType()) {
         case InstanceType::eMesh:
             return makeTriangleShadingData(reinterpret<MeshInstanceData>(instance), transform, primitiveIndex, localPosition);
         case InstanceType::eSphere:

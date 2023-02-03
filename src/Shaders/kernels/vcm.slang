@@ -191,11 +191,11 @@ extension VertexCM {
     float2 GenerateCameraSample(out SubPathState oCameraState) {
         // Generate ray
         float2 sample;
-        const float3 rayDirection = gCamera.view.toWorld(float2(mIndex) + 0.5, sample);
+        const float3 rayDirection = gCamera.getView().toWorld(float2(mIndex) + 0.5, sample);
 
         // Compute pdf conversion factor from area on image plane to solid angle on ray
         const float cosAtCamera = abs(rayDirection.z);
-        const float imagePointToCameraDist = gCamera.view.imagePlaneDist() / cosAtCamera;
+        const float imagePointToCameraDist = gCamera.getView().imagePlaneDist() / cosAtCamera;
         const float imageToSolidAngleFactor = pow2(imagePointToCameraDist) / cosAtCamera;
 
         // We put the virtual image plane at such a distance from the camera origin
@@ -204,7 +204,7 @@ extension VertexCM {
         // image plane area density to ray solid angle density
         const float cameraPdfW = imageToSolidAngleFactor;
 
-        const TransformData cameraTransform = gCamera.transform;
+        const TransformData cameraTransform = gCamera.getTransform();
 
         oCameraState.mDirection = normalize(cameraTransform.transformVector(rayDirection));
 
@@ -228,10 +228,10 @@ extension VertexCM {
         float2 prevPixelCoord = mIndex + 0.5;
 
         float prevDepth = isect.mDistance;
-        if (isect.instanceIndex != INVALID_INSTANCE) {
-            const float3 prevCameraPos = gCamera.prevInverseTransform.transformPoint(gScene.mInstanceMotionTransforms[isect.instanceIndex].transformPoint(isect.mShadingData.mPosition));
+        if (isect.mInstanceIndex != INVALID_INSTANCE) {
+            const float3 prevCameraPos = gCamera.getPrevInverseTransform().transformPoint(gScene.mInstanceMotionTransforms[isect.mInstanceIndex].transformPoint(isect.mShadingData.mPosition));
             prevDepth = length(prevCameraPos);
-            gCamera.view.toRaster(prevCameraPos, prevPixelCoord);
+            gCamera.getView().toRaster(prevCameraPos, prevPixelCoord);
         }
 
         gRenderParams.mPrevUVs[mIndex] = prevPixelCoord / gPushConstants.mOutputExtent;
@@ -316,12 +316,12 @@ extension VertexCM {
 
         static float GetTargetPdf<let bVisibility : bool>(const ShadingData aRefPos, const float4 aSample, out IlluminationSampleRecord oSampleRecord) {
             oSampleRecord = gScene.sampleIllumination(aRefPos.mPosition, aSample);
-            const float cosTheta = dot(aRefPos.shadingNormal, oSampleRecord.mDirectionToLight);
-            const float targetPdf = luminance(oSampleRecord.mRadiance) * abs(cosTheta) * oSampleRecord.mG;
+            const float cosTheta = dot(aRefPos.getShadingNormal(), oSampleRecord.mDirectionToLight);
+            const float targetPdf = luminance(oSampleRecord.mRadiance) * abs(cosTheta) * oSampleRecord.getG();
 
             if (bVisibility && targetPdf > 0) {
                 IntersectionResult isect;
-                if (gScene.traceRay(makeRay(rayOffset(aRefPos.mPosition, aRefPos.geometryNormal, oSampleRecord.mDirectionToLight), oSampleRecord.mDirectionToLight, 0, AdjustDistance(oSampleRecord.mDistance)), false, isect)) {
+                if (gScene.traceRay(makeRay(rayOffset(aRefPos.mPosition, aRefPos.getGeometryNormal(), oSampleRecord.mDirectionToLight), oSampleRecord.mDirectionToLight, 0, AdjustDistance(oSampleRecord.mDistance)), false, isect)) {
                     return 0;
                 }
             }
@@ -337,7 +337,7 @@ extension VertexCM {
             if (targetPdf <= 0)
 				return false;
 
-            const float wi = targetPdf / (sample.mDirectPdfA * M);
+            const float wi = targetPdf / (sample.getDirectPdfA() * M);
             mTotalWeight += wi;
             if (aRnd * mTotalWeight <= wi) {
                 mSampleRnd = aSampleRnd;
@@ -365,7 +365,7 @@ extension VertexCM {
             // target pdf in the current domain of aReservoir's sample
             const float phat_new   = GetTargetPdf<true>(aCameraState.mVertex.mShadingData, aReservoir.mRnd, sample);
 
-			// MIS weights
+			// resampling MIS weights
 
             const float m0 = safe_divide(mCachedTargetPdf, mCachedTargetPdf + phat_i_old);
             const float m1 = safe_divide(aReservoir.mCachedTargetPdf, aReservoir.mCachedTargetPdf + phat_new);
@@ -409,7 +409,7 @@ extension VertexCM {
         if (bool(gDIReservoirFlags & (uint)VcmReservoirFlags::eReuse)) {
             if (gPushConstants.reservoirHistoryValid()) {
 				const float2 jitter = mRng.nextFloat2() * 2 - 1;
-                const float3x3 frame = makeOrthonormal(aCameraState.mVertex.mShadingData.geometryNormal);
+                const float3x3 frame = makeOrthonormal(aCameraState.mVertex.mShadingData.getGeometryNormal());
                 const float3 queryPos = aCameraState.mVertex.mShadingData.mPosition + gPushConstants.mHashGridJitterRadius * (frame[0] * jitter.x + frame[1] * jitter.y);
                 const float cellSize = gRenderParams.mPrevDirectIlluminationReservoirs.GetCellSize(queryPos);
 				const uint cellIndex = gRenderParams.mPrevDirectIlluminationReservoirs.FindCellIndex(queryPos, cellSize);
@@ -432,7 +432,7 @@ extension VertexCM {
             }
         }
 
-        reservoir.mCachedSample.mIntegrationWeight = reservoir.mIntegrationWeight * reservoir.mCachedSample.mG;
+        reservoir.mCachedSample.mIntegrationWeight = reservoir.mIntegrationWeight * reservoir.mCachedSample.getG();
         return reservoir.mCachedSample;
 	}
 
@@ -697,7 +697,7 @@ extension VertexCM {
                 phat_i_old = GetTargetPdf(v, bsdf, mSample, tmp);
             }
 
-            // MIS weights
+            // resampling MIS weights
 
             const float m0 = safe_divide(mCachedTargetPdf, mCachedTargetPdf + phat_i_old);
             const float m1 = safe_divide(aReservoir.mCachedTargetPdf, aReservoir.mCachedTargetPdf + phat_new);
@@ -742,7 +742,7 @@ extension VertexCM {
         if (bool(gLVCReservoirFlags & (uint)VcmReservoirFlags::eReuse)) {
             if (gPushConstants.reservoirHistoryValid()) {
                 const float2 jitter = mRng.nextFloat2() * 2 - 1;
-                const float3x3 frame = makeOrthonormal(aCameraState.mVertex.mShadingData.geometryNormal);
+                const float3x3 frame = makeOrthonormal(aCameraState.mVertex.mShadingData.getGeometryNormal());
                 const float3 queryPos = aCameraState.mVertex.mShadingData.mPosition + gPushConstants.mHashGridJitterRadius * (frame[0] * jitter.x + frame[1] * jitter.y);
                 const float cellSize = gRenderParams.mPrevLVCReservoirs.GetCellSize(queryPos);
                 const uint cellIndex = gRenderParams.mPrevLVCReservoirs.FindCellIndex(queryPos, cellSize);
@@ -844,18 +844,11 @@ extension VertexCM {
 				continue;
 
             uint2 range = gRenderParams.mLightHashGrid.GetCellDataRange(cellIndex);
+            float w = 1;
             if (range.y - range.x > 128) {
-                // pick 128 random vertices
-                for (uint i = 0; i < 128; i++) {
-                    LightVertex particle = VcmVertex(gRenderParams.mLightVertices[gRenderParams.mLightHashGrid.mData[range.x + mRng.next() % (range.y - range.x)]]);
-
-                    const float3 toParticle = particle.mShadingData.mPosition - queryPos;
-                    const float distSqr = dot(toParticle, toParticle);
-
-                    if (distSqr <= mergeRadiusSqr)
-                        ProcessVertex(aCameraState, aCameraBsdf, particle);
+                range.y = range.x + 128;
+                w = float(range.y - range.x) / 128;
                 }
-            } else {
                 for (; range.x < range.y; range.x++) {
                     LightVertex particle = VcmVertex(gRenderParams.mLightVertices[gRenderParams.mLightHashGrid.mData[range.x]]);
 
@@ -863,12 +856,11 @@ extension VertexCM {
                     const float distSqr     = dot(toParticle, toParticle);
 
                     if (distSqr <= mergeRadiusSqr)
-                        ProcessVertex(aCameraState, aCameraBsdf, particle);
+					ProcessVertex(aCameraState, aCameraBsdf, particle, w);
                 }
             }
 		}
-	}
-	void ProcessVertex(const SubPathState aCameraState, const BSDF aCameraBsdf, inout LightVertex aLightVertex) {
+	void ProcessVertex(const SubPathState aCameraState, const BSDF aCameraBsdf, inout LightVertex aLightVertex, const float aWeight = 1) {
 		// Reject if full path length below/above min/max path length
         if ((aLightVertex.mPathLength + aCameraState.mVertex.mPathLength > gPushConstants.mMaxPathLength) ||
             (aLightVertex.mPathLength + aCameraState.mVertex.mPathLength < gPushConstants.mMinPathLength))
@@ -973,7 +965,7 @@ extension VertexCM {
 			// GenerateLightSample() or SampleScattering(). Implement equations
 			// [tech. rep. (31)-(33)] or [tech. rep. (34)-(36)], respectively.
             {
-                const float cosTheta = abs(dot(cameraState.mVertex.mShadingData.geometryNormal, cameraState.mDirection));
+                const float cosTheta = abs(dot(cameraState.mVertex.mShadingData.getShadingNormal(), cameraState.mDirection));
 				cameraState.mVertex.dVCM *= Mis(pow2(isect.mDistance));
 				cameraState.mVertex.dVCM /= Mis(cosTheta);
 				cameraState.mVertex.dVC  /= Mis(cosTheta);
@@ -1081,13 +1073,13 @@ extension VertexCM {
     // framebuffer. Multiplies by throughput (obviously, as nothing is returned).
     [mutating]
     static void ConnectToCamera(const SubPathState aLightState, const BSDF aBsdf) {
-        const TransformData cameraTransform = gCamera.transform;
+        const TransformData cameraTransform = gCamera.getTransform();
         const float3 cameraPosition = cameraTransform.transformPoint(0);
         const float3 cameraForward  = cameraTransform.transformVector(float3(0, 0, 1));
 
         // Check it projects to the screen (and where)
         float2 imagePos;
-        if (!gCamera.view.toRaster(gCamera.inverseTransform.transformPoint(aLightState.mVertex.mShadingData.mPosition), imagePos))
+        if (!gCamera.getView().toRaster(gCamera.getInverseTransform().transformPoint(aLightState.mVertex.mShadingData.mPosition), imagePos))
             return;
 
         // Compute distance and normalize direction to camera
@@ -1108,7 +1100,7 @@ extension VertexCM {
 
         // Compute pdf conversion factor from image plane area to surface area
         const float cosAtCamera = abs(dot(cameraForward, directionToCamera));
-        const float imagePointToCameraDist = gCamera.view.imagePlaneDist() / cosAtCamera;
+        const float imagePointToCameraDist = gCamera.getView().imagePlaneDist() / cosAtCamera;
         const float imageToSolidAngleFactor = pow2(imagePointToCameraDist) / cosAtCamera;
         const float imageToSurfaceFactor = imageToSolidAngleFactor * abs(localToCamera.z) / pow2(distance);
 
@@ -1212,7 +1204,7 @@ extension VertexCM {
 			// SampleScattering(), and together implement equations [tech. rep. (31)-(33)]
 			// or [tech. rep. (34)-(36)], respectively.
 			{
-				const float cosTheta = abs(dot(lightState.mVertex.mShadingData.geometryNormal, lightState.mDirection));
+				const float cosTheta = abs(dot(lightState.mVertex.mShadingData.getShadingNormal(), lightState.mDirection));
 
 				// Infinite lights use MIS handled via solid angle integration,
 				// so do not divide by the distance for such lights [tech. rep. Section 5.1]

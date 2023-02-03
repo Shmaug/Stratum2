@@ -42,7 +42,7 @@ struct TapData {
 	float4 sum_color;
 	float sum_weight;
 
-	SLANG_MUTATING
+	[mutating]
 	void compute_sigma_luminance() {
 		const float kernel[2][2] = {
 			{ 1.0 / 4.0, 1.0 / 8.0  },
@@ -59,7 +59,7 @@ struct TapData {
 		sigma_l = sqrt(max(s, 0))*gPushConstants.mSigmaLuminanceBoost;
 	}
 
-	SLANG_MUTATING
+	[mutating]
 	void tap(const int2 offset, const float kernel_weight) {
 		const int2 p = index + offset;
 		if (!gParams.mViews[view_index].isInside(p)) return;
