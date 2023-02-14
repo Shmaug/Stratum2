@@ -300,8 +300,8 @@ extension VertexCM {
 
 			// resampling MIS weights
 
-            const float m0 = safe_divide(mCachedTargetPdf, mCachedTargetPdf + phat_i_old);
-            const float m1 = safe_divide(aReservoir.mCachedTargetPdf, aReservoir.mCachedTargetPdf + phat_new);
+            const float m0 = safe_divide(mCachedTargetPdf * M, mCachedTargetPdf * M + phat_i_old * aReservoir.M);
+            const float m1 = safe_divide(aReservoir.mCachedTargetPdf * aReservoir.M, aReservoir.mCachedTargetPdf * aReservoir.M + phat_new * M);
 
 			M += aReservoir.M;
 
@@ -636,8 +636,8 @@ extension VertexCM {
 
             // resampling MIS weights
 
-            const float m0 = safe_divide(mCachedTargetPdf, mCachedTargetPdf + phat_i_old);
-            const float m1 = safe_divide(aReservoir.mCachedTargetPdf, aReservoir.mCachedTargetPdf + phat_new);
+            const float m0 = safe_divide(mCachedTargetPdf * M, mCachedTargetPdf * M + phat_i_old * aReservoir.M);
+            const float m1 = safe_divide(aReservoir.mCachedTargetPdf * aReservoir.M, aReservoir.mCachedTargetPdf * aReservoir.M + phat_new * M);
 
             M += aReservoir.M;
 

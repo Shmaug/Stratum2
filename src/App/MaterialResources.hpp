@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Core/hlslmath.hpp>
+#include <Core/math.hpp>
 #include <Core/Buffer.hpp>
 #include <Core/Image.hpp>
 

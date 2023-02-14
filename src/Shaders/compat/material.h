@@ -1,7 +1,7 @@
 #pragma once
 
 #ifdef __cplusplus
-#include <Core/hlslmath.hpp>
+#include <Core/math.hpp>
 #endif
 
 #include "common.h"

@@ -1,7 +1,7 @@
 #include "CommandBuffer.hpp"
 #include "Profiler.hpp"
 
-#include "hlslmath.hpp"
+#include "math.hpp"
 
 namespace stm2 {
 

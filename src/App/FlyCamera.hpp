@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Core/hlslmath.hpp>
+#include <Core/math.hpp>
 
 #include "Node.hpp"
 

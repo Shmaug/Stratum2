@@ -153,23 +153,15 @@ void PathTracer::drawGui() {
 		mFrameResourcePool.clear();
 		mPrevFrame.reset();
 	}
-
 	if (ImGui::Button("Reload shaders")) {
 		changed = true;
 		Device& device = *mNode.findAncestor<Device>();
 		device->waitIdle();
 		createPipelines(device);
 	}
-
 	ImGui::PopID();
 
-	if (changed && mDenoise) {
-		if (auto denoiser = mNode.getComponent<Denoiser>(); denoiser)
-			denoiser->resetAccumulation();
-	}
-
 	{
-		bool changed = false;
 		if (Gui::enumDropdown<VcmAlgorithmType>("Algorithm", mAlgorithm, VcmAlgorithmType::kNumVcmAlgorithmType)) changed = true;
 		if (ImGui::Checkbox("Shading normals", &mUseShadingNormals)) changed = true;
 		if (mUseShadingNormals) {
@@ -187,6 +179,9 @@ void PathTracer::drawGui() {
 		if (mPushConstants.mEnvironmentMaterialAddress != -1 && mPushConstants.mLightCount > 0)
 			if (ImGui::SliderFloat("Environment sample probability", &mPushConstants.mEnvironmentSampleProbability, 0, 1)) changed = true;
 
+		if (mAlgorithm == VcmAlgorithmType::kBpt)
+			if (ImGui::Checkbox("Light vertex cache", &mUseLightVertexCache)) changed = true;
+
 		// reservoirs
 		if (mAlgorithm != VcmAlgorithmType::kLightTrace) {
 			if (ImGui::CheckboxFlags("DI reservoir resampling", reinterpret_cast<uint32_t*>(&mDIReservoirFlags), (uint32_t)VcmReservoirFlags::eRIS)) changed = true;
@@ -202,7 +197,7 @@ void PathTracer::drawGui() {
 				ImGui::Unindent();
 			}
 
-			if (mAlgorithm == VcmAlgorithmType::kBptLvc) {
+			if (mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache) {
 				if (ImGui::Checkbox("Cell resampling", &mLVCHashGridSampling)) changed = true;
 				if (mLVCHashGridSampling) {
 					if (ImGui::DragScalar("Cell RIS samples", ImGuiDataType_U32, &mPushConstants.mLVCHashGridSampleCount, 1, &one)) changed = true;
@@ -240,13 +235,13 @@ void PathTracer::drawGui() {
 		// hash grid
 		if (mAlgorithm == VcmAlgorithmType::kPpm || mAlgorithm == VcmAlgorithmType::kBpm || mAlgorithm == VcmAlgorithmType::kVcm ||
 			(mAlgorithm != VcmAlgorithmType::kLightTrace && (mDIReservoirFlags & VcmReservoirFlags::eReuse)) ||
-			(mAlgorithm == VcmAlgorithmType::kBptLvc && ((mLVCReservoirFlags & VcmReservoirFlags::eReuse) || mLVCHashGridSampling))) {
+			(mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache && ((mLVCReservoirFlags & VcmReservoirFlags::eReuse) || mLVCHashGridSampling))) {
 			if (ImGui::DragScalar("Hash grid cells", ImGuiDataType_U32, &mPushConstants.mHashGridCellCount)) changed = true;
 			if (ImGui::DragFloat("Hash grid min cell size", &mPushConstants.mHashGridMinCellSize, .01f, 1e-4f, 1000)) changed = true;
 			if (ImGui::DragFloat("Hash grid cell pixel radius", &mPushConstants.mHashGridCellPixelRadius, .5f, 0, 1000)) changed = true;
 		}
 		if ((mAlgorithm != VcmAlgorithmType::kLightTrace && (mDIReservoirFlags & VcmReservoirFlags::eReuse)) ||
-			(mAlgorithm == VcmAlgorithmType::kBptLvc && (mLVCReservoirFlags & VcmReservoirFlags::eReuse))) {
+			(mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache && (mLVCReservoirFlags & VcmReservoirFlags::eReuse))) {
 			if (ImGui::DragFloat("Hash grid jitter radius", &mPushConstants.mHashGridJitterRadius, .005f)) changed = true;
 		}
 
@@ -282,10 +277,15 @@ void PathTracer::drawGui() {
 			ImGui::Checkbox("Enable tonemapper", &mTonemap);
 	}
 
+	if (changed && mDenoise) {
+		if (auto denoiser = mNode.getComponent<Denoiser>(); denoiser)
+			denoiser->resetAccumulation();
+	}
+
 	if (mUsePerformanceCounters) {
 		const auto [rps, ext] = formatNumber(mPerformanceCounterPerSecond[0]);
 		ImGui::Text("%.2f%s Rays/second (%u%% visibility)", rps, ext, mPerformanceCounterPerSecond[0] == 0 ? 0 : (uint32_t)(100*mPerformanceCounterPerSecond[1] / mPerformanceCounterPerSecond[0]));
-		ImGui::Text("%u failed inserts, %u Buckets used", mHashGridStats[0], mHashGridStats[1]);
+		ImGui::Text("%u failed inserts, %u buckets used", mHashGridStats[0], mHashGridStats[1]);
 	}
 }
 
@@ -474,7 +474,8 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		{ "gNormalMaps",          to_string(mUseNormalMaps) },
 		{ "gShadingNormals",      to_string(mUseShadingNormals) },
 		{ "gAlphaTest" ,          to_string(mUseAlphaTesting) },
-		{ "gLVCHashGridSampling", to_string(mLVCHashGridSampling && mAlgorithm == VcmAlgorithmType::kBptLvc) }
+		{ "gUseLVC",              to_string(mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache) },
+		{ "gLVCHashGridSampling", to_string(mLVCHashGridSampling && mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache) }
 	};
 	switch (mAlgorithm) {
 	case VcmAlgorithmType::kPathTrace:
@@ -494,11 +495,6 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		break;
 	case VcmAlgorithmType::kBpt:
 		defines["gUseVC"] = "true";
-		useVC = true;
-		break;
-	case VcmAlgorithmType::kBptLvc:
-		defines["gUseVC"]  = "true";
-		defines["gUseLVC"] = "true";
 		useVC = true;
 		break;
 	case VcmAlgorithmType::kVcm:
@@ -613,12 +609,12 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		frame->mDescriptorSets = mRenderPipelines[eGenerateLightPaths].get(commandBuffer.mDevice, defines)->getDescriptorSets(descriptors);
 	}
 
-	if (useVM || (mLVCHashGridSampling && mAlgorithm == VcmAlgorithmType::kBptLvc))
+	if (useVM || (mLVCHashGridSampling && mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache))
 		clearHashGrid("mLightHashGrid");
 
 	if ((mDIReservoirFlags & VcmReservoirFlags::eReuse) && mAlgorithm != VcmAlgorithmType::kPpm && mAlgorithm != VcmAlgorithmType::kLightTrace)
 		clearHashGrid("mDirectIlluminationReservoirs");
-	if ((mLVCReservoirFlags & VcmReservoirFlags::eReuse) && mAlgorithm == VcmAlgorithmType::kBptLvc)
+	if ((mLVCReservoirFlags & VcmReservoirFlags::eReuse) && mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache)
 		clearHashGrid("mLVCReservoirs");
 
 	// clear light image
@@ -630,7 +626,7 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 	}
 
 	// clear light vertex counter
-	if (mAlgorithm == VcmAlgorithmType::kBptLvc) {
+	if (mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache) {
 		const Buffer::View<byte>& lightPathLengths = frame->mBuffers.at("mLightPathLengths");
 		Buffer::View<uint32_t> lightPathLengths0(lightPathLengths.buffer(), lightPathLengths.offset(), 2);
 
@@ -657,7 +653,7 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 			vk::MemoryBarrier(vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead), {}, {});
 
 		// Build hash grid over light vertices
-		if (useVM || (mLVCHashGridSampling && mAlgorithm == VcmAlgorithmType::kBptLvc))
+		if (useVM || (mLVCHashGridSampling && mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache))
 			buildHashGrid("mLightHashGrid", maxLightVertices);
 	}
 
@@ -670,7 +666,7 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 	// build hashgrids
 	if ((mDIReservoirFlags & VcmReservoirFlags::eReuse) && mAlgorithm != VcmAlgorithmType::kPpm && mAlgorithm != VcmAlgorithmType::kLightTrace)
 		buildHashGrid("mDirectIlluminationReservoirs", maxLightVertices);
-	if ((mLVCReservoirFlags & VcmReservoirFlags::eReuse) && mAlgorithm == VcmAlgorithmType::kBptLvc)
+	if ((mLVCReservoirFlags & VcmReservoirFlags::eReuse) && mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache)
 		buildHashGrid("mLVCReservoirs", maxLightVertices);
 
 

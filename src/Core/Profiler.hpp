@@ -9,7 +9,7 @@
 #include <chrono>
 
 #include "fwd.hpp"
-#include "hlslmath.hpp"
+#include "math.hpp"
 
 namespace stm2 {
 
