@@ -29,7 +29,7 @@ inline string to_string(const stm2::DenoiserDebugMode& m) {
 }
 #endif
 
-#ifdef __HLSL__
+#ifdef __SLANG_COMPILER__
 
 #include "scene.h"
 

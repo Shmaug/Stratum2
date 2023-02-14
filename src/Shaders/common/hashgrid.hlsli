@@ -3,6 +3,8 @@
 #include "rng.hlsli"
 
 struct HashGrid<T, let bUseMergeRadius : bool> {
+    static const uint gNormalQuantization = 16384;
+
 	RWStructuredBuffer<uint> mChecksums;
 	RWStructuredBuffer<uint> mCounters;
 
@@ -17,13 +19,19 @@ struct HashGrid<T, let bUseMergeRadius : bool> {
 	RWStructuredBuffer<uint> mIndices;
 	RWStructuredBuffer<T> mData;
 
-	RWStructuredBuffer<uint> mStats;
+    RWStructuredBuffer<uint> mActiveCells;
+    RWStructuredBuffer<float4> mCellCenters;
+    RWStructuredBuffer<int4> mCellNormals;
+
+	// mStats[0] = number of failed inserts
+	// mStats[1] = number of non-empty cells
+    RWStructuredBuffer<uint> mStats;
 
 
 	uint GetCellCount() { return gPushConstants.mHashGridCellCount; }
 
     float GetCellSize(const float3 aPosition) {
-        if (bUseMergeRadius) {
+        if (bUseMergeRadius && gUseVM) {
             return gRenderParams.mVcmConstants.mMergeRadius * 2;
         } else {
 			if (gPushConstants.mHashGridCellPixelRadius <= 0)
@@ -66,7 +74,7 @@ struct HashGrid<T, let bUseMergeRadius : bool> {
         return -1;
     }
 
-    void Append(const float3 aPosition, const T data) {
+    void Append(const float3 aPosition, const float3 aNormal, const float aWeight, const T data) {
         const float cellSize = GetCellSize(aPosition);
         const uint cellIndex = FindCellIndex(aPosition, cellSize, 0, true);
         if (cellIndex == -1) {
@@ -84,9 +92,21 @@ struct HashGrid<T, let bUseMergeRadius : bool> {
 		mAppendIndices[1 + appendIndex] = uint2(cellIndex, indexInCell);
 		mAppendData[appendIndex] = data;
 
-		// first time the cell was used
-        if (gPerformanceCounters && indexInCell == 0)
-			InterlockedAdd(mStats[1], 1);
+        // first time the cell was used
+        if (indexInCell == 0 && (bUseMergeRadius || gPerformanceCounters)) {
+            uint count;
+            InterlockedAdd(mStats[1], 1, count);
+            if (bUseMergeRadius) {
+                mActiveCells[count] = cellIndex;
+                mCellCenters[cellIndex] = float4((floor(aPosition / cellSize) + 0.5) * cellSize, 0);
+            }
+        }
+        if (bUseMergeRadius) {
+			InterlockedAdd(mCellNormals[cellIndex][0], int(aNormal[0] * gNormalQuantization));
+			InterlockedAdd(mCellNormals[cellIndex][1], int(aNormal[1] * gNormalQuantization));
+            InterlockedAdd(mCellNormals[cellIndex][2], int(aNormal[2] * gNormalQuantization));
+            InterlockedAdd(mCellNormals[cellIndex][3], int(aWeight * gNormalQuantization));
+        }
 	}
 
 

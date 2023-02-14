@@ -32,8 +32,6 @@ Shader::Shader(Device& device, const filesystem::path& sourceFile, const string&
 		// defines
 
 		targetIndex = request->addCodeGenTarget(SLANG_SPIRV);
-		request->addPreprocessorDefine("__SLANG__", "");
-		request->addPreprocessorDefine("__HLSL__", "");
 		for (const auto&[n,d] : defines)
 			request->addPreprocessorDefine(n.c_str(), d.c_str());
 

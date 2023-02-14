@@ -1,16 +1,11 @@
 #pragma once
 
-#if defined(__HLSL_VERSION) && !defined(__HLSL__)
-#define __HLSL__
-#endif
-
-
-#ifdef __SLANG__
+#ifdef __SLANG_COMPILER__
 
 #define SLANG_MUTATING [mutating]
 #define SLANG_CTOR(TYPE) __init
 
-#else // __SLANG__
+#else
 
 #define SLANG_MUTATING
 #define SLANG_CTOR(TYPE) inline TYPE

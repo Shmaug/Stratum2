@@ -6,10 +6,8 @@
 
 #include "compat/scene.h"
 
-#ifdef __HLSL__
 #define PNANOVDB_HLSL
 #include "nanovdb/PNanoVDB.h"
-#endif
 
 struct Medium : BSDF {
 	float3 mDensityScale;
@@ -20,12 +18,12 @@ struct Medium : BSDF {
     uint mAlbedoVolumeIndex;
 
 	__init(uint address) {
-		mDensityScale		= gScene.mMaterialData.Load<float3>(address); address += 12;
-		mAnisotropy       	= gScene.mMaterialData.Load<float>(address); address += 4;
-		mAlbedoScale        = gScene.mMaterialData.Load<float3>(address); address += 12;
-		mAttenuationUnit 	= gScene.mMaterialData.Load<float>(address); address += 4;
-		mDensityVolumeIndex = gScene.mMaterialData.Load(address); address += 4;
-		mAlbedoVolumeIndex  = gScene.mMaterialData.Load(address); address += 4;
+		mDensityScale		= gScene.mMaterialData.Load<float3>((int)address); address += 12;
+		mAnisotropy       	= gScene.mMaterialData.Load<float>((int)address); address += 4;
+		mAlbedoScale        = gScene.mMaterialData.Load<float3>((int)address); address += 12;
+		mAttenuationUnit 	= gScene.mMaterialData.Load<float>((int)address); address += 4;
+		mDensityVolumeIndex = gScene.mMaterialData.Load((int)address); address += 4;
+		mAlbedoVolumeIndex  = gScene.mMaterialData.Load((int)address); address += 4;
 	}
 
     float3 emission() { return 0; }

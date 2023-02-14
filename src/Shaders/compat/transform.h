@@ -65,7 +65,7 @@ struct TransformData {
 
 	void drawGui(Node& node); // defined in Scene.cpp
 
-#else // __SLANG__
+#else
 
 	SLANG_CTOR(TransformData) (const float3x4 t) {
 		m = t;

@@ -95,6 +95,7 @@ private:
 	bool mUseShadingNormals = true;
 	bool mUseNormalMaps = true;
 	bool mUseAlphaTesting = false;
+	bool mLVCHashGridSampling = false;
 
 	float mVmRadiusAlpha  = 0.01f;
 	float mVmRadiusFactor = 0.025f;

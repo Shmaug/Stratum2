@@ -135,7 +135,7 @@ struct ViewData {
 	inline bool isInside(const int2 p) const { return (p >= mImageMin).all() && (p < mImageMax).all(); }
 #endif
 
-#ifdef __HLSL__
+#ifdef __SLANG_COMPILER__
 	inline bool isInside(const int2 p) { return all(p >= mImageMin) && all(p < mImageMax); }
 	inline float imagePlaneDist() { return abs(mImageMax.y - mImageMin.y) / (2 * tan(mProjection.mVerticalFoV/2)); }
 	inline float sensorPdfW(const float cosTheta) {
@@ -163,10 +163,10 @@ struct VisibilityData {
 	uint mInstancePrimitiveIndex;
 	uint mPackedNormal;
 
-	inline uint instanceIndex()  { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
-	inline uint primitiveIndex() { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
-#ifdef __HLSL__
-	inline float3 normal()   { return unpackNormal(mPackedNormal); }
+    inline uint instanceIndex() { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
+    inline uint primitiveIndex() { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
+#ifdef __SLANG_COMPILER__
+	inline float3 normal()       { return unpackNormal(mPackedNormal); }
 #endif
 };
 struct DepthData {
@@ -192,6 +192,6 @@ struct ShadingData {
 
 STM_NAMESPACE_END
 
-#ifdef __HLSL__
+#ifdef __SLANG_COMPILER__
 #include "../common/scene.hlsli"
-#endif // __HLSL__
+#endif

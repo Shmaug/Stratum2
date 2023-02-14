@@ -27,6 +27,8 @@ struct SceneParameters {
 	SamplerState mStaticSampler;
 };
 
+ParameterBlock<SceneParameters> gScene;
+
 uint getViewIndex(const uint2 index, const uint2 extent, const uint viewCount) {
 	return 0;
     // assume views are stacked horizontally

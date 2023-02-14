@@ -38,7 +38,7 @@ using ImageValue3 = ImageValue<3>;
 using ImageValue4 = ImageValue<4>;
 #endif
 
-#ifdef __HLSL__
+#ifdef __SLANG_COMPILER__
 #include "common/image_value.hlsli"
 #endif
 

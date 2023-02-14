@@ -1,7 +1,10 @@
 #pragma once
 
+#include "path_defines.hlsli"
+
 #include "compat/path_tracer.h"
 #include "compat/scene.h"
+#include "intersection.hlsli"
 
 // shader parameters
 
@@ -39,33 +42,19 @@ struct RenderParams {
     HashGrid<LVCReservoir, false> mPrevLVCReservoirs;
 };
 
-ParameterBlock<SceneParameters> gScene;
 ParameterBlock<RenderParams> gRenderParams;
 
 #define gHasEnvironment (gPushConstants.mEnvironmentMaterialAddress != -1)
 
 // includes which reference shader parameters
 
-#include "intersection.hlsli"
 #include "materials/environment.hlsli"
 #include "materials/lambertian.hlsli"
-
-// useful types/methods
-
 typedef LambertianMaterial Material;
 
-extension PackedVcmVertex {
-    __init(const VcmVertex v, const uint instancePrimitiveIndex) {
-        mLocalPosition = gScene.mInstanceInverseTransforms[BF_GET(instancePrimitiveIndex, 0, 16)].transformPoint(v.mShadingData.mPosition);
-        mInstancePrimitiveIndex = instancePrimitiveIndex;
-        mThroughput = v.mThroughput;
-        mPackedData = v.mPackedData;
-        dVCM = v.dVCM;
-        dVC = v.dVC;
-        dVM = v.dVM;
-        mLocalDirectionIn = v.mLocalDirectionIn;
-    }
+// useful struct properties
 
+extension PackedVcmVertex {
     property uint mInstanceIndex {
 		get { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
 		set { BF_SET(mInstancePrimitiveIndex, newValue, 0, 16); }
@@ -83,9 +72,29 @@ extension PackedVcmVertex {
         get { return f16tof32(BF_GET(mPackedData, 16, 16)); }
         set { BF_SET(mPackedData, f32tof16(newValue), 16, 16); }
     }
+
+    __init(const VcmVertex v, const uint instancePrimitiveIndex) {
+        mLocalPosition = gScene.mInstanceInverseTransforms[BF_GET(instancePrimitiveIndex, 0, 16)].transformPoint(v.mShadingData.mPosition);
+        mInstancePrimitiveIndex = instancePrimitiveIndex;
+        mThroughput = v.mThroughput;
+        mPackedData = v.mPackedData;
+        dVCM = v.dVCM;
+        dVC = v.dVC;
+        dVM = v.dVM;
+        mLocalDirectionIn = v.mLocalDirectionIn;
+    }
 }
 
 extension VcmVertex {
+    property uint mPathLength {
+        get { return BF_GET(mPackedData, 0, 16); }
+        set { BF_SET(mPackedData, newValue, 0, 16); }
+    }
+    property float mPathPdfA {
+        get { return f16tof32(BF_GET(mPackedData, 16, 16)); }
+        set { BF_SET(mPackedData, f32tof16(newValue), 16, 16); }
+    }
+
     __init() {
         mThroughput = 0;
     }
@@ -97,15 +106,10 @@ extension VcmVertex {
         dVC = v.dVC;
         dVM = v.dVM;
         mLocalDirectionIn = v.mLocalDirectionIn;
-	}
-
-    property uint mPathLength {
-        get { return BF_GET(mPackedData, 0, 16); }
-        set { BF_SET(mPackedData, newValue, 0, 16); }
     }
-    property float mPathPdfA {
-        get { return f16tof32(BF_GET(mPackedData, 16, 16)); }
-        set { BF_SET(mPackedData, f32tof16(newValue), 16, 16); }
+
+    float3 OffsetRay(const float3 direction) {
+        return rayOffset(mShadingData.mPosition, mShadingData.getGeometryNormal(), direction);
     }
 }
 
@@ -333,11 +337,7 @@ LightRadianceRecord GetSurfaceRadiance(const float3 aDirection, const Intersecti
 	return r;
 }
 
-// misc
-
-float3 OffsetRayOrigin(const VcmVertex vertex, const float3 direction) {
-	return rayOffset(vertex.mShadingData.mPosition, vertex.mShadingData.getGeometryNormal(), direction);
-}
+// path tracing functions
 
 void AddColor(const uint2 index, const float3 color, const uint cameraVertices, const uint lightVertices) {
     if (gDebugPaths && !(cameraVertices == gPushConstants.debugCameraPathLength() && lightVertices == gPushConstants.debugLightPathLength()))
@@ -371,8 +371,8 @@ void InterlockedAddColor(const int2 ipos, const uint2 extent, const float3 color
 struct AbstractCamera {
     uint mViewIndex;
 
-    ViewData getView() { return gRenderParams.mViews[mViewIndex]; }
-    TransformData getTransform() { return gRenderParams.mViewTransforms[mViewIndex]; }
-    TransformData getInverseTransform() { return gRenderParams.mViewInverseTransforms[mViewIndex]; }
+    ViewData      getView()                 { return gRenderParams.mViews[mViewIndex]; }
+    TransformData getTransform()            { return gRenderParams.mViewTransforms[mViewIndex]; }
+    TransformData getInverseTransform()     { return gRenderParams.mViewInverseTransforms[mViewIndex]; }
     TransformData getPrevInverseTransform() { return gRenderParams.mPrevInverseViewTransforms[mViewIndex]; }
 };

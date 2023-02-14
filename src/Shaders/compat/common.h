@@ -154,7 +154,7 @@ inline float pdfAtoW(const float pdfA, const float G) {
 	return pdfA / G;
 }
 
-#ifdef __HLSL__
+#ifdef __SLANG_COMPILER__
 #include "common/common.hlsli"
 #endif
 

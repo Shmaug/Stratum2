@@ -45,7 +45,7 @@ void ImageComparer::update(CommandBuffer& commandBuffer) {
 	if (mComparing.empty()) return;
 
 	if (ImGui::Begin("Compare result")) {
-		if (mComparing.size() == 1) {
+		if (mComparing.size() == 1 || mImages.find(mCurrent) == mImages.end()) {
 			mCurrent = *mComparing.begin();
 		} else {
 			bool s = false;
@@ -152,6 +152,7 @@ void ImageComparer::drawGui() {
 		bool c = mComparing.find(it->first) != mComparing.end();
 		ImGui::PopID();
 		if (d) {
+			if (it->first == mCurrent) mCurrent.clear();
 			if (c) mComparing.erase(it->first);
 			it = mImages.erase(it);
 			continue;

@@ -21,7 +21,6 @@ float3 unpackNormal(const uint packed) {
 	return unpackNormal2(D3DX_R16G16_SNORM_to_FLOAT2(packed));
 }
 
-
 float3x3 makeOrthonormal(const float3 N) {
     float3x3 r;
 	if (N[0] != N[1] || N[0] != N[2])
@@ -33,7 +32,6 @@ float3x3 makeOrthonormal(const float3 N) {
     r[2] = N;
     return r;
 }
-
 
 float2 sampleUniformTriangle(const float u1, const float u2) {
     const float a = sqrt(u1);
@@ -48,7 +46,6 @@ float3 sampleUniformSphereCartesian(const float u1, const float u2) {
     const float phi = 2 * M_PI * u2;
     return float3(r * cos(phi), r * sin(phi), z);
 }
-
 
 float2 sampleConcentricDisc(const float u1, const float u2) {
 	// from pbrtv3, sampling.cpp line 113
@@ -149,6 +146,8 @@ float sampleTexelPdf(Texture2D<float4> image, const float2 uv, const uint maxIte
 		if (size.x > 1) {
 			const float inv_h = 1/(float)size.y;
 			float sy = sin(M_PI * (coord.y + 0.5f)*inv_h);
+			// TODO: preprocess image down to a single channel containing
+			// luminance and sin term, then use gather ops
 			p[0] = luminance(image.Load(int3(coord + int2(0,0), (int)level)).rgb) * sy;
 			p[1] = luminance(image.Load(int3(coord + int2(1,0), (int)level)).rgb) * sy;
 			if (size.y > 1) {

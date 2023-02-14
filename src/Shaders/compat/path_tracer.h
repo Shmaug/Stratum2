@@ -34,7 +34,7 @@ struct PathTracerPushConstants {
 
     uint mRandomSeed;
     uint mDebugPathLengths;
-    uint pad0;
+    uint mLVCHashGridSampleCount;
     uint pad1;
 
     float mHashGridCellPixelRadius;
