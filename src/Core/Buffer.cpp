@@ -4,7 +4,7 @@
 namespace stm2 {
 
 Buffer::Buffer(Device& device, const string& name, const vk::BufferCreateInfo& createInfo, const vk::MemoryPropertyFlags memoryFlags, const bool hostRandomAccess)
-	: Device::Resource(device, name), mSize(createInfo.size), mMemoryFlags(memoryFlags) {
+	: Device::Resource(device, name), mSize(createInfo.size), mUsage(createInfo.usage), mMemoryFlags(memoryFlags), mSharingMode(createInfo.sharingMode) {
 	VmaAllocationCreateInfo allocationCreateInfo;
 	allocationCreateInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | (hostRandomAccess ? VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT : VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT);
     allocationCreateInfo.usage = (memoryFlags & vk::MemoryPropertyFlagBits::eDeviceLocal) ? VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE : VMA_MEMORY_USAGE_AUTO_PREFER_HOST;

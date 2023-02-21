@@ -1,6 +1,8 @@
 #include "TestRenderer.hpp"
 #include "Inspector.hpp"
 #include "Scene.hpp"
+#include "Denoiser.hpp"
+#include "Tonemapper.hpp"
 
 #include <Core/Instance.hpp>
 #include <Core/Profiler.hpp>
@@ -18,107 +20,206 @@ TestRenderer::TestRenderer(Node& node) : mNode(node) {
 }
 
 void TestRenderer::createPipelines(Device& device) {
-	const vector<string>& args = { "-matrix-layout-row-major", "-capability", "spirv_1_5", "-Wno-30081" };
+	const auto samplerRepeat = make_shared<vk::raii::Sampler>(*device, vk::SamplerCreateInfo({},
+		vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eLinear,
+		vk::SamplerAddressMode::eRepeat, vk::SamplerAddressMode::eRepeat, vk::SamplerAddressMode::eRepeat,
+		0, true, 8, false, vk::CompareOp::eAlways, 0, VK_LOD_CLAMP_NONE));
+
+	ComputePipeline::Metadata md;
+	md.mImmutableSamplers["gScene.mStaticSampler"]  = { samplerRepeat };
+	md.mImmutableSamplers["gScene.mStaticSampler1"] = { samplerRepeat };
+	md.mBindingFlags["gScene.mVertexBuffers"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	md.mBindingFlags["gScene.mImages"]  = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	md.mBindingFlags["gScene.mImage1s"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	md.mBindingFlags["gScene.mVolumes"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+
+	const vector<string>& args = {
+		"-matrix-layout-row-major",
+		"-O3",
+		"-Wno-30081",
+		"-capability", "spirv_1_5",
+		"-capability", "GL_EXT_ray_tracing"
+	};
+
 	const filesystem::path shaderPath = *device.mInstance.findArgument("shaderKernelPath");
-	mPipeline = ComputePipelineCache(shaderPath / "testrenderer.slang", "render", "sm_6_6", args);
+	mPipeline = ComputePipelineCache(shaderPath / "testrenderer.slang", "render", "sm_6_6", args, md);
 }
 
 void TestRenderer::drawGui() {
 	ImGui::PushID(this);
 	if (ImGui::Button("Clear resources")) {
-		mFrameResourcePool.clear();
-		mPrevFrame.reset();
+		Device& device = *mNode.findAncestor<Device>();
+		device->waitIdle();
+		mResourcePool.clear();
 	}
 	if (ImGui::Button("Reload shaders")) {
 		Device& device = *mNode.findAncestor<Device>();
 		device->waitIdle();
 		createPipelines(device);
 	}
-	ImGui::PopID();
 
 	if (ImGui::CollapsingHeader("Configuration")) {
 		ImGui::Checkbox("Random frame seed", &mRandomPerFrame);
+		ImGui::DragFloat("AO Distance", &mPushConstants["mAODistance"].get<float>());
+		ImGui::Checkbox("Denoise ", &mDenoise);
+		ImGui::Checkbox("Tonemap", &mTonemap);
 	}
 
-	if (ImGui::CollapsingHeader("Path tracing")) {
-		ImGui::PushItemWidth(60);
-		ImGui::DragScalar("Max bounces", ImGuiDataType_U32, &mPushConstants["mMaxBounces"].get<uint32_t>());
-		ImGui::DragScalar("Min bounces", ImGuiDataType_U32, &mPushConstants["mMinBounces"].get<uint32_t>());
-		ImGui::DragScalar("Max diffuse bounces", ImGuiDataType_U32, &mPushConstants["mMaxDiffuseBounces"].get<uint32_t>());
-		ImGui::PopItemWidth();
+	if (ImGui::CollapsingHeader("Resources")) {
+		ImGui::Indent();
+		mResourcePool.drawGui();
+		ImGui::Unindent();
 	}
+	ImGui::PopID();
 }
 
 void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
 	ProfilerScope ps("PathTracer::render", &commandBuffer);
 
-	auto frame = mFrameResourcePool.get();
-	if (!frame)
-		frame = mFrameResourcePool.emplace(make_shared<FrameResources>(commandBuffer.mDevice));
-	commandBuffer.trackResource(frame);
+	const shared_ptr<Scene>      scene      = mNode.findAncestor<Scene>();
+	const shared_ptr<Denoiser>   denoiser   = mNode.findDescendant<Denoiser>();
+	const shared_ptr<Tonemapper> tonemapper = mNode.findDescendant<Tonemapper>();
 
 	const vk::Extent3D extent = renderTarget.extent();
 
-	frame->getImage("mOutput", extent, vk::Format::eR32G32B32A32Sfloat, vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eTransferSrc);
+	const Image::View outputImage = mResourcePool.getImage(commandBuffer.mDevice, "mOutput", Image::Metadata{
+		.mFormat = vk::Format::eR32G32B32A32Sfloat,
+		.mExtent = extent,
+		.mUsage = vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eTransferSrc,
+	});
+	const Image::View albedoImage = mResourcePool.getImage(commandBuffer.mDevice, "mAlbedo", Image::Metadata{
+		.mFormat = vk::Format::eR32G32B32A32Sfloat,
+		.mExtent = extent,
+		.mUsage = vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eTransferSrc,
+	});
+	const Image::View prevUVsImage = mResourcePool.getImage(commandBuffer.mDevice, "mPrevUVs", Image::Metadata{
+		.mFormat = vk::Format::eR32G32Sfloat,
+		.mExtent = extent,
+		.mUsage = vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eTransferSrc,
+	});
+	const Image::View visibilityImage = mResourcePool.getImage(commandBuffer.mDevice, "mVisibility", Image::Metadata{
+		.mFormat = vk::Format::eR32G32Uint,
+		.mExtent = extent,
+		.mUsage = vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eTransferSrc,
+	});
+	const Image::View depthImage = mResourcePool.getImage(commandBuffer.mDevice, "mDepth", Image::Metadata{
+		.mFormat = vk::Format::eR32G32B32A32Sfloat,
+		.mExtent = extent,
+		.mUsage = vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eTransferSrc,
+	});
 
-	// upload views
+	// assign descriptors
+
+	Descriptors descriptors;
+	descriptors[{ "gRenderParams.mOutput", 0 }]     = ImageDescriptor{ outputImage    , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+	descriptors[{ "gRenderParams.mAlbedo", 0 }]     = ImageDescriptor{ albedoImage    , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+	descriptors[{ "gRenderParams.mPrevUVs", 0 }]    = ImageDescriptor{ prevUVsImage   , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+	descriptors[{ "gRenderParams.mVisibility", 0 }] = ImageDescriptor{ visibilityImage, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+	descriptors[{ "gRenderParams.mDepth", 0 }]      = ImageDescriptor{ depthImage     , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+
+	bool changed = false;
+
+	Buffer::View<ViewData> viewsBuffer;
+
+	// scene descriptors + views
 	{
-		ProfilerScope ps("Upload views", &commandBuffer);
+		const Scene::FrameData& sceneData = scene->frameData();
+		if (sceneData.mDescriptors.empty())
+			return;
+
+		if (scene->lastUpdate() > mLastSceneVersion) {
+			changed = true;
+			mLastSceneVersion = scene->lastUpdate();
+		}
+
+		for (auto& [name, d] : sceneData.mDescriptors)
+			descriptors[{ "gScene." + name.first, name.second }] = d;
+		descriptors[{ "gScene.mPerformanceCounters", 0u }] = make_shared<Buffer>(commandBuffer.mDevice, "mPerformanceCounters", 4*sizeof(uint32_t), vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+
+		// track resources which are not held by the descriptorset
+		commandBuffer.trackResource(sceneData.mAccelerationStructureBuffer.buffer());
+
+		// find views
 
 		vector<pair<ViewData, TransformData>> views;
 		mNode.root()->forEachDescendant<Camera>([&](Node& node, const shared_ptr<Camera>& camera) {
 			views.emplace_back(pair{ camera->view(), nodeToWorld(node) });
 		});
-		mPushConstants["mViewCount"] = (uint32_t)views.size();
 
 		if (views.empty()) {
 			renderTarget.clearColor(commandBuffer, vk::ClearColorValue(array<uint32_t, 4>{ 0, 0, 0, 0 }));
-			cout << "Warning: No views" << endl;
 			return;
 		}
 
-		// upload viewdata
-		auto viewsBuffer          = frame->getBuffer<ViewData>     ("mViews"         , views.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
-		auto viewTransformsBuffer = frame->getBuffer<TransformData>("mViewTransforms", views.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+		const auto prevViewTransforms = mResourcePool.getLastBuffer<TransformData>("mViewTransforms");
+
+		vector<ViewData>      viewsBufferData(views.size());
+		vector<TransformData> viewTransformsBufferData(views.size());
+		vector<TransformData> prevInverseViewTransformsData(views.size());
 		for (uint32_t i = 0; i < views.size(); i++) {
-			viewsBuffer[i] = views[i].first;
-			viewTransformsBuffer[i] = views[i].second;
+			const auto&[view,viewTransform] = views[i];
+			viewsBufferData[i] = view;
+			viewTransformsBufferData[i] = viewTransform;
+			if (prevViewTransforms) {
+				prevInverseViewTransformsData[i] = prevViewTransforms[i].inverse();
+				if ((prevViewTransforms[i].m != viewTransform.m).any())
+					changed = true;
+			} else
+				prevInverseViewTransformsData[i] = viewTransform.inverse();
 		}
+
+		viewsBuffer = mResourcePool.uploadData<ViewData>(commandBuffer, "mViews", viewsBufferData);
+
+		mPushConstants["mViewCount"] = (uint32_t)views.size();
+		descriptors[{ "gRenderParams.mViews", 0 }]                     = viewsBuffer;
+		descriptors[{ "gRenderParams.mViewTransforms", 0 }]            = mResourcePool.uploadData<TransformData>(commandBuffer, "mViewTransforms", viewTransformsBufferData);
+		descriptors[{ "gRenderParams.mPrevViewInverseTransforms", 0 }] = mResourcePool.uploadData<TransformData>(commandBuffer, "mPrevViewInverseTransforms", prevInverseViewTransformsData);
 	}
 
-	mPushConstants["mRandomSeed"] = (uint32_t)rand();
+	// create descriptor sets
 
-	Defines defines;
+	auto pipeline = mPipeline.get(commandBuffer.mDevice);
 
-	auto pipeline = mPipeline.get(commandBuffer.mDevice, defines);
+	const shared_ptr<DescriptorSets> descriptorSets = pipeline->getDescriptorSets(descriptors);
 
-	// create descriptorsets
-	{
-		ProfilerScope ps("Assign descriptors", &commandBuffer);
-
-		Descriptors descriptors;
-		for (const auto&[name, buffer] : frame->mBuffers)
-			descriptors[{ "gRenderParams." + name, 0 }] = buffer;
-		for (const auto&[name, image] : frame->mImages)
-			descriptors[{ "gRenderParams." + name, 0 }] = image;
-
-		frame->mDescriptors = pipeline->getDescriptorSets(descriptors);
-	}
+	if (mRandomPerFrame)
+		mPushConstants["mRandomSeed"] = (uint32_t)rand();
 
 	// render
 	{
 		ProfilerScope ps("Sample visibility", &commandBuffer);
-		pipeline->dispatchTiled(commandBuffer, extent, frame->mDescriptors, {}, mPushConstants);
+		pipeline->dispatchTiled(commandBuffer, extent, descriptorSets, {}, mPushConstants);
 	}
 
-	const Image::View& result = get<Image::View>(frame->mImages["mOutput"]);
-	// copy render result to rendertarget
-	if (result.image()->format() == renderTarget.image()->format())
-		Image::copy(commandBuffer, result, renderTarget);
-	else
-		Image::blit(commandBuffer, result, renderTarget);
+	// post processing
 
-	mPrevFrame = frame;
+	Image::View processedOutput = outputImage;
+
+	// run denoiser
+	if (mDenoise && denoiser && mRandomPerFrame) {
+		if (changed && !denoiser->reprojection())
+			denoiser->resetAccumulation();
+
+		processedOutput = denoiser->denoise(
+			commandBuffer,
+			outputImage,
+			albedoImage,
+			prevUVsImage,
+			visibilityImage,
+			depthImage,
+			viewsBuffer );
+	}
+
+	// run tonemapper
+	if (mTonemap && tonemapper)
+		tonemapper->render(commandBuffer, processedOutput, renderTarget, (mDenoise && denoiser && denoiser->demodulateAlbedo()) ? albedoImage : Image::View{});
+	else {
+		// just copy processedOutput to renderTarget
+		if (processedOutput.image()->format() == renderTarget.image()->format())
+			Image::copy(commandBuffer, processedOutput, renderTarget);
+		else
+			Image::blit(commandBuffer, processedOutput, renderTarget);
+	}
 }
 
 }

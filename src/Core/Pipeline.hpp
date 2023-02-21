@@ -1,9 +1,7 @@
 #pragma once
 
 #include "Shader.hpp"
-#include "Buffer.hpp"
-#include "Image.hpp"
-#include "DeviceResourcePool.hpp"
+#include "DescriptorSets.hpp"
 
 namespace stm2 {
 
@@ -37,35 +35,6 @@ public:
 
 using PushConstants = unordered_map<string, PushConstantValue>;
 
-
-using BufferDescriptor = Buffer::View<byte>;
-using ImageDescriptor = tuple<Image::View, vk::ImageLayout, vk::AccessFlags, shared_ptr<vk::raii::Sampler>>;
-using DescriptorValue = variant<BufferDescriptor, ImageDescriptor, shared_ptr<vk::raii::AccelerationStructureKHR>>;
-using Descriptors = unordered_map<pair<string, uint32_t>, DescriptorValue>;
-
-class DescriptorSets : public Device::Resource {
-public:
-	Pipeline& mPipeline;
-
-	DescriptorSets(Pipeline& pipeline, const string& name);
-	DescriptorSets() = default;
-	DescriptorSets(const DescriptorSets&) = default;
-	DescriptorSets(DescriptorSets&&) = default;
-	DescriptorSets& operator=(const DescriptorSets&) = default;
-	DescriptorSets& operator=(DescriptorSets&&) = default;
-
-	void write(const Descriptors& descriptors = {});
-
-	void transitionImages(CommandBuffer& commandBuffer);
-	void bind(CommandBuffer& commandBuffer, const unordered_map<string, uint32_t>& dynamicOffsets = {});
-
-private:
-	shared_ptr<vk::raii::DescriptorPool> mDescriptorPool;
-	vector<shared_ptr<vk::raii::DescriptorSet>> mDescriptorSets;
-	Descriptors mDescriptors;
-};
-
-
 class Pipeline : public Device::Resource {
 public:
 	struct Metadata {
@@ -93,8 +62,6 @@ public:
 		return nullptr;
 	}
 
-	inline size_t resourceCount() const { return mResources.size(); }
-
 	void pushConstants(CommandBuffer& commandBuffer, const PushConstants& constants) const;
 
 	// creates + caches DescriptorSets
@@ -110,7 +77,7 @@ protected:
 
 	ShaderStageMap mShaders;
 
-	DeviceResourcePool<DescriptorSets> mResources;
+	list<shared_ptr<DescriptorSets>> mDescriptorSetCache;
 };
 
 class GraphicsPipeline : public Pipeline {

@@ -9,7 +9,14 @@
 
 namespace stm2 {
 
-Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) : mInstance(instance), mPhysicalDevice(physicalDevice), mDevice(nullptr), mPipelineCache(nullptr), mDescriptorPool(nullptr) {
+Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) :
+	mInstance(instance),
+	mPhysicalDevice(physicalDevice),
+	mDevice(nullptr),
+	mPipelineCache(nullptr),
+	mDescriptorPool(nullptr),
+	mFrameIndex(0),
+	mLastFrameDone(0) {
 	unordered_set<string> deviceExtensions;
 	for (const string& s : mInstance.findArguments("deviceExtension"))
 		deviceExtensions.emplace(s);
@@ -162,6 +169,7 @@ void Device::submit(const vk::raii::Queue queue, const vk::ArrayProxy<const shar
 	// assign fence, get vkbufs
 	vector<vk::CommandBuffer> vkbufs;
 	for (const shared_ptr<CommandBuffer>& cb : commandBuffers) {
+		cb->mFrameIndex = frameIndex();
 		cb->mFence = fence;
 		vkbufs.emplace_back(***cb);
 	}

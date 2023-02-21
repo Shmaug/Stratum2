@@ -12,7 +12,7 @@
 
 #include <GLFW/glfw3.h>
 
-#include <App/PathTracer.hpp>
+#include <App/TestRenderer.hpp>
 #include <App/Denoiser.hpp>
 #include <App/Tonemapper.hpp>
 #include <App/ImageComparer.hpp>
@@ -56,7 +56,7 @@ struct App {
 	shared_ptr<FlyCamera> mFlyCamera;
 	shared_ptr<Camera> mCamera;
 
-	shared_ptr<PathTracer> mRenderer;
+	shared_ptr<TestRenderer> mRenderer;
 	shared_ptr<ImageComparer> mImageComparer;
 
 	chrono::high_resolution_clock::time_point mLastUpdate;
@@ -107,7 +107,7 @@ struct App {
 
 		auto pathTracerNode = sceneNode->addChild("Path tracer");
 		mInspector->select(pathTracerNode);
-		mRenderer = pathTracerNode->makeComponent<PathTracer>(*pathTracerNode);
+		mRenderer = pathTracerNode->makeComponent<TestRenderer>(*pathTracerNode);
 		pathTracerNode->makeComponent<Denoiser>(*pathTracerNode);
 		pathTracerNode->makeComponent<Tonemapper>(*pathTracerNode);
 		mImageComparer = pathTracerNode->makeComponent<ImageComparer>(*pathTracerNode);
@@ -172,7 +172,6 @@ struct App {
 	inline void doFrame() {
 		ProfilerScope ps("App::doFrame");
 
-		mDevice->incrementFrameIndex();
 
 		shared_ptr<CommandBuffer> commandBufferPtr = mCommandBuffers[mDevice->frameIndex() % mSwapchain->imageCount()];
 		CommandBuffer& commandBuffer = *commandBufferPtr;
@@ -181,8 +180,8 @@ struct App {
 			ProfilerScope ps("waitForFences");
 			if ((*mDevice)->waitForFences(**commandBuffer.fence(), true, ~0ull) != vk::Result::eSuccess)
 				throw runtime_error("Error: waitForFences failed");
+			mDevice->updateLastFrameDone(commandBuffer.frameIndex());
 		}
-		mDevice->updateLastFrameDone(mDevice->frameIndex() - mCommandBuffers.size());
 
 		// Record commands
 
@@ -206,6 +205,8 @@ struct App {
 		mSwapchain->present(mPresentQueue, signalSemaphore);
 
 		commandBuffer.trackVulkanResource(mSwapchain->imageAvailableSemaphore());
+
+		mDevice->incrementFrameIndex();
 	}
 
 	inline void run() {
@@ -223,6 +224,7 @@ struct App {
 					continue;
 
 				// recreate swapchain-dependent resources
+				mCommandBuffers.clear();
 				mCommandBuffers.resize(mSwapchain->imageCount());
 				for (auto& cb : mCommandBuffers)
 					cb = make_shared<CommandBuffer>(*mDevice, "CommandBuffer", mPresentQueueFamily);

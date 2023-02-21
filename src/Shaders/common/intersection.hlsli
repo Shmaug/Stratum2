@@ -138,7 +138,7 @@ extension SceneParameters {
 				isect.mPrimitiveIndex = rayQuery.CommittedPrimitiveIndex();
 
                 MeshInstanceData meshInstance = reinterpret<MeshInstanceData>(isect.getInstance());
-                isect.mPrimitivePickPdf = 1.0/meshInstance.primitiveCount();
+                isect.mPrimitivePickPdf = 1.0 / float(meshInstance.primitiveCount());
 				isect.mShadingData = makeTriangleShadingData(meshInstance, isect.getTransform(), rayQuery.CommittedPrimitiveIndex(), rayQuery.CommittedTriangleBarycentrics());
 				break;
 			}

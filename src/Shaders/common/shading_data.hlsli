@@ -1,5 +1,21 @@
 #pragma once
 
+#ifndef gShadingNormals
+#define gShadingNormals false
+#endif
+#ifndef gAlphaTest
+#define gAlphaTest false
+#endif
+#ifndef gHasMedia
+#define gHasMedia false
+#endif
+#ifndef gMaxNullCollisions
+#define gMaxNullCollisions 1000
+#endif
+#ifndef gPerformanceCounters
+#define gPerformanceCounters false
+#endif
+
 #include "scene.hlsli"
 
 #define SHADING_FLAG_FLIP_BITANGENT BIT(0)

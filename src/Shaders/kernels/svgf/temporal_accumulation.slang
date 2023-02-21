@@ -97,7 +97,7 @@ void main(uint3 index: SV_DispatchThreadId) {
 		if (gPushConstants.mHistoryLimit > 0 && n > gPushConstants.mHistoryLimit)
 			n = gPushConstants.mHistoryLimit;
 
-		const float alpha = saturate(color_curr.a / n);
+        const float alpha = saturate(color_curr.a / n);
 
 		gParams.mAccumColor[ipos] = float4(lerp(color_prev.rgb, color_curr.rgb, alpha), n);
 		gParams.mAccumMoments[ipos] = lerp(moments_prev, float2(l, l*l), alpha);

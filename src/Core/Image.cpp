@@ -196,6 +196,7 @@ const vk::ImageView Image::view(const vk::ImageSubresourceRange& subresource, co
 			format(),
 			componentMapping,
 			subresource));
+		mDevice.setDebugName(*v, resourceName());
 		it = mViews.emplace(key, move(v)).first;
 	}
 	return *it->second;

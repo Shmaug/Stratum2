@@ -12,6 +12,7 @@ public:
 
 	inline const shared_ptr<vk::raii::Fence>& fence() const { return mFence; }
 	inline uint32_t queueFamily() const { return mQueueFamily; }
+	inline size_t frameIndex() const { return mFrameIndex; }
 
 	inline void trackResource(const shared_ptr<Device::Resource>& r) {
 		r->markUsed();
@@ -44,6 +45,7 @@ private:
 	shared_ptr<vk::raii::Fence> mFence;
 	uint32_t mQueueFamily;
 	unordered_set<shared_ptr<Device::Resource>> mResources;
+	size_t mFrameIndex;
 };
 
 }

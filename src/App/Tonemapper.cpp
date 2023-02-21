@@ -66,9 +66,9 @@ void Tonemapper::render(CommandBuffer& commandBuffer, const Image::View& input, 
 		maxBuf.barrier(commandBuffer, vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 
 		mMaxReducePipeline.get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, extent, {
-				{ {"gInput", 0} , ImageDescriptor{ input, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}} },
-				{ {"gAlbedo", 0}, ImageDescriptor{ albedo.image()?albedo:input, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}} },
-				{ {"gMax", 0}, maxBuf }
+			{ {"gInput", 0} , ImageDescriptor{ input, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}} },
+			{ {"gAlbedo", 0}, ImageDescriptor{ albedo.image()?albedo:input, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}} },
+			{ {"gMax", 0}, maxBuf }
 			}, {}, {});
 	}
 

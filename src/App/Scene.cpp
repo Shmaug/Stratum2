@@ -352,9 +352,6 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 	}
 	mToLoad.clear();
 
-	if (mResources)
-		mResources->markUsed();
-
 	if (!update) return;
 
 	// Update scene data based on node graph
@@ -362,18 +359,15 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 
 	mUpdateOnce = loaded && !mAlwaysUpdate;
 
-	auto prevFrame = mResources;
-
-	mResources = mResourcePool.get();
-	if (!mResources)
-		mResources = mResourcePool.emplace(make_shared<FrameResources>(commandBuffer.mDevice));
-
-	mLastUpdate = chrono::high_resolution_clock::now();
-	mResources->update(*this, commandBuffer, prevFrame);
-	commandBuffer.trackResource(mResources);
+	updateFrameData(commandBuffer);
 }
 
-void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, const shared_ptr<FrameResources>& prevFrame) {
+void Scene::updateFrameData(CommandBuffer& commandBuffer) {
+	mLastUpdate = chrono::high_resolution_clock::now();
+
+	auto prevInstanceTransforms = move(mFrameData.mInstanceTransformMap);
+	mFrameData.clear();
+
 	// Construct resources used by renderers (mesh/material data buffers, image arrays, etc.)
 
 	vector<pair<MeshPrimitive*, uint32_t>> meshInstanceIndices;
@@ -386,35 +380,12 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 	vector<uint32_t> instanceIndexMap; // current frame instance index -> previous frame instance index
 
 	vector<MeshVertexInfo> meshVertexInfos;
-	mVertexBuffers.clear();
 	unordered_map<Buffer*, uint32_t> vertexBufferMap;
-
-	mMaterialCount = 0;
-	mEmissivePrimitiveCount = 0;
-
-	mInstanceNodes.clear();
-	mInstanceTransformMap.clear();
-
-	mMaterialResources.mMaterialData.clear();
-	mMaterialResources.mImage4s.clear();
-	mMaterialResources.mImage1s.clear();
-	mMaterialResources.mVolumeDataMap.clear();
 
 	unordered_map<const void*, uint32_t> materialMap;
 
-	mAabbMin = float3::Constant(numeric_limits<float>::infinity());
-	mAabbMax = float3::Constant(-numeric_limits<float>::infinity());
-
-	if (prevFrame) {
-		instanceDatas.reserve(prevFrame->mInstances.size());
-		instanceTransforms.reserve(prevFrame->mInstances.size());
-		instanceInverseTransforms.reserve(prevFrame->mInstances.size());
-		instanceMotionTransforms.reserve(prevFrame->mInstances.size());
-		instanceIndexMap.reserve(prevFrame->mInstances.size());
-		meshVertexInfos.reserve(prevFrame->mMeshVertexInfo.size());
-		mVertexBuffers.reserve(prevFrame->mVertexBuffers.size());
-		mMaterialResources.mMaterialData.reserve(prevFrame->mMaterialData ? prevFrame->mMaterialData.size() / sizeof(uint32_t) : 1);
-	}
+	mFrameData.mAabbMin = float3::Constant(numeric_limits<float>::infinity());
+	mFrameData.mAabbMax = float3::Constant(-numeric_limits<float>::infinity());
 
 	vector<vk::AccelerationStructureInstanceKHR> instancesAS;
 	vector<vk::BufferMemoryBarrier> blasBarriers;
@@ -425,8 +396,8 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 
 		if (auto it = vertexBufferMap.find(buf.get()); it != vertexBufferMap.end())
 			return it->second;
-		const uint32_t idx = mVertexBuffers.size();
-		mVertexBuffers.emplace_back(buf);
+		const uint32_t idx = mFrameData.mVertexBuffers.size();
+		mFrameData.mVertexBuffers.emplace_back(buf);
 		vertexBufferMap.emplace(buf.get(), idx);
 		return idx;
 	};
@@ -436,9 +407,9 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 		// append unique materials to materials list
 		auto materialMap_it = materialMap.find(material);
 		if (materialMap_it == materialMap.end()) {
-			materialMap_it = materialMap.emplace(material, (uint32_t)mMaterialResources.mMaterialData.sizeBytes()).first;
-			material->store(mMaterialResources);
-			mMaterialCount++;
+			materialMap_it = materialMap.emplace(material, (uint32_t)mFrameData.mMaterialResources.mMaterialData.sizeBytes()).first;
+			material->store(mFrameData.mMaterialResources);
+			mFrameData.mMaterialCount++;
 		}
 		return materialMap_it->second;
 	};
@@ -446,7 +417,7 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 	auto appendInstanceData = [&](Node& node, const void* primPtr, const InstanceData& instance, const TransformData& transform, const float emissivePower) {
 		const uint32_t instanceIndex = (uint32_t)instanceDatas.size();
 		instanceDatas.emplace_back(instance);
-		mInstanceNodes.emplace_back(node.getPtr());
+		mFrameData.mInstanceNodes.emplace_back(node.getPtr());
 		uint32_t& lightIndex = instanceLightMap.emplace_back(INVALID_INSTANCE);
 		uint32_t& prevInstanceIndex = instanceIndexMap.emplace_back(-1);
 
@@ -456,18 +427,17 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 			lightIndex = (uint32_t)lightInstanceMap.size();
 			//instanceDatas[instanceIndex].lightIndex(lightIndex);
 			lightInstanceMap.emplace_back(instanceIndex);
+			mFrameData.mLightCount++;
 		}
 
 		// transforms
 
 		TransformData prevTransform;
-		if (prevFrame) {
-			if (auto it = prevFrame->mInstanceTransformMap.find(primPtr); it != prevFrame->mInstanceTransformMap.end()) {
-				uint32_t idx;
-				tie(prevTransform, prevInstanceIndex) = it->second;
-			}
+		if (auto it = prevInstanceTransforms.find(primPtr); it != prevInstanceTransforms.end()) {
+			uint32_t idx;
+			tie(prevTransform, prevInstanceIndex) = it->second;
 		}
-		mInstanceTransformMap.emplace(primPtr, make_pair(transform, instanceIndex));
+		mFrameData.mInstanceTransformMap.emplace(primPtr, make_pair(transform, instanceIndex));
 
 		const TransformData invTransform = transform.inverse();
 		instanceTransforms.emplace_back(transform);
@@ -478,8 +448,8 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 
 	auto getAabbBlas = [&](const float3 mn, const float3 mx, const bool opaque) {
 		const size_t key = hashArgs(mn[0], mn[1], mn[2], mx[0], mx[1], mx[2], opaque);
-		auto aabb_it = scene.mAABBs.find(key);
-		if (aabb_it != scene.mAABBs.end())
+		auto aabb_it = mAABBs.find(key);
+		if (aabb_it != mAABBs.end())
 			return aabb_it->second;
 
 		Buffer::View<vk::AabbPositionsKHR> aabb = make_shared<Buffer>(
@@ -506,12 +476,12 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 			VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
 			**asbuf.buffer(), asbuf.offset(), asbuf.sizeBytes());
 
-		return scene.mAABBs.emplace(key, make_pair(as, asbuf)).first->second;
+		return mAABBs.emplace(key, make_pair(as, asbuf)).first->second;
 	};
 
 	{ // mesh instances
 		ProfilerScope s("Process mesh instances", &commandBuffer);
-		scene.mNode.forEachDescendant<MeshPrimitive>([&](Node& primNode, const shared_ptr<MeshPrimitive>& prim) {
+		mNode.forEachDescendant<MeshPrimitive>([&](Node& primNode, const shared_ptr<MeshPrimitive>& prim) {
 			if (!prim->mMesh || !prim->mMaterial) return;
 
 			if (prim->mMesh->topology() != vk::PrimitiveTopology::eTriangleList ||
@@ -530,8 +500,8 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 
 			// get/build BLAS
 			const size_t key = hashArgs(positions.buffer(), positions.offset(), positions.sizeBytes(), positionsDesc, prim->mMaterial->alphaTest());
-			auto it = scene.mMeshAccelerationStructures.find(key);
-			if (it == scene.mMeshAccelerationStructures.end()) {
+			auto it = mMeshAccelerationStructures.find(key);
+			if (it == mMeshAccelerationStructures.end()) {
 				ProfilerScope ps("Build acceleration structure", &commandBuffer);
 
 				vk::AccelerationStructureGeometryTrianglesDataKHR triangles;
@@ -551,7 +521,7 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 					VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
 					**asbuf.buffer(), asbuf.offset(), asbuf.sizeBytes());
 
-				it = scene.mMeshAccelerationStructures.emplace(key, make_pair(as, asbuf)).first;
+				it = mMeshAccelerationStructures.emplace(key, make_pair(as, asbuf)).first;
 			}
 
 			Buffer::View<byte> normals, texcoords;
@@ -576,7 +546,7 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 			const float area = 1;
 
 			if (prim->mMaterial->emission() > 0)
-				mEmissivePrimitiveCount += triCount;
+				mFrameData.mEmissivePrimitiveCount += triCount;
 
 			vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
 			float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
@@ -587,12 +557,13 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 			const vk::AabbPositionsKHR& aabb = prim->mMesh->vertices().mAabb;
 			for (uint32_t i = 0; i < 8; i++) {
 				const int3 idx(i % 2, (i % 4) / 2, i / 4);
-				float3 corner(idx[0] == 0 ? aabb.minX : aabb.maxX,
+				float3 corner(
+					idx[0] == 0 ? aabb.minX : aabb.maxX,
 					idx[1] == 0 ? aabb.minY : aabb.maxY,
 					idx[2] == 0 ? aabb.minZ : aabb.maxZ);
 				corner = transform.transformPoint(corner);
-				mAabbMin = min(mAabbMin, corner);
-				mAabbMax = max(mAabbMax, corner);
+				mFrameData.mAabbMin = min(mFrameData.mAabbMin, corner);
+				mFrameData.mAabbMax = max(mFrameData.mAabbMax, corner);
 			}
 
 			meshInstanceIndices.emplace_back(prim.get(), (uint32_t)instance.instanceCustomIndex);
@@ -601,103 +572,103 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 
 	{ // sphere instances
 		ProfilerScope s("Process sphere instances", &commandBuffer);
-		scene.mNode.forEachDescendant<SpherePrimitive>([&](Node& primNode, const shared_ptr<SpherePrimitive>& prim) {
+		mNode.forEachDescendant<SpherePrimitive>([&](Node& primNode, const shared_ptr<SpherePrimitive>& prim) {
 			if (!prim->mMaterial) return;
 
-		const uint32_t materialAddress = appendMaterialData(prim->mMaterial.get());
+			const uint32_t materialAddress = appendMaterialData(prim->mMaterial.get());
 
-		TransformData transform = nodeToWorld(primNode);
-		const float radius = prim->mRadius * transform.m.block<3, 3>(0, 0).matrix().determinant();
-		// remove scale/rotation from transform
-		transform = TransformData(transform.m.col(3).head<3>(), quatf::identity(), float3::Ones());
+			TransformData transform = nodeToWorld(primNode);
+			const float radius = prim->mRadius * transform.m.block<3, 3>(0, 0).matrix().determinant();
+			// remove scale/rotation from transform
+			transform = TransformData(transform.m.col(3).head<3>(), quatf::identity(), float3::Ones());
 
-		if (prim->mMaterial->emission() > 0)
-			mEmissivePrimitiveCount++;
+			if (prim->mMaterial->emission() > 0)
+				mFrameData.mEmissivePrimitiveCount++;
 
-		const auto& [as, asbuf] = getAabbBlas(-float3::Constant(radius), float3::Constant(radius), !prim->mMaterial->alphaTest());
+			const auto& [as, asbuf] = getAabbBlas(-float3::Constant(radius), float3::Constant(radius), !prim->mMaterial->alphaTest());
 
-		vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
-		float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
-		instance.instanceCustomIndex = appendInstanceData(primNode, prim.get(), SphereInstanceData(materialAddress, radius), transform, prim->mMaterial->emission() * (4 * M_PI * radius * radius));
-		instance.mask = BVH_FLAG_SPHERES;
-		instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**as);
+			vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
+			float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
+			instance.instanceCustomIndex = appendInstanceData(primNode, prim.get(), SphereInstanceData(materialAddress, radius), transform, prim->mMaterial->emission() * (4 * M_PI * radius * radius));
+			instance.mask = BVH_FLAG_SPHERES;
+			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**as);
 
-		const float3 center = transform.transformPoint(float3::Zero());
-		mAabbMin = min<float, 3>(mAabbMin, center - float3::Constant(radius));
-		mAabbMax = max<float, 3>(mAabbMax, center + float3::Constant(radius));
-			});
+			const float3 center = transform.transformPoint(float3::Zero());
+			mFrameData.mAabbMin = min<float, 3>(mFrameData.mAabbMin, center - float3::Constant(radius));
+			mFrameData.mAabbMax = max<float, 3>(mFrameData.mAabbMax, center + float3::Constant(radius));
+		});
 	}
 
 	{ // medium instances
 		ProfilerScope s("Process media", &commandBuffer);
-		scene.mNode.forEachDescendant<Medium>([&](Node& primNode, const shared_ptr<Medium>& vol) {
+		mNode.forEachDescendant<Medium>([&](Node& primNode, const shared_ptr<Medium>& vol) {
 			if (!vol) return;
 
-		const uint32_t materialAddress = appendMaterialData(vol.get());
+			const uint32_t materialAddress = appendMaterialData(vol.get());
 
-		auto densityGrid = vol->mDensityGrid->grid<float>();
+			auto densityGrid = vol->mDensityGrid->grid<float>();
 
-		// get/build BLAS
-		const nanovdb::Vec3R& mn = densityGrid->worldBBox().min();
-		const nanovdb::Vec3R& mx = densityGrid->worldBBox().max();
-		const size_t key = hashArgs((float)mn[0], (float)mn[1], (float)mn[2], (float)mx[0], (float)mx[1], (float)mx[2]);
-		auto aabb_it = scene.mAABBs.find(key);
-		if (aabb_it == scene.mAABBs.end()) {
-			Buffer::View<vk::AabbPositionsKHR> aabb = make_shared<Buffer>(
-				commandBuffer.mDevice,
-				"aabb data",
-				sizeof(vk::AabbPositionsKHR),
-				vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress,
-				vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-			aabb[0].minX = (float)mn[0];
-			aabb[0].minY = (float)mn[1];
-			aabb[0].minZ = (float)mn[2];
-			aabb[0].maxX = (float)mx[0];
-			aabb[0].maxY = (float)mx[1];
-			aabb[0].maxZ = (float)mx[2];
-			vk::AccelerationStructureGeometryAabbsDataKHR aabbs(aabb.deviceAddress(), sizeof(vk::AabbPositionsKHR));
-			vk::AccelerationStructureGeometryKHR aabbGeometry(vk::GeometryTypeKHR::eAabbs, aabbs, vk::GeometryFlagBitsKHR::eOpaque);
-			vk::AccelerationStructureBuildRangeInfoKHR range(1);
-			commandBuffer.trackResource(aabb.buffer());
+			// get/build BLAS
+			const nanovdb::Vec3R& mn = densityGrid->worldBBox().min();
+			const nanovdb::Vec3R& mx = densityGrid->worldBBox().max();
+			const size_t key = hashArgs((float)mn[0], (float)mn[1], (float)mn[2], (float)mx[0], (float)mx[1], (float)mx[2]);
+			auto aabb_it = mAABBs.find(key);
+			if (aabb_it == mAABBs.end()) {
+				Buffer::View<vk::AabbPositionsKHR> aabb = make_shared<Buffer>(
+					commandBuffer.mDevice,
+					"aabb data",
+					sizeof(vk::AabbPositionsKHR),
+					vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress,
+					vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+				aabb[0].minX = (float)mn[0];
+				aabb[0].minY = (float)mn[1];
+				aabb[0].minZ = (float)mn[2];
+				aabb[0].maxX = (float)mx[0];
+				aabb[0].maxY = (float)mx[1];
+				aabb[0].maxZ = (float)mx[2];
+				vk::AccelerationStructureGeometryAabbsDataKHR aabbs(aabb.deviceAddress(), sizeof(vk::AabbPositionsKHR));
+				vk::AccelerationStructureGeometryKHR aabbGeometry(vk::GeometryTypeKHR::eAabbs, aabbs, vk::GeometryFlagBitsKHR::eOpaque);
+				vk::AccelerationStructureBuildRangeInfoKHR range(1);
+				commandBuffer.trackResource(aabb.buffer());
 
-			auto [as, asbuf] = buildAccelerationStructure(commandBuffer, "aabb BLAS", vk::AccelerationStructureTypeKHR::eBottomLevel, aabbGeometry, range);
+				auto [as, asbuf] = buildAccelerationStructure(commandBuffer, "aabb BLAS", vk::AccelerationStructureTypeKHR::eBottomLevel, aabbGeometry, range);
 
-			blasBarriers.emplace_back(
-				vk::AccessFlagBits::eAccelerationStructureWriteKHR, vk::AccessFlagBits::eAccelerationStructureReadKHR,
-				VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-				**asbuf.buffer(), asbuf.offset(), asbuf.sizeBytes());
+				blasBarriers.emplace_back(
+					vk::AccessFlagBits::eAccelerationStructureWriteKHR, vk::AccessFlagBits::eAccelerationStructureReadKHR,
+					VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+					**asbuf.buffer(), asbuf.offset(), asbuf.sizeBytes());
 
-			aabb_it = scene.mAABBs.emplace(key, make_pair(as, asbuf)).first;
-		}
+				aabb_it = mAABBs.emplace(key, make_pair(as, asbuf)).first;
+			}
 
-		// append to instance list
-		const TransformData transform = nodeToWorld(primNode);
-		vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
-		float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
-		instance.instanceCustomIndex = appendInstanceData(primNode, vol.get(), VolumeInstanceData(materialAddress, mMaterialResources.mVolumeDataMap.at({ vol->mDensityBuffer.buffer(),vol->mDensityBuffer.offset() })), transform, 0);
-		instance.mask = BVH_FLAG_VOLUME;
-		instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**aabb_it->second.first);
+			// append to instance list
+			const TransformData transform = nodeToWorld(primNode);
+			vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
+			float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
+			instance.instanceCustomIndex = appendInstanceData(primNode, vol.get(), VolumeInstanceData(materialAddress, mFrameData.mMaterialResources.mVolumeDataMap.at({ vol->mDensityBuffer.buffer(),vol->mDensityBuffer.offset() })), transform, 0);
+			instance.mask = BVH_FLAG_VOLUME;
+			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**aabb_it->second.first);
 
-		for (uint32_t i = 0; i < 8; i++) {
-			const int3 idx(i % 2, (i % 4) / 2, i / 4);
-			float3 corner(idx[0] == 0 ? mn[0] : mx[0],
-				idx[1] == 0 ? mn[1] : mx[1],
-				idx[2] == 0 ? mn[2] : mx[2]);
-			corner = transform.transformPoint(corner);
-			mAabbMin = min(mAabbMin, corner);
-			mAabbMax = max(mAabbMax, corner);
-		}
-			});
+			for (uint32_t i = 0; i < 8; i++) {
+				const int3 idx(i % 2, (i % 4) / 2, i / 4);
+				float3 corner(idx[0] == 0 ? mn[0] : mx[0],
+					idx[1] == 0 ? mn[1] : mx[1],
+					idx[2] == 0 ? mn[2] : mx[2]);
+				corner = transform.transformPoint(corner);
+				mFrameData.mAabbMin = min(mFrameData.mAabbMin, corner);
+				mFrameData.mAabbMax = max(mFrameData.mAabbMax, corner);
+			}
+		});
 	}
 
 	{ // environment material
 		ProfilerScope s("Process environment", &commandBuffer);
-		mEnvironmentMaterialAddress = -1;
-		scene.mNode.forEachDescendant<EnvironmentImage>([&](Node& node, const shared_ptr<EnvironmentImage> environment) {
+		mFrameData.mEnvironmentMaterialAddress = -1;
+		mNode.forEachDescendant<EnvironmentImage>([&](Node& node, const shared_ptr<EnvironmentImage> environment) {
 			if (environment->mEmission.mValue.isZero()) return true;
-			mEnvironmentMaterialAddress = mMaterialResources.mMaterialData.sizeBytes();
-			mMaterialCount++;
-			environment->store(mMaterialResources);
+			mFrameData.mEnvironmentMaterialAddress = mFrameData.mMaterialResources.mMaterialData.sizeBytes();
+			mFrameData.mMaterialCount++;
+			environment->store(mFrameData.mMaterialResources);
 			return false;
 		});
 	}
@@ -723,70 +694,42 @@ void Scene::FrameResources::update(Scene& scene, CommandBuffer& commandBuffer, c
 			commandBuffer.trackResource(buf);
 		}
 
-		tie(mAccelerationStructure, mAccelerationStructureBuffer) = buildAccelerationStructure(commandBuffer, scene.mNode.name() + "/TLAS", vk::AccelerationStructureTypeKHR::eTopLevel, geom, range);
-
-		mAccelerationStructureBuffer.barrier(commandBuffer,
+		const auto&[ as, asbuf ] = buildAccelerationStructure(commandBuffer, mNode.name() + "/TLAS", vk::AccelerationStructureTypeKHR::eTopLevel, geom, range);
+		mFrameData.mDescriptors[{ "mAccelerationStructure", 0u }] = as;
+		mFrameData.mAccelerationStructureBuffer = asbuf;
+		mFrameData.mAccelerationStructureBuffer.barrier(commandBuffer,
 			vk::PipelineStageFlagBits::eAccelerationStructureBuildKHR, vk::PipelineStageFlagBits::eComputeShader,
 			vk::AccessFlagBits::eAccelerationStructureWriteKHR, vk::AccessFlagBits::eAccelerationStructureReadKHR);
 	}
 
 	{ // upload data
 		ProfilerScope s("Upload scene data buffers");
-
-		auto uploadBuffer = [&]<typename T>(const string & name, Buffer::View<T>&dst, const vector<T>&src) {
-			if (!dst || dst.size() < src.size())
-				dst = make_shared<Buffer>(commandBuffer.mDevice, name, sizeof(T) * max(src.size(), size_t(1)), vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst);
-			if (src.empty()) return;
-			Buffer::View<T> staging = make_shared<Buffer>(commandBuffer.mDevice, dst.buffer()->resourceName() + "/Staging", sizeof(T) * src.size(), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-			ranges::uninitialized_copy(src, staging);
-			Buffer::copy(commandBuffer, staging, dst);
-		};
-
-		uploadBuffer("mInstances", mInstances, instanceDatas);
-		uploadBuffer("mInstanceTransforms", mInstanceTransforms, instanceTransforms);
-		uploadBuffer("mInstanceInverseTransforms", mInstanceInverseTransforms, instanceInverseTransforms);
-		uploadBuffer("mInstanceMotionTransforms", mInstanceMotionTransforms, instanceMotionTransforms);
-		uploadBuffer("mMaterialData", mMaterialData, mMaterialResources.mMaterialData);
-		uploadBuffer("mLightInstanceMap", mLightInstanceMap, lightInstanceMap);
-		uploadBuffer("mInstanceLightMap", mInstanceLightMap, instanceLightMap);
-		uploadBuffer("mMeshVertexInfo", mMeshVertexInfo, meshVertexInfos);
-		uploadBuffer("mInstanceIndexMap", mInstanceIndexMap, instanceIndexMap);
-		mLightCount = (uint32_t)lightInstanceMap.size();
+		mFrameData.mDescriptors[{ "mInstances", 0u }]                 = mFrameData.mResourcePool.uploadData<InstanceData>  (commandBuffer, "mInstances", instanceDatas);
+		mFrameData.mDescriptors[{ "mInstanceTransforms", 0u }]        = mFrameData.mResourcePool.uploadData<TransformData> (commandBuffer, "mInstanceTransforms", instanceTransforms);
+		mFrameData.mDescriptors[{ "mInstanceInverseTransforms", 0u }] = mFrameData.mResourcePool.uploadData<TransformData> (commandBuffer, "mInstanceInverseTransforms", instanceInverseTransforms);
+		mFrameData.mDescriptors[{ "mInstanceMotionTransforms", 0u }]  = mFrameData.mResourcePool.uploadData<TransformData> (commandBuffer, "mInstanceMotionTransforms", instanceMotionTransforms);
+		mFrameData.mDescriptors[{ "mLightInstanceMap", 0u }]          = mFrameData.mResourcePool.uploadData<uint32_t>      (commandBuffer, "mLightInstanceMap", lightInstanceMap);
+		mFrameData.mDescriptors[{ "mInstanceLightMap", 0u }]          = mFrameData.mResourcePool.uploadData<uint32_t>      (commandBuffer, "mInstanceLightMap", instanceLightMap);
+		mFrameData.mDescriptors[{ "mMaterialData", 0u }]              = mFrameData.mResourcePool.uploadData<uint32_t>      (commandBuffer, "mMaterialData", mFrameData.mMaterialResources.mMaterialData);
+		mFrameData.mDescriptors[{ "mMeshVertexInfo", 0u }]            = mFrameData.mResourcePool.uploadData<MeshVertexInfo>(commandBuffer, "mMeshVertexInfo", meshVertexInfos);
+		mFrameData.mResourcePool.uploadData<uint32_t>(commandBuffer, "mInstanceIndexMap", instanceIndexMap);
 	}
-}
 
-Descriptors Scene::FrameResources::getDescriptors() const {
-	Descriptors descriptors;
-	descriptors[{ "mAccelerationStructure", 0u }] = mAccelerationStructure;
-	descriptors[{ "mInstances", 0u }] = mInstances;
-	descriptors[{ "mInstanceTransforms", 0u }] = mInstanceTransforms;
-	descriptors[{ "mInstanceInverseTransforms", 0u }] = mInstanceInverseTransforms;
-	descriptors[{ "mInstanceMotionTransforms", 0u }] = mInstanceMotionTransforms;
-	descriptors[{ "mLightInstanceMap", 0u }] = mLightInstanceMap;
-	descriptors[{ "mInstanceLightMap", 0u }] = mInstanceLightMap;
-	descriptors[{ "mMaterialData", 0u }] = mMaterialData;
-	for (uint32_t i = 0; i < mVertexBuffers.size(); i++)
-		descriptors[{ "mVertexBuffers", i }] = mVertexBuffers[i];
-	descriptors[{ "mMeshVertexInfo", 0u }] = mMeshVertexInfo;
-	for (const auto& [image, index] : mMaterialResources.mImage4s)
-		descriptors[{"mImages", index}] = ImageDescriptor{ image, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-	for (const auto& [image, index] : mMaterialResources.mImage1s)
-		descriptors[{"mImage1s", index}] = ImageDescriptor{ image, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-	for (const auto& [vol, index] : mMaterialResources.mVolumeDataMap)
-		descriptors[{"mVolumes", index}] = vol.first;
-	return descriptors;
+	for (uint32_t i = 0; i < mFrameData.mVertexBuffers.size(); i++)
+		mFrameData.mDescriptors[{ "mVertexBuffers", i }] = mFrameData.mVertexBuffers[i];
+	for (const auto& [image, index] : mFrameData.mMaterialResources.mImage4s)
+		mFrameData.mDescriptors[{"mImages", index}] = ImageDescriptor{ image, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+	for (const auto& [image, index] : mFrameData.mMaterialResources.mImage1s)
+		mFrameData.mDescriptors[{"mImage1s", index}] = ImageDescriptor{ image, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+	for (const auto& [vol, index] : mFrameData.mMaterialResources.mVolumeDataMap)
+		mFrameData.mDescriptors[{"mVolumes", index}] = vol.first;
 }
 
 
 // drawGui functions
 
 void Scene::drawGui() {
-	if (mResources) {
-		ImGui::Text("%llu instances", mResources->mInstances.size());
-		ImGui::Text("%u lights", mResources->mLightCount);
-		ImGui::Text("%u emissive primitives", mResources->mEmissivePrimitiveCount);
-		ImGui::Text("%u materials", mResources->mMaterialCount);
-	}
+	ImGui::PushID(this);
 	if (ImGui::Button("Load file")) {
 		auto f = pfd::open_file("Open scene", "", loaderFilters());
 		for (const string& filepath : f.result())
@@ -794,11 +737,11 @@ void Scene::drawGui() {
 	}
 	ImGui::Checkbox("Always update", &mAlwaysUpdate);
 
-	if (mResources) {
+	if (!mFrameData.mMaterialResources.mImage4s.empty() || !mFrameData.mMaterialResources.mImage1s.empty()) {
 		const uint32_t w = ImGui::GetWindowSize().x;
 		if (ImGui::CollapsingHeader("Image4s")) {
-			vector<Image::View> images(mResources->mMaterialResources.mImage4s.size());
-			for (const auto& [img, idx] : mResources->mMaterialResources.mImage4s)
+			vector<Image::View> images(mFrameData.mMaterialResources.mImage4s.size());
+			for (const auto& [img, idx] : mFrameData.mMaterialResources.mImage4s)
 				images[idx] = img;
 			for (uint32_t i = 0; i < images.size(); i++) {
 				const string label = "" + to_string(i) + ": " + images[i].image()->resourceName();
@@ -807,8 +750,8 @@ void Scene::drawGui() {
 			}
 		}
 		if (ImGui::CollapsingHeader("Image1s")) {
-			vector<Image::View> images(mResources->mMaterialResources.mImage1s.size());
-			for (const auto& [img, idx] : mResources->mMaterialResources.mImage1s)
+			vector<Image::View> images(mFrameData.mMaterialResources.mImage1s.size());
+			for (const auto& [img, idx] : mFrameData.mMaterialResources.mImage1s)
 				images[idx] = img;
 			for (uint32_t i = 0; i < images.size(); i++) {
 				const string label = "" + to_string(i) + ": " + images[i].image()->resourceName();
@@ -817,6 +760,13 @@ void Scene::drawGui() {
 			}
 		}
 	}
+
+	if (ImGui::CollapsingHeader("Resources")) {
+		ImGui::Indent();
+		mFrameData.mResourcePool.drawGui();
+		ImGui::Unindent();
+	}
+	ImGui::PopID();
 }
 
 template<int N>

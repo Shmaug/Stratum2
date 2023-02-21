@@ -40,6 +40,13 @@ struct MaterialResources {
 	unordered_map<Image::View, uint32_t> mImage1s;
 	unordered_map<pair<shared_ptr<Buffer>, vk::DeviceSize>, uint32_t> mVolumeDataMap;
 
+	inline void clear() {
+		mMaterialData.clear();
+		mImage4s.clear();
+		mImage1s.clear();
+		mVolumeDataMap.clear();
+	}
+
 	inline uint32_t getIndex(const Image::View& image) {
 		if (!image) return ~0u;
 		const Image::View tmp(image.image(), image.subresourceRange(), image.type());

@@ -302,10 +302,19 @@ void Pipeline::pushConstants(CommandBuffer& commandBuffer, const PushConstants& 
 }
 
 shared_ptr<DescriptorSets> Pipeline::getDescriptorSets(const Descriptors& descriptors) {
-	shared_ptr<DescriptorSets> r = mResources.get();
-	if (!r)
-		r = mResources.emplace(make_shared<DescriptorSets>(*this, resourceName() + "/Resources"));
+	shared_ptr<DescriptorSets> r;
+	for (auto ds : mDescriptorSetCache) {
+		if (!ds->inFlight()) {
+			r = ds;
+			break;
+		}
+	}
+	if (!r) {
+		r = make_shared<DescriptorSets>(*this, resourceName() + "/Resources");
+		mDescriptorSetCache.emplace_back(r);
+	}
 	r->write(descriptors);
+	r->markUsed();
 	return r;
 }
 

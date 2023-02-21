@@ -6,6 +6,7 @@
 
 #include <Core/Mesh.hpp>
 #include <Core/Pipeline.hpp>
+#include <Core/DeviceResourcePool.hpp>
 
 #include "Node.hpp"
 #include "Material.hpp"
@@ -48,45 +49,44 @@ struct Camera {
 
 class Scene {
 public:
-	struct FrameResources : public Device::Resource {
-		Buffer::View<byte> mAccelerationStructureBuffer;
-		shared_ptr<vk::raii::AccelerationStructureKHR> mAccelerationStructure;
-
+	struct FrameData {
 		unordered_map<const void* /* address of component */, pair<TransformData, uint32_t /* instance index */ >> mInstanceTransformMap;
 		vector<weak_ptr<Node>> mInstanceNodes;
-
-		vector<shared_ptr<Buffer>> mVertexBuffers;
-		Buffer::View<MeshVertexInfo> mMeshVertexInfo;
-
-		Buffer::View<uint32_t> mMaterialData;
-		Buffer::View<InstanceData> mInstances;
-		Buffer::View<TransformData> mInstanceTransforms;
-		Buffer::View<TransformData> mInstanceInverseTransforms;
-		Buffer::View<TransformData> mInstanceMotionTransforms;
-		Buffer::View<uint32_t> mLightInstanceMap; // light index -> instance index
-		Buffer::View<uint32_t> mInstanceLightMap; // instance index -> light index
-		Buffer::View<uint32_t> mInstanceIndexMap; // current frame instance index -> previous frame instance index
 		uint32_t mLightCount;
 
+		DeviceResourcePool mResourcePool;
+
+		vector<shared_ptr<Buffer>> mVertexBuffers;
+		vector<MeshVertexInfo> mMeshVertexInfo;
+
 		MaterialResources mMaterialResources;
-		Buffer::View<uint32_t> mImage1Extents;
-		Buffer::View<uint32_t> mImage4Extents;
 		uint32_t mEnvironmentMaterialAddress;
 		uint32_t mMaterialCount;
 		uint32_t mEmissivePrimitiveCount;
 		float3 mAabbMin, mAabbMax;
 
-		FrameResources() = default;
-		FrameResources(const FrameResources&) = default;
-		FrameResources(FrameResources&&) = default;
-		FrameResources& operator=(const FrameResources&) = default;
-		FrameResources& operator=(FrameResources&&) = default;
+		Descriptors mDescriptors;
 
-		inline FrameResources(Device& device) : Device::Resource(device, "FrameResources"), mAccelerationStructure(nullptr) {}
+		Buffer::View<byte> mAccelerationStructureBuffer;
 
-		void update(Scene& scene, CommandBuffer& commandBuffer, const shared_ptr<FrameResources>& prevFrame = {});
+		inline void clear() {
+			mInstanceTransformMap.clear();
+			mInstanceNodes.clear();
+			mLightCount = 0;
 
-		Descriptors getDescriptors() const;
+			mVertexBuffers.clear();
+			mMeshVertexInfo.clear();
+
+			mMaterialResources.clear();
+			mEnvironmentMaterialAddress = -1;
+			mMaterialCount = 0;
+			mEmissivePrimitiveCount = 0;
+			mAabbMin = float3::Constant( numeric_limits<float>::infinity());
+			mAabbMax = float3::Constant(-numeric_limits<float>::infinity());
+
+			mDescriptors.clear();
+			mAccelerationStructureBuffer.reset();
+		}
 	};
 
 	Node& mNode;
@@ -95,13 +95,14 @@ public:
 
 	void createPipelines();
 
-	inline const shared_ptr<FrameResources>& resources() const { return mResources; }
+	inline const FrameData& frameData() const { return mFrameData; }
 
 	void drawGui();
 
 	inline void markDirty() { mUpdateOnce = true; }
 	inline chrono::high_resolution_clock::time_point lastUpdate() const { return mLastUpdate; }
 	void update(CommandBuffer& commandBuffer, const float deltaTime);
+
 
 	shared_ptr<Node> loadEnvironmentMap(CommandBuffer& commandBuffer, const filesystem::path& filename);
 	shared_ptr<Node> loadGltf(CommandBuffer& commandBuffer, const filesystem::path& filename);
@@ -165,11 +166,14 @@ public:
 private:
 	using AccelerationStructureData = pair<shared_ptr<vk::raii::AccelerationStructureKHR>, Buffer::View<byte> /* acceleration structure buffer */>;
 
+	// cache aabb BLASs
 	unordered_map<size_t, AccelerationStructureData> mAABBs;
+	// cache mesh BLASs
 	unordered_map<size_t, AccelerationStructureData> mMeshAccelerationStructures;
 
-	DeviceResourcePool<FrameResources> mResourcePool;
-	shared_ptr<FrameResources> mResources;
+	FrameData mFrameData;
+
+	void updateFrameData(CommandBuffer& commandBuffer);
 
 	ComputePipelineCache mConvertAlphaToRoughnessPipeline;
 	ComputePipelineCache mConvertShininessToRoughnessPipeline;

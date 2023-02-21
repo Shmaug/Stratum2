@@ -25,6 +25,7 @@ public:
 		Device& mDevice;
 		inline Resource(Device& device, const string& name) : mDevice(device), mName(name) {}
 		inline string resourceName() const { return mName; }
+		inline size_t lastFrameUsed() const { return mLastFrameUsed; }
 		inline bool inFlight() const { return mLastFrameUsed > mDevice.lastFrameDone(); }
 		inline void markUsed() { mLastFrameUsed = mDevice.frameIndex(); }
 	private:
@@ -76,10 +77,10 @@ public:
 		const vk::ArrayProxy<pair<shared_ptr<vk::raii::Semaphore>, vk::PipelineStageFlags>>& waitSemaphores = {},
 		const vk::ArrayProxy<shared_ptr<vk::raii::Semaphore>>& signalSemaphores = {});
 
-	inline uint32_t frameIndex() const { return mFrameIndex; }
-	inline uint32_t lastFrameDone() const { return mLastFrameDone; }
+	inline size_t frameIndex() const { return mFrameIndex; }
+	inline size_t lastFrameDone() const { return mLastFrameDone; }
 	void incrementFrameIndex() { mFrameIndex++; }
-	void updateLastFrameDone(const uint32_t v) { mLastFrameDone = v; }
+	void updateLastFrameDone(const size_t v) { mLastFrameDone = v; }
 
 	void drawGui();
 

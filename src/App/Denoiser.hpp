@@ -59,24 +59,10 @@ private:
 	ComputePipelineCache mAtrousPipeline;
 	ComputePipelineCache mCopyRGBPipeline;
 
-	class FrameResources : public Device::Resource {
-	public:
-		inline FrameResources(Device& device) : Device::Resource(device, "Denoiser frame resources") {}
+	DeviceResourcePool mResourcePool;
 
-		Buffer::View<ViewData> mViews;
-		Image::View mRadiance;
-		Image::View mAlbedo;
-		Image::View mVisibility;
-		Image::View mDepth;
-
-		Image::View mAccumColor;
-		Image::View mAccumMoments;
-		array<Image::View, 2> mTemp;
-	};
-
-	DeviceResourcePool<FrameResources> mFrameResources;
-	shared_ptr<FrameResources> mCurFrame, mPrevFrame;
-
+	Image::View mPrevVisibility;
+	Image::View mPrevDepth;
 };
 
 }
