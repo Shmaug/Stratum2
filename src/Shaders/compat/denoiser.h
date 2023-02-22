@@ -49,8 +49,6 @@ struct DenoiserParameters {
 
 	Texture2D<float4> mPrevAccumColor;
 	Texture2D<float2> mPrevAccumMoments;
-
-	SamplerState mStaticSampler;
 };
 
 #endif

@@ -78,7 +78,7 @@ Scene::Scene(Node& node): mNode(node) {
 		inspector->setInspectCallback<SpherePrimitive>();
 		inspector->setInspectCallback<Material>();
 		inspector->setInspectCallback<Medium>();
-		inspector->setInspectCallback<EnvironmentImage>();
+		inspector->setInspectCallback<EnvironmentMap>();
 		inspector->setInspectCallback<nanovdb::GridMetaData>([](Node& n) {
 			auto metadata = n.getComponent<nanovdb::GridMetaData>();
 		ImGui::LabelText("Grid name", metadata->shortGridName());
@@ -125,7 +125,7 @@ shared_ptr<Node> Scene::loadEnvironmentMap(CommandBuffer& commandBuffer, const f
 	commandBuffer.trackResource(pixels);
 
 	const shared_ptr<Node> node = Node::create(filepath.stem().string());
-	node->makeComponent<EnvironmentImage>(ImageValue<3>{ float3::Ones(), img });
+	node->makeComponent<EnvironmentMap>(ImageValue<3>{ float3::Ones(), img });
 	return node;
 }
 
@@ -190,35 +190,31 @@ ImageValue<1> Scene::shininessToRoughness(CommandBuffer& commandBuffer, const Im
 
 Material Scene::makeMetallicRoughnessMaterial(CommandBuffer& commandBuffer, const ImageValue<3>& baseColor, const ImageValue<4>& metallic_roughness, const ImageValue<3>& transmission, const float eta, const ImageValue<3>& emission) {
 	Material m;
-	if ((emission.mValue > 0).any()) {
-		m.mValues[0].mImage = emission.mImage;
-		m.baseColor() = emission.mValue / luminance(emission.mValue);
-		m.emission() = luminance(emission.mValue);
-		m.eta() = 0; // eta
-		return m;
-	}
-	m.baseColor() = baseColor.mValue;
-	m.emission() = 0;
-	m.metallic() = metallic_roughness.mValue.z(); // metallic
-	m.roughness() = metallic_roughness.mValue.y(); // roughness
-	m.anisotropic() = 0; // anisotropic
-	m.subsurface() = 0; // subsurface
-	m.clearcoat() = 0; // clearcoat
-	m.clearcoatGloss() = 1; // clearcoat gloss
-	m.transmission() = luminance(transmission.mValue);
-	m.eta() = eta;
-	if (baseColor.mImage || metallic_roughness.mImage || transmission.mImage) {
+	m.mMaterialData.setBaseColor(baseColor.mValue);
+	m.mMaterialData.setEmission(emission.mValue);
+	m.mMaterialData.setMetallic(metallic_roughness.mValue.z());
+	m.mMaterialData.setRoughness(metallic_roughness.mValue.y());
+	m.mMaterialData.setAnisotropic(0);
+	m.mMaterialData.setSubsurface(0);
+	m.mMaterialData.setClearcoat(0);
+	m.mMaterialData.setClearcoatGloss(0);
+	m.mMaterialData.setTransmission(luminance(transmission.mValue));
+	m.mMaterialData.setEta(eta - 1);
+	if (baseColor.mImage || metallic_roughness.mImage || transmission.mImage || emission.mImage) {
 		Descriptors descriptors;
 
-		Image::View d = baseColor.mImage ? baseColor.mImage : metallic_roughness.mImage ? metallic_roughness.mImage : transmission.mImage;
+		Image::View d = baseColor.mImage ? baseColor.mImage :
+		                metallic_roughness.mImage ? metallic_roughness.mImage :
+		                emission.mImage ? emission.mImage :
+		                transmission.mImage;
 		Image::Metadata md;
 		md.mExtent = d.extent();
 		md.mLevels = Image::maxMipLevels(md.mExtent);
 		md.mFormat = vk::Format::eR8G8B8A8Unorm;
 		md.mUsage = vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage;
-		for (int i = 0; i < MaterialData::gDataCount; i++) {
-			m.mValues[i].mImage = make_shared<Image>(commandBuffer.mDevice, "DisneyMaterialData[" + to_string(i) + "]", md);
-			descriptors[{ "gOutput", i }] = ImageDescriptor{ m.mValues[i].mImage, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+		for (int i = 0; i < m.mImages.size(); i++) {
+			m.mImages[i] = make_shared<Image>(commandBuffer.mDevice, "PackedMaterialData[" + to_string(i) + "]", md);
+			descriptors[{ "gOutput", i }] = ImageDescriptor{ m.mImages[i], vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 		}
 		if (baseColor.mImage) {
 			md.mLevels = 1;
@@ -229,58 +225,61 @@ Material Scene::makeMetallicRoughnessMaterial(CommandBuffer& commandBuffer, cons
 		descriptors[{ "gOutputAlphaMask", 0 }] = ImageDescriptor{ m.mAlphaMask ? m.mAlphaMask : d, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 
 		m.mMinAlpha = make_shared<Buffer>(commandBuffer.mDevice, "mMinAlpha", sizeof(uint32_t), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-		m.mMinAlpha[0] = 0xFFFFFFFF;
+		m.mMinAlpha[0] = 255;
 		descriptors[{ "gOutputMinAlpha", 0 }] = m.mMinAlpha;
+		m.mMinAlpha.barrier(commandBuffer,
+			vk::PipelineStageFlagBits::eHost, vk::PipelineStageFlagBits::eComputeShader,
+			vk::AccessFlagBits::eHostWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 
-		descriptors[{ "gDiffuse", 0 }] = ImageDescriptor{ baseColor.mImage ? baseColor.mImage : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-		descriptors[{ "gSpecular", 0 }] = ImageDescriptor{ metallic_roughness.mImage ? metallic_roughness.mImage : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-		descriptors[{ "gTransmittance", 0 }] = ImageDescriptor{ transmission.mImage ? transmission.mImage : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-		descriptors[{ "gRoughness", 0 }] = ImageDescriptor{ d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{ "gDiffuse", 0 }]       = ImageDescriptor{ baseColor.mImage          ? baseColor.mImage          : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{ "gSpecular", 0 }]      = ImageDescriptor{ metallic_roughness.mImage ? metallic_roughness.mImage : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{ "gTransmittance", 0 }] = ImageDescriptor{ transmission.mImage       ? transmission.mImage       : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{ "gEmission", 0 }]      = ImageDescriptor{ emission.mImage           ? emission.mImage           : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{ "gRoughness", 0 }]     = ImageDescriptor{                                                         d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
 		Defines defs;
 		if (baseColor.mImage) defs["gUseDiffuse"] = "true";
 		if (metallic_roughness.mImage) defs["gUseSpecular"] = "true";
 		if (transmission.mImage) defs["gUseTransmittance"] = "true";
+		if (emission.mImage)     defs["gUseEmission"] = "true";
+
 		mConvertPbrPipeline.get(commandBuffer.mDevice, defs)->dispatchTiled(commandBuffer, d.extent(), descriptors);
 
-		for (int i = 0; i < MaterialData::gDataCount; i++)
-			m.mValues[i].mImage.image()->generateMipMaps(commandBuffer);
+		for (const Image::View& img : m.mImages)
+			img.image()->generateMipMaps(commandBuffer);
 	}
 	return m;
 }
 Material Scene::makeDiffuseSpecularMaterial(CommandBuffer& commandBuffer, const ImageValue<3>& diffuse, const ImageValue<3>& specular, const ImageValue<1>& roughness, const ImageValue<3>& transmission, const float eta, const ImageValue<3>& emission) {
 	Material m;
-	if ((emission.mValue > 0).any()) {
-		m.mValues[0].mImage = emission.mImage;
-		m.baseColor() = emission.mValue / luminance(emission.mValue);
-		m.emission() = luminance(emission.mValue);
-		m.eta() = 0; // eta
-		return m;
-	}
 	const float ld = luminance(diffuse.mValue);
 	const float ls = luminance(specular.mValue);
 	const float lt = luminance(transmission.mValue);
-	m.baseColor() = (diffuse.mValue * ld + specular.mValue * ls + transmission.mValue * lt) / (ld + ls + lt);
-	m.emission() = 0;
-	m.metallic() = ls / (ld + ls + lt);
-	m.roughness() = roughness.mValue[0];
-	m.anisotropic() = 0;
-	m.subsurface() = 0;
-	m.clearcoat() = 0;
-	m.clearcoatGloss() = 1;
-	m.transmission() = lt / (ld + ls + lt);
-	m.eta() = eta;
+	m.mMaterialData.setBaseColor((diffuse.mValue * ld + specular.mValue * ls + transmission.mValue * lt) / (ld + ls + lt));
+	m.mMaterialData.setEmission(emission.mValue);
+	m.mMaterialData.setMetallic(ls / (ld + ls + lt));
+	m.mMaterialData.setRoughness(roughness.mValue[0]);
+	m.mMaterialData.setAnisotropic(0);
+	m.mMaterialData.setSubsurface(0);
+	m.mMaterialData.setClearcoat(0);
+	m.mMaterialData.setClearcoatGloss(1);
+	m.mMaterialData.setTransmission(lt / (ld + ls + lt));
+	m.mMaterialData.setEta(eta - 1);
 	if (diffuse.mImage || specular.mImage || transmission.mImage || roughness.mImage) {
 		Descriptors descriptors;
 
-		Image::View d = diffuse.mImage ? diffuse.mImage : specular.mImage ? specular.mImage : transmission.mImage ? transmission.mImage : roughness.mImage;
+		Image::View d = diffuse.mImage ? diffuse.mImage :
+		                specular.mImage ? specular.mImage :
+						transmission.mImage ? transmission.mImage :
+						emission.mImage ? emission.mImage :
+						roughness.mImage;
 		Image::Metadata md;
 		md.mExtent = d.extent();
 		md.mLevels = Image::maxMipLevels(md.mExtent);
 		md.mFormat = vk::Format::eR8G8B8A8Unorm;
 		md.mUsage = vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage;
-		for (int i = 0; i < MaterialData::gDataCount; i++) {
-			m.mValues[i].mImage = make_shared<Image>(commandBuffer.mDevice, "material data", md);
-			descriptors[{"gOutput", i}] = ImageDescriptor{ m.mValues[i].mImage, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+		for (int i = 0; i < m.mImages.size(); i++) {
+			m.mImages[i] = make_shared<Image>(commandBuffer.mDevice, "material data", md);
+			descriptors[{"gOutput", i}] = ImageDescriptor{ m.mImages[i], vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 		}
 		if (diffuse.mImage) {
 			md.mLevels = 1;
@@ -291,23 +290,28 @@ Material Scene::makeDiffuseSpecularMaterial(CommandBuffer& commandBuffer, const 
 		descriptors[{"gOutputAlphaMask", 0}] = ImageDescriptor{ m.mAlphaMask ? m.mAlphaMask : d, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 
 		m.mMinAlpha = make_shared<Buffer>(commandBuffer.mDevice, "min_alpha", sizeof(uint32_t), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-		m.mMinAlpha[0] = 0xFFFFFFFF;
+		m.mMinAlpha[0] = 255;
 		descriptors[{"gOutputMinAlpha", 0}] = m.mMinAlpha;
+		m.mMinAlpha.barrier(commandBuffer,
+			vk::PipelineStageFlagBits::eHost, vk::PipelineStageFlagBits::eComputeShader,
+			vk::AccessFlagBits::eHostWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 
-		descriptors[{"gDiffuse", 0}] = ImageDescriptor{ diffuse.mImage ? diffuse.mImage : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-		descriptors[{"gSpecular", 0}] = ImageDescriptor{ specular.mImage ? specular.mImage : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{"gDiffuse", 0}]       = ImageDescriptor{ diffuse.mImage      ? diffuse.mImage      : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{"gSpecular", 0}]      = ImageDescriptor{ specular.mImage     ? specular.mImage     : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
 		descriptors[{"gTransmittance", 0}] = ImageDescriptor{ transmission.mImage ? transmission.mImage : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-		descriptors[{"gRoughness", 0}] = ImageDescriptor{ roughness.mImage ? roughness.mImage : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{"gRoughness", 0}]     = ImageDescriptor{ roughness.mImage    ? roughness.mImage    : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{"gEmission", 0}]      = ImageDescriptor{ diffuse.mImage      ? diffuse.mImage      : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
 		Defines defs;
 		if (diffuse.mImage)      defs["gUseDiffuse"] = "true";
 		if (specular.mImage)     defs["gUseSpecular"] = "true";
 		if (transmission.mImage) defs["gUseTransmittance"] = "true";
 		if (roughness.mImage)    defs["gUseRoughness"] = "true";
+		if (emission.mImage)     defs["gUseEmission"] = "true";
 
 		mConvertDiffuseSpecularPipeline.get(commandBuffer.mDevice, defs)->dispatchTiled(commandBuffer, d.extent(), descriptors);
 
-		for (int i = 0; i < MaterialData::gDataCount; i++)
-			m.mValues[i].mImage.image()->generateMipMaps(commandBuffer);
+		for (const Image::View& img : m.mImages)
+			img.image()->generateMipMaps(commandBuffer);
 	}
 	return m;
 }
@@ -367,6 +371,7 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 
 	auto prevInstanceTransforms = move(mFrameData.mInstanceTransformMap);
 	mFrameData.clear();
+	mFrameData.mResourcePool.clean();
 
 	// Construct resources used by renderers (mesh/material data buffers, image arrays, etc.)
 
@@ -491,8 +496,6 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 				return;
 			}
 
-			ProfilerScope s(primNode.name());
-
 			auto [positions, positionsDesc] = prim->mMesh->vertices().at(Mesh::VertexAttributeType::ePosition)[0];
 
 			const uint32_t vertexCount = (uint32_t)((positions.sizeBytes() - positionsDesc.mOffset) / positionsDesc.mStride);
@@ -545,12 +548,12 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 			const TransformData transform = nodeToWorld(primNode);
 			const float area = 1;
 
-			if (prim->mMaterial->emission() > 0)
+			if (!prim->mMaterial->mMaterialData.getEmission().isZero())
 				mFrameData.mEmissivePrimitiveCount += triCount;
 
 			vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
 			float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
-			instance.instanceCustomIndex = appendInstanceData(primNode, prim.get(), MeshInstanceData(materialAddress, vertexInfoIndex, primitiveCount), transform, prim->mMaterial->emission() * area);
+			instance.instanceCustomIndex = appendInstanceData(primNode, prim.get(), MeshInstanceData(materialAddress, vertexInfoIndex, primitiveCount), transform, luminance(prim->mMaterial->mMaterialData.getEmission()) * area);
 			instance.mask = BVH_FLAG_TRIANGLES;
 			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**it->second.first);
 
@@ -582,14 +585,14 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 			// remove scale/rotation from transform
 			transform = TransformData(transform.m.col(3).head<3>(), quatf::identity(), float3::Ones());
 
-			if (prim->mMaterial->emission() > 0)
+			if (!prim->mMaterial->mMaterialData.getEmission().isZero())
 				mFrameData.mEmissivePrimitiveCount++;
 
 			const auto& [as, asbuf] = getAabbBlas(-float3::Constant(radius), float3::Constant(radius), !prim->mMaterial->alphaTest());
 
 			vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
 			float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
-			instance.instanceCustomIndex = appendInstanceData(primNode, prim.get(), SphereInstanceData(materialAddress, radius), transform, prim->mMaterial->emission() * (4 * M_PI * radius * radius));
+			instance.instanceCustomIndex = appendInstanceData(primNode, prim.get(), SphereInstanceData(materialAddress, radius), transform, luminance(prim->mMaterial->mMaterialData.getEmission()) * (4 * M_PI * radius * radius));
 			instance.mask = BVH_FLAG_SPHERES;
 			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**as);
 
@@ -664,10 +667,9 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 	{ // environment material
 		ProfilerScope s("Process environment", &commandBuffer);
 		mFrameData.mEnvironmentMaterialAddress = -1;
-		mNode.forEachDescendant<EnvironmentImage>([&](Node& node, const shared_ptr<EnvironmentImage> environment) {
-			if (environment->mEmission.mValue.isZero()) return true;
+		mNode.forEachDescendant<EnvironmentMap>([&](Node& node, const shared_ptr<EnvironmentMap> environment) {
+			if (environment->mValue.isZero()) return true;
 			mFrameData.mEnvironmentMaterialAddress = mFrameData.mMaterialResources.mMaterialData.sizeBytes();
-			mFrameData.mMaterialCount++;
 			environment->store(mFrameData.mMaterialResources);
 			return false;
 		});
@@ -704,21 +706,34 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 
 	{ // upload data
 		ProfilerScope s("Upload scene data buffers");
-		mFrameData.mDescriptors[{ "mInstances", 0u }]                 = mFrameData.mResourcePool.uploadData<InstanceData>  (commandBuffer, "mInstances", instanceDatas);
-		mFrameData.mDescriptors[{ "mInstanceTransforms", 0u }]        = mFrameData.mResourcePool.uploadData<TransformData> (commandBuffer, "mInstanceTransforms", instanceTransforms);
-		mFrameData.mDescriptors[{ "mInstanceInverseTransforms", 0u }] = mFrameData.mResourcePool.uploadData<TransformData> (commandBuffer, "mInstanceInverseTransforms", instanceInverseTransforms);
-		mFrameData.mDescriptors[{ "mInstanceMotionTransforms", 0u }]  = mFrameData.mResourcePool.uploadData<TransformData> (commandBuffer, "mInstanceMotionTransforms", instanceMotionTransforms);
-		mFrameData.mDescriptors[{ "mLightInstanceMap", 0u }]          = mFrameData.mResourcePool.uploadData<uint32_t>      (commandBuffer, "mLightInstanceMap", lightInstanceMap);
-		mFrameData.mDescriptors[{ "mInstanceLightMap", 0u }]          = mFrameData.mResourcePool.uploadData<uint32_t>      (commandBuffer, "mInstanceLightMap", instanceLightMap);
-		mFrameData.mDescriptors[{ "mMaterialData", 0u }]              = mFrameData.mResourcePool.uploadData<uint32_t>      (commandBuffer, "mMaterialData", mFrameData.mMaterialResources.mMaterialData);
-		mFrameData.mDescriptors[{ "mMeshVertexInfo", 0u }]            = mFrameData.mResourcePool.uploadData<MeshVertexInfo>(commandBuffer, "mMeshVertexInfo", meshVertexInfos);
-		mFrameData.mResourcePool.uploadData<uint32_t>(commandBuffer, "mInstanceIndexMap", instanceIndexMap);
+
+		auto emptyBuffer = make_shared<Buffer>(commandBuffer.mDevice, "Empty", sizeof(TransformData), vk::BufferUsageFlagBits::eStorageBuffer);
+
+		auto uploadOrEmpty = [&]<typename T>(const string& name, const vk::ArrayProxy<T>& data) -> Buffer::View<T> {
+			if (data.empty())
+				return emptyBuffer;
+			else
+				return mFrameData.mResourcePool.uploadData<T>(commandBuffer, name, data);
+		};
+
+		mFrameData.mDescriptors[{ "mInstances", 0u }]                 = uploadOrEmpty.operator()<InstanceData>  ("mInstances", instanceDatas);
+		mFrameData.mDescriptors[{ "mInstanceTransforms", 0u }]        = uploadOrEmpty.operator()<TransformData> ("mInstanceTransforms", instanceTransforms);
+		mFrameData.mDescriptors[{ "mInstanceInverseTransforms", 0u }] = uploadOrEmpty.operator()<TransformData> ("mInstanceInverseTransforms", instanceInverseTransforms);
+		mFrameData.mDescriptors[{ "mInstanceMotionTransforms", 0u }]  = uploadOrEmpty.operator()<TransformData> ("mInstanceMotionTransforms", instanceMotionTransforms);
+		mFrameData.mDescriptors[{ "mLightInstanceMap", 0u }]          = uploadOrEmpty.operator()<uint32_t>      ("mLightInstanceMap", lightInstanceMap);
+		mFrameData.mDescriptors[{ "mInstanceLightMap", 0u }]          = uploadOrEmpty.operator()<uint32_t>      ("mInstanceLightMap", instanceLightMap);
+		mFrameData.mDescriptors[{ "mMaterialData", 0u }]              = uploadOrEmpty.operator()<uint32_t>      ("mMaterialData", mFrameData.mMaterialResources.mMaterialData);
+		mFrameData.mDescriptors[{ "mMeshVertexInfo", 0u }]            = uploadOrEmpty.operator()<MeshVertexInfo>("mMeshVertexInfo", meshVertexInfos);
+		if (!instanceIndexMap.empty())
+			mFrameData.mResourcePool.uploadData<uint32_t>(commandBuffer, "mInstanceIndexMap", instanceIndexMap);
 	}
 
 	for (uint32_t i = 0; i < mFrameData.mVertexBuffers.size(); i++)
 		mFrameData.mDescriptors[{ "mVertexBuffers", i }] = mFrameData.mVertexBuffers[i];
 	for (const auto& [image, index] : mFrameData.mMaterialResources.mImage4s)
 		mFrameData.mDescriptors[{"mImages", index}] = ImageDescriptor{ image, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+	for (const auto& [image, index] : mFrameData.mMaterialResources.mImage2s)
+		mFrameData.mDescriptors[{"mImage2s", index}] = ImageDescriptor{ image, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
 	for (const auto& [image, index] : mFrameData.mMaterialResources.mImage1s)
 		mFrameData.mDescriptors[{"mImage1s", index}] = ImageDescriptor{ image, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
 	for (const auto& [vol, index] : mFrameData.mMaterialResources.mVolumeDataMap)
@@ -737,7 +752,7 @@ void Scene::drawGui() {
 	}
 	ImGui::Checkbox("Always update", &mAlwaysUpdate);
 
-	if (!mFrameData.mMaterialResources.mImage4s.empty() || !mFrameData.mMaterialResources.mImage1s.empty()) {
+	if (!mFrameData.mMaterialResources.mImage4s.empty() || !mFrameData.mMaterialResources.mImage2s.empty() || !mFrameData.mMaterialResources.mImage1s.empty()) {
 		const uint32_t w = ImGui::GetWindowSize().x;
 		if (ImGui::CollapsingHeader("Image4s")) {
 			vector<Image::View> images(mFrameData.mMaterialResources.mImage4s.size());
@@ -745,8 +760,22 @@ void Scene::drawGui() {
 				images[idx] = img;
 			for (uint32_t i = 0; i < images.size(); i++) {
 				const string label = "" + to_string(i) + ": " + images[i].image()->resourceName();
-				if (ImGui::CollapsingHeader(label.c_str()))
+				if (ImGui::CollapsingHeader(label.c_str())) {
+					ImGui::Text("%ux%u %s", images[i].extent().width, images[i].extent().height, to_string(images[i].image()->format()).c_str());
 					ImGui::Image(Gui::getTextureID(images[i]), ImVec2(w, w * (float)images[i].extent().height / (float)images[i].extent().width));
+				}
+			}
+		}
+		if (ImGui::CollapsingHeader("Image2s")) {
+			vector<Image::View> images(mFrameData.mMaterialResources.mImage2s.size());
+			for (const auto& [img, idx] : mFrameData.mMaterialResources.mImage2s)
+				images[idx] = img;
+			for (uint32_t i = 0; i < images.size(); i++) {
+				const string label = "" + to_string(i) + ": " + images[i].image()->resourceName();
+				if (ImGui::CollapsingHeader(label.c_str())) {
+					ImGui::Text("%ux%u %s", images[i].extent().width, images[i].extent().height, to_string(images[i].image()->format()).c_str());
+					ImGui::Image(Gui::getTextureID(images[i]), ImVec2(w, w * (float)images[i].extent().height / (float)images[i].extent().width));
+				}
 			}
 		}
 		if (ImGui::CollapsingHeader("Image1s")) {
@@ -755,8 +784,10 @@ void Scene::drawGui() {
 				images[idx] = img;
 			for (uint32_t i = 0; i < images.size(); i++) {
 				const string label = "" + to_string(i) + ": " + images[i].image()->resourceName();
-				if (ImGui::CollapsingHeader(label.c_str()))
+				if (ImGui::CollapsingHeader(label.c_str())) {
+					ImGui::Text("%ux%u %s", images[i].extent().width, images[i].extent().height, to_string(images[i].image()->format()).c_str());
 					ImGui::Image(Gui::getTextureID(images[i]), ImVec2(w, w * (float)images[i].extent().height / (float)images[i].extent().width));
+				}
 			}
 		}
 	}
@@ -1022,8 +1053,8 @@ void SpherePrimitive::drawGui(Node& node) {
 	}
 }
 
-void EnvironmentImage::drawGui(Node& node) {
-	if (mEmission.drawGui("Emission"))
+void EnvironmentMap::drawGui(Node& node) {
+	if (ImageValue<3>::drawGui("Emission"))
 		if (const shared_ptr<Scene> scene = node.findAncestor<Scene>())
 			scene->markDirty();
 }
@@ -1031,27 +1062,53 @@ void EnvironmentImage::drawGui(Node& node) {
 void Material::drawGui(Node& node) {
 	bool changed = false;
 
-	if (ImGui::ColorEdit3("Base Color", baseColor().data())) changed = true;
+	auto slider = [&](const char* label, float value, function<void(float)> setter) {
+		if (ImGui::SliderFloat(label, &value, 0, 1)) {
+			setter(value);
+			changed = true;
+		}
+	};
+
+	float3 color = mMaterialData.getBaseColor();
+	if (ImGui::ColorEdit3("Base Color", color.data(), ImGuiColorEditFlags_Float|ImGuiColorEditFlags_PickerHueBar)) {
+		mMaterialData.setBaseColor(color);
+		changed = true;
+	}
+	float3 emission = mMaterialData.getEmission();
+	if (ImGui::ColorEdit3("Emission", emission.data(), ImGuiColorEditFlags_Float|ImGuiColorEditFlags_HDR|ImGuiColorEditFlags_PickerHueBar)) {
+		mMaterialData.setEmission(emission);
+		changed = true;
+	}
+
 	ImGui::PushItemWidth(80);
-	if (ImGui::DragFloat("Emission", &emission())) changed = true;
-	if (ImGui::DragFloat("Metallic", &metallic(), 0.1, 0, 1)) changed = true;
-	if (ImGui::DragFloat("Roughness", &roughness(), 0.1, 0, 1)) changed = true;
-	if (ImGui::DragFloat("Anisotropic", &anisotropic(), 0.1, 0, 1)) changed = true;
-	if (ImGui::DragFloat("Subsurface", &subsurface(), 0.1, 0, 1)) changed = true;
-	if (ImGui::DragFloat("Clearcoat", &clearcoat(), 0.1, 0, 1)) changed = true;
-	if (ImGui::DragFloat("Clearcoat Gloss", &clearcoatGloss(), 0.1, 0, 1)) changed = true;
-	if (ImGui::DragFloat("Transmission", &transmission(), 0.1, 0, 1)) changed = true;
-	if (ImGui::DragFloat("Index of Refraction", &eta(), 0.1, 0, 2)) changed = true;
-	if (mBumpImage) if (ImGui::DragFloat("Bump Strength", &mBumpStrength, 0.1, 0, 10)) changed = true;
+	slider("Metallic",         mMaterialData.getMetallic(),       bind_front(&PackedMaterialData::setMetallic, &mMaterialData));
+	slider("Roughness",        mMaterialData.getRoughness(),      bind_front(&PackedMaterialData::setRoughness, &mMaterialData));
+	slider("Anisotropic",      mMaterialData.getAnisotropic(),    bind_front(&PackedMaterialData::setAnisotropic, &mMaterialData));
+	slider("Subsurface",       mMaterialData.getSubsurface(),     bind_front(&PackedMaterialData::setSubsurface, &mMaterialData));
+	slider("Clearcoat",        mMaterialData.getClearcoat(),      bind_front(&PackedMaterialData::setClearcoat, &mMaterialData));
+	slider("Clearcoat gloss",  mMaterialData.getClearcoatGloss(), bind_front(&PackedMaterialData::setClearcoatGloss, &mMaterialData));
+	slider("Transmission",     mMaterialData.getTransmission(),   bind_front(&PackedMaterialData::setTransmission, &mMaterialData));
+	slider("Refraction index", mMaterialData.getEta(),            bind_front(&PackedMaterialData::setEta, &mMaterialData));
+
+	if (mBumpImage) {
+		if (ImGui::DragFloat("Bump Strength", &mBumpStrength, 0.1, 0, 10))
+			changed = true;
+	}
+	if (mAlphaMask) {
+		if (ImGui::SliderFloat("Alpha cutoff", &mAlphaCutoff, 0, 1))
+			changed = true;
+	}
 	ImGui::PopItemWidth();
 
 	const float w = ImGui::CalcItemWidth() - 4;
-	for (uint i = 0; i < MaterialData::gDataCount; i++)
-		if (mValues[i].mImage) {
-			ImGui::Text(mValues[i].mImage.image()->resourceName().c_str());
-			ImGui::Image(Gui::getTextureID(mValues[i].mImage), ImVec2(w, w * mValues[i].mImage.extent().height / (float)mValues[i].mImage.extent().width));
+	for (const Image::View& image : mImages)
+		if (image) {
+			ImGui::Text(image.image()->resourceName().c_str());
+			ImGui::Image(Gui::getTextureID(image), ImVec2(w, w * image.extent().height / (float)image.extent().width));
 		}
 	if (mAlphaMask) {
+		if (ImGui::SliderFloat("Alpha cutoff", &mAlphaCutoff, 0, 1))
+			changed = true;
 		ImGui::Text(mAlphaMask.image()->resourceName().c_str());
 		ImGui::Image(Gui::getTextureID(mAlphaMask), ImVec2(w, w * mAlphaMask.extent().height / (float)mAlphaMask.extent().width));
 	}
@@ -1070,7 +1127,6 @@ void Medium::drawGui(Node& node) {
 	if (ImGui::ColorEdit3("Density", mDensityScale.data(), ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_Float)) changed = true;
 	if (ImGui::ColorEdit3("Albedo", mAlbedoScale.data(), ImGuiColorEditFlags_Float)) changed = true;
 	if (ImGui::SliderFloat("Anisotropy", &mAnisotropy, -.999f, .999f)) changed = true;
-	if (ImGui::SliderFloat("Attenuation Unit", &mAttenuationUnit, 0, 1)) changed = true;
 
 	if (changed) {
 		const auto scene = node.findAncestor<Scene>();

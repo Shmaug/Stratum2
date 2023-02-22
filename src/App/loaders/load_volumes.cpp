@@ -33,7 +33,6 @@ Medium createMedium(CommandBuffer& commandBuffer, const string& name, const shar
 	h.mDensityScale = float3::Ones();
 	h.mAnisotropy = 0.f;
 	h.mAlbedoScale = float3::Ones();
-	h.mAttenuationUnit = 0.5f;
 	h.mDensityGrid = density;
 	h.mAlbedoGrid = albedo;
 	if (density) {

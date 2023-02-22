@@ -37,14 +37,11 @@ float2 sampleUniformTriangle(const float u1, const float u2) {
     const float a = sqrt(u1);
     return float2(1 - a, a * u2);
 }
-float2 sampleUniformSphere(const float u1, const float u2) {
-    return float2(2 * M_PI * u2, acos(2 * u1 - 1));
-}
-float3 sampleUniformSphereCartesian(const float u1, const float u2) {
-    const float z = 1 - 2 * u1;
+float3 sampleUniformSphere(const float u1, const float u2) {
+	const float z = 1 - 2 * u2;
     const float r = sqrt(max(0, 1 - z * z));
-    const float phi = 2 * M_PI * u2;
-    return float3(r * cos(phi), r * sin(phi), z);
+    const float phi = 2 * M_PI * u1;
+	return float3(r * cos(phi), r * sin(phi), z);
 }
 
 float2 sampleConcentricDisc(const float u1, const float u2) {

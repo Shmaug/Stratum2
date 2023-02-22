@@ -33,6 +33,7 @@ public:
 private:
 	shared_ptr<vk::raii::DescriptorPool> mDescriptorPool;
 	vector<shared_ptr<vk::raii::DescriptorSet>> mDescriptorSets;
+	vector<shared_ptr<vk::raii::DescriptorSetLayout>> mDescriptorSetLayouts;
 	Descriptors mDescriptors;
 };
 

@@ -63,6 +63,8 @@ private:
 
 	Image::View mPrevVisibility;
 	Image::View mPrevDepth;
+	Image::View mPrevAccumColor;
+	Image::View mPrevAccumMoments;
 };
 
 }

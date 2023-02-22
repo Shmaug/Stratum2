@@ -8,6 +8,7 @@
 #include <Core/Profiler.hpp>
 
 #include <imgui/imgui.h>
+#include <ImGuizmo.h>
 
 namespace stm2 {
 
@@ -17,6 +18,10 @@ TestRenderer::TestRenderer(Node& node) : mNode(node) {
 
 	Device& device = *mNode.findAncestor<Device>();
 	createPipelines(device);
+
+	mPushConstants["mMinDepth"] = 2u;
+	mPushConstants["mMaxDepth"] = 5u;
+	mPushConstants["mMaxNullCollisions"] = 1000;
 }
 
 void TestRenderer::createPipelines(Device& device) {
@@ -30,6 +35,7 @@ void TestRenderer::createPipelines(Device& device) {
 	md.mImmutableSamplers["gScene.mStaticSampler1"] = { samplerRepeat };
 	md.mBindingFlags["gScene.mVertexBuffers"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
 	md.mBindingFlags["gScene.mImages"]  = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	md.mBindingFlags["gScene.mImage2s"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
 	md.mBindingFlags["gScene.mImage1s"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
 	md.mBindingFlags["gScene.mVolumes"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
 
@@ -51,6 +57,7 @@ void TestRenderer::drawGui() {
 		Device& device = *mNode.findAncestor<Device>();
 		device->waitIdle();
 		mResourcePool.clear();
+		mPrevViewTransforms.clear();
 	}
 	if (ImGui::Button("Reload shaders")) {
 		Device& device = *mNode.findAncestor<Device>();
@@ -59,8 +66,17 @@ void TestRenderer::drawGui() {
 	}
 
 	if (ImGui::CollapsingHeader("Configuration")) {
+		ImGui::Checkbox("Alpha testing", &mAlphaTest);
+		ImGui::Checkbox("Normal maps", &mNormalMaps);
+		ImGui::Checkbox("Shading normals", &mShadingNormals);
+		ImGui::Checkbox("Performance counters", &mPerformanceCounters);
+
 		ImGui::Checkbox("Random frame seed", &mRandomPerFrame);
-		ImGui::DragFloat("AO Distance", &mPushConstants["mAODistance"].get<float>());
+		ImGui::PushItemWidth(40);
+		ImGui::DragScalar("Min depth", ImGuiDataType_U32, &mPushConstants["mMinDepth"].get<uint32_t>(), .2f);
+		ImGui::DragScalar("Max depth", ImGuiDataType_U32, &mPushConstants["mMaxDepth"].get<uint32_t>(), .2f);
+		ImGui::DragScalar("Max null collisions", ImGuiDataType_U32, &mPushConstants["mMaxNullCollisions"].get<uint32_t>());
+		ImGui::PopItemWidth();
 		ImGui::Checkbox("Denoise ", &mDenoise);
 		ImGui::Checkbox("Tonemap", &mTonemap);
 	}
@@ -76,9 +92,36 @@ void TestRenderer::drawGui() {
 void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
 	ProfilerScope ps("PathTracer::render", &commandBuffer);
 
+	mResourcePool.clean();
+
 	const shared_ptr<Scene>      scene      = mNode.findAncestor<Scene>();
 	const shared_ptr<Denoiser>   denoiser   = mNode.findDescendant<Denoiser>();
 	const shared_ptr<Tonemapper> tonemapper = mNode.findDescendant<Tonemapper>();
+
+	for (auto it = mSelectionData.begin(); it != mSelectionData.end();) {
+		if (it->first.buffer()->inFlight())
+			break;
+
+		const uint32_t selectedInstance = it->first.cast<VisibilityData>()[0].instanceIndex();
+		if (shared_ptr<Inspector> inspector = mNode.root()->findDescendant<Inspector>()) {
+			if (selectedInstance == INVALID_INSTANCE || selectedInstance >= scene->frameData().mInstanceNodes.size())
+				inspector->select(nullptr);
+			else {
+				if (shared_ptr<Node> selected = scene->frameData().mInstanceNodes[selectedInstance].lock()) {
+					if (it->second) {
+						shared_ptr<Node> tn;
+						if (selected->findAncestor<TransformData>(&tn))
+							inspector->select(tn);
+						else
+							inspector->select(selected);
+					} else
+						inspector->select(selected);
+				}
+			}
+		}
+
+		it = mSelectionData.erase(it);
+	}
 
 	const vk::Extent3D extent = renderTarget.extent();
 
@@ -118,7 +161,9 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 	descriptors[{ "gRenderParams.mDepth", 0 }]      = ImageDescriptor{ depthImage     , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 
 	bool changed = false;
+	bool hasMedia = false;
 
+	vector<ViewData> viewsBufferData;
 	Buffer::View<ViewData> viewsBuffer;
 
 	// scene descriptors + views
@@ -151,36 +196,62 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 			return;
 		}
 
-		const auto prevViewTransforms = mResourcePool.getLastBuffer<TransformData>("mViewTransforms");
-
-		vector<ViewData>      viewsBufferData(views.size());
+		viewsBufferData.resize(views.size());
 		vector<TransformData> viewTransformsBufferData(views.size());
 		vector<TransformData> prevInverseViewTransformsData(views.size());
 		for (uint32_t i = 0; i < views.size(); i++) {
 			const auto&[view,viewTransform] = views[i];
 			viewsBufferData[i] = view;
 			viewTransformsBufferData[i] = viewTransform;
-			if (prevViewTransforms) {
-				prevInverseViewTransformsData[i] = prevViewTransforms[i].inverse();
-				if ((prevViewTransforms[i].m != viewTransform.m).any())
+			if (mPrevViewTransforms.size() == views.size()) {
+				prevInverseViewTransformsData[i] = mPrevViewTransforms[i].inverse();
+				if ((mPrevViewTransforms[i].m != viewTransform.m).any())
 					changed = true;
 			} else
 				prevInverseViewTransformsData[i] = viewTransform.inverse();
 		}
 
+		mPrevViewTransforms = viewTransformsBufferData;
+
 		viewsBuffer = mResourcePool.uploadData<ViewData>(commandBuffer, "mViews", viewsBufferData);
 
-		mPushConstants["mViewCount"] = (uint32_t)views.size();
 		descriptors[{ "gRenderParams.mViews", 0 }]                     = viewsBuffer;
 		descriptors[{ "gRenderParams.mViewTransforms", 0 }]            = mResourcePool.uploadData<TransformData>(commandBuffer, "mViewTransforms", viewTransformsBufferData);
 		descriptors[{ "gRenderParams.mPrevViewInverseTransforms", 0 }] = mResourcePool.uploadData<TransformData>(commandBuffer, "mPrevViewInverseTransforms", prevInverseViewTransformsData);
+
+
+		// find if views are inside a volume
+		vector<uint32_t> viewMediumIndices(views.size());
+		ranges::fill(viewMediumIndices, INVALID_INSTANCE);
+
+		scene->mNode.forEachDescendant<Medium>([&](Node& node, const shared_ptr<Medium>& vol) {
+			hasMedia = true;
+			for (uint32_t i = 0; i < views.size(); i++) {
+				const float3 localViewPos = nodeToWorld(node).inverse().transformPoint( viewTransformsBufferData[i].transformPoint(float3::Zero()) );
+				if (vol->mDensityGrid->grid<float>()->worldBBox().isInside(nanovdb::Vec3R(localViewPos[0], localViewPos[1], localViewPos[2])))
+					viewMediumIndices[i] = sceneData.mInstanceTransformMap.at(vol.get()).second;
+			}
+		});
+
+		descriptors[{ "gRenderParams.mViewMediumIndices", 0 }] = mResourcePool.uploadData<uint>(commandBuffer, "mViewMediumIndices", viewMediumIndices);
+
+		mPushConstants["mOutputExtent"] = uint2(renderTarget.extent().width, renderTarget.extent().height);
+		mPushConstants["mViewCount"] = (uint32_t)views.size();
+		mPushConstants["mEnvironmentMaterialAddress"] = sceneData.mEnvironmentMaterialAddress;
 	}
 
+
+	Defines defines;
+	if (hasMedia)             defines["gHasMedia"]            = "true";
+	if (mAlphaTest)           defines["gAlphaTest"]           = "true";
+	if (mNormalMaps)          defines["gNormalMaps"]          = "true";
+	if (mShadingNormals)      defines["gShadingNormals"]      = "true";
+	if (mPerformanceCounters) defines["gPerformanceCounters"] = "true";
+
+	auto pipeline = mPipeline.get(commandBuffer.mDevice, defines);
+
 	// create descriptor sets
-
-	auto pipeline = mPipeline.get(commandBuffer.mDevice);
-
-	const shared_ptr<DescriptorSets> descriptorSets = pipeline->getDescriptorSets(descriptors);
+	const shared_ptr<DescriptorSets> descriptorSets = mResourcePool.getDescriptorSets(*pipeline, "DescriptorSets", descriptors);
 
 	if (mRandomPerFrame)
 		mPushConstants["mRandomSeed"] = (uint32_t)rand();
@@ -212,13 +283,27 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 
 	// run tonemapper
 	if (mTonemap && tonemapper)
-		tonemapper->render(commandBuffer, processedOutput, renderTarget, (mDenoise && denoiser && denoiser->demodulateAlbedo()) ? albedoImage : Image::View{});
+		tonemapper->render(commandBuffer, processedOutput, renderTarget, (mDenoise && denoiser && denoiser->demodulateAlbedo() && processedOutput != outputImage) ? albedoImage : Image::View{});
 	else {
 		// just copy processedOutput to renderTarget
 		if (processedOutput.image()->format() == renderTarget.image()->format())
 			Image::copy(commandBuffer, processedOutput, renderTarget);
 		else
 			Image::blit(commandBuffer, processedOutput, renderTarget);
+	}
+
+
+	// copy VisibilityData for selected pixel for scene object picking
+	if (!ImGui::GetIO().WantCaptureMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsUsing()) {
+		const ImVec2 c = ImGui::GetIO().MousePos;
+		for (const ViewData& view : viewsBufferData)
+			if (view.isInside(int2(c.x, c.y))) {
+				Buffer::View<VisibilityData> selectionBuffer = make_shared<Buffer>(commandBuffer.mDevice, "SelectionData", sizeof(uint2), vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+				visibilityImage.barrier(commandBuffer, vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferRead);
+				selectionBuffer.copyFromImage(commandBuffer, visibilityImage.image(), visibilityImage.subresourceLayer(), vk::Offset3D{int(c.x), int(c.y), 0}, vk::Extent3D{1,1,1});
+				mSelectionData.push_back(make_pair(selectionBuffer, ImGui::GetIO().KeyShift));
+				break;
+			}
 	}
 }
 

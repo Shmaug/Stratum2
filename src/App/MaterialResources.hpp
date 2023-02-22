@@ -37,12 +37,14 @@ struct MaterialResources {
 	ByteAppendBuffer mMaterialData;
 
 	unordered_map<Image::View, uint32_t> mImage4s;
+	unordered_map<Image::View, uint32_t> mImage2s;
 	unordered_map<Image::View, uint32_t> mImage1s;
 	unordered_map<pair<shared_ptr<Buffer>, vk::DeviceSize>, uint32_t> mVolumeDataMap;
 
 	inline void clear() {
 		mMaterialData.clear();
 		mImage4s.clear();
+		mImage2s.clear();
 		mImage1s.clear();
 		mVolumeDataMap.clear();
 	}
@@ -50,9 +52,13 @@ struct MaterialResources {
 	inline uint32_t getIndex(const Image::View& image) {
 		if (!image) return ~0u;
 		const Image::View tmp(image.image(), image.subresourceRange(), image.type());
-		if (channelCount(tmp.image()->format()) == 1) {
+		const uint32_t channels = channelCount(tmp.image()->format());
+		if (channels == 1) {
 			auto it = mImage1s.find(tmp);
 			return (it == mImage1s.end()) ? mImage1s.emplace(tmp, (uint32_t)mImage1s.size()).first->second : it->second;
+		} else if (channels == 2) {
+			auto it = mImage2s.find(tmp);
+			return (it == mImage2s.end()) ? mImage2s.emplace(tmp, (uint32_t)mImage2s.size()).first->second : it->second;
 		} else {
 			auto it = mImage4s.find(tmp);
 			return (it == mImage4s.end()) ? mImage4s.emplace(tmp, (uint32_t)mImage4s.size()).first->second : it->second;

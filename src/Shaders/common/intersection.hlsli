@@ -1,6 +1,16 @@
 #pragma once
 
-#include "shading_data.hlsli"
+#ifndef gHasMedia
+#define gHasMedia false
+#endif
+#ifndef gAlphaTest
+#define gAlphaTest false
+#endif
+#ifndef gPerformanceCounters
+#define gPerformanceCounters false
+#endif
+
+#include "material.hlsli"
 #include "materials/medium.hlsli"
 #include "rng.hlsli"
 
@@ -18,9 +28,9 @@ struct IntersectionResult {
 		get { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
 		set { BF_SET(mInstancePrimitiveIndex, newValue, 16, 16); }
 	}
-	InstanceData  getInstance()  { return gScene.mInstances[mInstanceIndex]; }
-	TransformData getTransform() { return gScene.mInstanceTransforms[mInstanceIndex]; }
-	uint getLightIndex()         { return gScene.mInstanceLightMap[mInstanceIndex]; }
+	InstanceData  getInstance()   { return gScene.mInstances[mInstanceIndex]; }
+	TransformData getTransform()  { return gScene.mInstanceTransforms[mInstanceIndex]; }
+	uint          getLightIndex() { return gScene.mInstanceLightMap[mInstanceIndex]; }
 };
 
 float3 rayOffset(const float3 P, const float3 Ng) {
@@ -100,19 +110,26 @@ extension SceneParameters {
 						rayQuery.CommitNonOpaqueTriangleHit();
 						break;
 					}
+
                     const MeshInstanceData instance = reinterpret<MeshInstanceData>(mInstances[mInstanceIndex]);
-                    const uint alphaImage = mMaterialData.Load<uint>(instance.getMaterialAddress() + ImageValue4::PackedSize * MaterialData::gDataCount);
-					if (alphaImage >= gImageCount)
-						break;
-                    const MeshVertexInfo vertexInfo = mMeshVertexInfo[instance.vertexInfoIndex()];
+
+                    uint alphaMask;
+                    float alphaCutoff;
+					getMaterialAlphaMask(instance.getMaterialAddress(), alphaMask, alphaCutoff);
+					if (alphaMask >= gImageCount)
+                        break;
+
+					const MeshVertexInfo vertexInfo = mMeshVertexInfo[instance.vertexInfoIndex()];
                     if (vertexInfo.texcoordBuffer() >= gVertexBufferCount)
                         break;
+
                     const uint3 tri = loadTriangleIndices(mVertexBuffers[NonUniformResourceIndex(vertexInfo.indexBuffer())], vertexInfo.indexStride(), vertexInfo.indexStride(), rayQuery.CandidatePrimitiveIndex());
 					float2 v0,v1,v2;
 					loadTriangleAttribute(mVertexBuffers[NonUniformResourceIndex(vertexInfo.texcoordBuffer())], vertexInfo.texcoordOffset(), vertexInfo.texcoordStride(), tri, v0, v1, v2);
+
 					const float2 barycentrics = rayQuery.CandidateTriangleBarycentrics();
-					const float2 uv = v0 + (v1 - v0)*barycentrics.x + (v2 - v0)*barycentrics.y;
-					if (mImage1s[NonUniformResourceIndex(alphaImage)].SampleLevel(mStaticSampler, uv, 0) >= 0.25)
+                    const float2 uv = v0 + (v1 - v0) * barycentrics.x + (v2 - v0) * barycentrics.y;
+                    if (mImage1s[NonUniformResourceIndex(alphaMask)].SampleLevel(mStaticSampler, uv, 0) >= alphaCutoff)
 						rayQuery.CommitNonOpaqueTriangleHit();
 					break;
 				}
@@ -129,7 +146,6 @@ extension SceneParameters {
                 isect.mShadingData.mPosition = ray.Direction;
                 isect.mShadingData.mPackedGeometryNormal = isect.mShadingData.mPackedShadingNormal = packNormal(ray.Direction);
 				isect.mShadingData.mShapeArea = -1;
-				isect.mShadingData.mTexcoord = cartesianToSphericalUv(ray.Direction);
 				return false;
 			}
 			case COMMITTED_TRIANGLE_HIT: {
@@ -171,12 +187,7 @@ extension SceneParameters {
         if (!gHasMedia)
             return traceRay(ray, true, /*out*/ isect);
 
-		// load medium
-		Medium medium;
-		if (curMediumInstance != INVALID_INSTANCE)
-			medium = Medium(mInstances[curMediumInstance].getMaterialAddress());
-
-        const float3 origin_ = ray.Origin;
+        const float3 origin = ray.Origin;
 
         ray.Origin += ray.Direction * ray.TMin;
 		ray.TMin = 0;
@@ -188,25 +199,25 @@ extension SceneParameters {
 			if (curMediumInstance != INVALID_INSTANCE) {
 				const TransformData invTransform = mInstanceInverseTransforms[curMediumInstance];
 
-                float3 _dirPdf, _neePdf;
+                float3 dirPdf3, neePdf3;
                 bool scattered;
-				const float3 p = medium.deltaTrack<true>(
+                const float3 p = Medium(mInstances[curMediumInstance].getMaterialAddress()).deltaTrack<true>(
 					rng,
 					invTransform.transformPoint(ray.Origin),
 					invTransform.transformVector(ray.Direction),
 					isect.mDistance,
 					/*inout*/ beta,
-					/*out*/ _dirPdf,
-					/*out*/ _neePdf,
+					/*out*/ dirPdf3,
+					/*out*/ neePdf3,
 					/*out*/ scattered);
 
-				dirPdf *= average(_dirPdf);
-				neePdf *= average(_neePdf);
+				dirPdf *= average(dirPdf3);
+				neePdf *= average(neePdf3);
 
 				if (scattered) {
 					// medium scattering event
                     isect.mShadingData = makeVolumeShadingData(reinterpret<VolumeInstanceData>(mInstances[curMediumInstance]), mInstanceTransforms[curMediumInstance].transformPoint(p));
-                    isect.mDistance = length(isect.mShadingData.mPosition - origin_);
+                    isect.mDistance = length(isect.mShadingData.mPosition - origin);
 					isect.mInstanceIndex = curMediumInstance;
                     isect.mPrimitiveIndex = INVALID_PRIMITIVE;
                     isect.mPrimitivePickPdf = 0;
@@ -216,20 +227,17 @@ extension SceneParameters {
 
 			if (!hit) return false; // missed scene
 
-            if (isect.getInstance().getType() != InstanceType::eVolume)
-				return true;
+            if (isect.mShadingData.isSurface())
+				return true; // hit surface
 
-			const float3 ng = isect.mShadingData.getGeometryNormal();
-			if (dot(ng, ray.Direction) < 0) {
-				// entering medium
-				curMediumInstance = isect.mInstanceIndex;
-				medium = Medium(isect.mShadingData.getMaterialAddress());
-				ray.Origin = rayOffset(isect.mShadingData.mPosition, -ng);
-			} else {
+            if (dot(isect.mShadingData.getGeometryNormal(), ray.Direction) > 0) {
 				// leaving medium
 				curMediumInstance = INVALID_INSTANCE;
-				ray.Origin = rayOffset(isect.mShadingData.mPosition, ng);
+			} else {
+				// entering medium
+				curMediumInstance = isect.mInstanceIndex;
             }
+			ray.Origin = rayOffset(isect.mShadingData.mPosition, isect.mShadingData.getGeometryNormal(), ray.Direction);
             ray.TMax -= isect.mDistance;
 		}
 
@@ -278,7 +286,7 @@ extension SceneParameters {
 			if (curMediumInstance != INVALID_INSTANCE) {
 				const TransformData invTransform = mInstanceInverseTransforms[curMediumInstance];
 
-                float3 _dirPdf, _neePdf;
+                float3 dirPdf3, neePdf3;
                 bool scattered;
 				medium.deltaTrack<false>(
 					rng,
@@ -286,12 +294,12 @@ extension SceneParameters {
 					invTransform.transformVector(ray.Direction),
 					isect.mDistance,
 					/*inout*/ beta,
-					/*out*/ _dirPdf,
-					/*out*/ _neePdf,
+					/*out*/ dirPdf3,
+					/*out*/ neePdf3,
 					/*out*/ scattered);
 
-				dirPdf *= average(_dirPdf);
-				neePdf *= average(_neePdf);
+				dirPdf *= average(dirPdf3);
+				neePdf *= average(neePdf3);
                 if (all(beta) <= 0)
 					return;
 			}

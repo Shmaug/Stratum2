@@ -139,8 +139,8 @@ void main(uint3 index : SV_DispatchThreadID) {
 
 	float3 radiance = gInput[index.xy].rgb;
 
-	if (gModulateAlbedo)
-		radiance *= (1e-2 + gAlbedo[index.xy].rgb);
+    if (gModulateAlbedo)
+        radiance *= (1e-2 + gAlbedo[index.xy].rgb);
 
 	radiance *= pow(2, gPushConstants.mExposure);
 

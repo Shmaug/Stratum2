@@ -1,6 +1,6 @@
 #pragma once
 
-#include "DescriptorSets.hpp"
+#include "Pipeline.hpp"
 
 namespace stm2 {
 
@@ -15,6 +15,36 @@ public:
 		mDescriptorSets.clear();
 		mImages.clear();
 		mBuffers.clear();
+	}
+
+	inline void clean(uint32_t maxAge = 16) {
+		for (auto&[name, items] : mDescriptorSets) {
+			for (auto it = items.begin(); it != items.end();) {
+				const auto& resource = *it;
+				if (resource->mDevice.frameIndex() - resource->lastFrameUsed() > maxAge)
+					it = items.erase(it);
+				else
+					it++;
+			}
+		}
+		for (auto&[name, items] : mImages) {
+			for (auto it = items.begin(); it != items.end();) {
+				const auto& resource = it->image();
+				if (resource->mDevice.frameIndex() - resource->lastFrameUsed() > maxAge)
+					it = items.erase(it);
+				else
+					it++;
+			}
+		}
+		for (auto&[name, items] : mBuffers) {
+			for (auto it = items.begin(); it != items.end();) {
+				const auto& resource = it->buffer();
+				if (resource->mDevice.frameIndex() - resource->lastFrameUsed() > maxAge)
+					it = items.erase(it);
+				else
+					it++;
+			}
+		}
 	}
 
 	inline Image::View getLastImage(const string& name) const {
@@ -85,9 +115,9 @@ public:
 		auto& images = mImages[name];
 
 		for (const auto& img : images) {
-			if (img.extent().width  < metadata.mExtent.width ||
-				img.extent().height < metadata.mExtent.height ||
-				img.extent().depth  < metadata.mExtent.depth ||
+			if (img.extent().width  != metadata.mExtent.width ||
+				img.extent().height != metadata.mExtent.height ||
+				img.extent().depth  != metadata.mExtent.depth ||
 				img.image()->format() != metadata.mFormat ||
 				!(img.image()->usage() & metadata.mUsage))
 				continue;
@@ -101,6 +131,33 @@ public:
 		images.emplace_back(img);
 		img.image()->markUsed();
 		return img;
+	}
+
+	inline shared_ptr<DescriptorSets> getDescriptorSets(Pipeline& pipeline, const string& name, const Descriptors& descriptors = {}) {
+		auto& descriptorSets = mDescriptorSets[name];
+
+		for (const auto& sets : descriptorSets) {
+			if (sets->inFlight() || sets->mPipeline.descriptorSetLayouts().size() != pipeline.descriptorSetLayouts().size())
+				continue;
+			bool same = true;
+			for (uint32_t i = 0; i < sets->mPipeline.descriptorSetLayouts().size(); i++) {
+				if (sets->mPipeline.descriptorSetLayouts()[i] == pipeline.descriptorSetLayouts()[i])
+					continue;
+				same = false;
+				break;
+			}
+			if (same) {
+				sets->markUsed();
+				sets->write(descriptors);
+				return sets;
+			}
+		}
+
+		shared_ptr<DescriptorSets> sets = make_shared<DescriptorSets>(pipeline, name);
+		descriptorSets.emplace_back(sets);
+		sets->markUsed();
+		sets->write(descriptors);
+		return sets;
 	}
 
 	void drawGui();

@@ -5,7 +5,6 @@
 #include <nanovdb/util/GridHandle.h>
 
 #include <Core/Mesh.hpp>
-#include <Core/Pipeline.hpp>
 #include <Core/DeviceResourcePool.hpp>
 
 #include "Node.hpp"
@@ -14,6 +13,14 @@
 namespace stm2 {
 
 TransformData nodeToWorld(const Node& node);
+
+template<int N>
+struct ImageValue {
+	VectorType<float,N> mValue;
+	Image::View mImage;
+
+	bool drawGui(const string& label);
+};
 
 struct MeshPrimitive {
 	shared_ptr<Material> mMaterial;
@@ -27,6 +34,15 @@ struct SpherePrimitive {
 	float mRadius;
 
 	void drawGui(Node& node);
+};
+
+struct EnvironmentMap : public ImageValue<3> {
+    inline void store(MaterialResources &resources) const {
+        resources.mMaterialData.AppendN(mValue);
+        resources.mMaterialData.Append(resources.getIndex(mImage));
+    }
+
+    void drawGui(Node &node);
 };
 
 struct Camera {

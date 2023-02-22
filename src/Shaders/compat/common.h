@@ -2,6 +2,10 @@
 
 #include "hlslcompat.h"
 
+#ifdef __cplusplus
+#include <Core/math.hpp>
+#endif
+
 STM_NAMESPACE_BEGIN
 
 inline float max3(const float3 x) { return max(max(x[0], x[1]), x[2]); }

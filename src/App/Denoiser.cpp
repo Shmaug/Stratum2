@@ -33,19 +33,11 @@ Denoiser::Denoiser(Node& node) : mNode(node) {
 
 
 void Denoiser::createPipelines(Device& device) {
-	auto samplerClamp = make_shared<vk::raii::Sampler>(*device, vk::SamplerCreateInfo({},
-		vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eLinear,
-		vk::SamplerAddressMode::eClampToEdge, vk::SamplerAddressMode::eClampToEdge, vk::SamplerAddressMode::eClampToEdge,
-		0, true, 8, false, vk::CompareOp::eAlways, 0, VK_LOD_CLAMP_NONE));
-
-	ComputePipeline::Metadata md;
-	md.mImmutableSamplers["mStaticSampler"] = { samplerClamp };
-
 	const filesystem::path shaderPath = filesystem::path(*device.mInstance.findArgument("shaderKernelPath")) / "svgf";
-	mTemporalAccumulationPipeline = ComputePipelineCache(shaderPath / "temporal_accumulation.slang", "main"    , "cs_6_6", {}, md);
-	mEstimateVariancePipeline     = ComputePipelineCache(shaderPath / "estimate_variance.slang"    , "main"    , "cs_6_6", {}, md);
-	mAtrousPipeline               = ComputePipelineCache(shaderPath / "atrous.slang"               , "main"    , "cs_6_6", {}, md);
-	mCopyRGBPipeline              = ComputePipelineCache(shaderPath / "atrous.slang"               , "copy_rgb", "cs_6_6", {}, md);
+	mTemporalAccumulationPipeline = ComputePipelineCache(shaderPath / "temporal_accumulation.slang", "main"    , "cs_6_6");
+	mEstimateVariancePipeline     = ComputePipelineCache(shaderPath / "estimate_variance.slang"    , "main"    , "cs_6_6");
+	mAtrousPipeline               = ComputePipelineCache(shaderPath / "atrous.slang"               , "main"    , "cs_6_6");
+	mCopyRGBPipeline              = ComputePipelineCache(shaderPath / "atrous.slang"               , "copy_rgb", "cs_6_6");
 }
 
 void Denoiser::drawGui() {
@@ -56,6 +48,8 @@ void Denoiser::drawGui() {
 		mResourcePool.clear();
 		mPrevVisibility = {};
 		mPrevDepth = {};
+		mPrevAccumColor = {};
+		mPrevAccumMoments = {};
 	}
 	if (ImGui::Button("Reload shaders")) {
 		Device& device = *mNode.findAncestor<Device>();
@@ -115,13 +109,12 @@ Image::View Denoiser::denoise(
 	const Buffer::View<ViewData>& views) {
 	ProfilerScope ps("Denoiser::denoise", &commandBuffer);
 
+	mResourcePool.clean();
+
 	if (ImGui::IsKeyPressed(ImGuiKey_F5))
 		mResetAccumulation = true;
 
 	// Initialize resources
-
-	const auto prevAccumColor   = mResourcePool.getLastImage("mAccumColor");
-	const auto prevAccumMoments = mResourcePool.getLastImage("mAccumMoments");
 
 	const vk::Extent3D extent = radiance.extent();
 
@@ -165,44 +158,46 @@ Image::View Denoiser::denoise(
 		{"gDebugMode", "(DenoiserDebugMode)" + to_string((uint32_t)mDebugMode) },
 	};
 
-	if (!mResetAccumulation && mPrevVisibility && mPrevVisibility.extent() == visibility.extent()) {
+	auto instanceIndexMap = mNode.findAncestor<Scene>()->frameData().mResourcePool.getLastBuffer<uint32_t>("mInstanceIndexMap");
+	if (!mResetAccumulation && instanceIndexMap && mPrevAccumColor && mPrevAccumMoments && mPrevVisibility && mPrevVisibility.extent() == visibility.extent()) {
 		Descriptors descriptors;
 		descriptors[{"gParams.mViews",0}]            = views;
-		descriptors[{"gParams.mInstanceIndexMap",0}] = mNode.findAncestor<Scene>()->frameData().mResourcePool.getLastBuffer<uint32_t>("mInstanceIndexMap");
-		descriptors[{"gParams.mVisibility",0}]       = ImageDescriptor{ visibility      , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-		descriptors[{"gParams.mPrevVisibility",0}]   = ImageDescriptor{ mPrevVisibility , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-		descriptors[{"gParams.mDepth",0}]            = ImageDescriptor{ depth           , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-		descriptors[{"gParams.mPrevDepth",0}]        = ImageDescriptor{ mPrevDepth      , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-		descriptors[{"gParams.mPrevUVs",0}]          = ImageDescriptor{ prevUVs         , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-		descriptors[{"gParams.mInput",0}]            = ImageDescriptor{ radiance        , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-		descriptors[{"gParams.mAlbedo",0}]           = ImageDescriptor{ albedo          , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-		descriptors[{"gParams.mAccumColor",0}]       = ImageDescriptor{ accumColor      , vk::ImageLayout::eGeneral              , vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite, {} };
-		descriptors[{"gParams.mAccumMoments",0}]     = ImageDescriptor{ accumMoments    , vk::ImageLayout::eGeneral              , vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite, {} };
-		descriptors[{"gParams.mFilterImages", 0}]    = ImageDescriptor{ temp[0]         , vk::ImageLayout::eGeneral              , vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite, {} };
-		descriptors[{"gParams.mFilterImages", 1}]    = ImageDescriptor{ temp[1]         , vk::ImageLayout::eGeneral              , vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite, {} };
-		descriptors[{"gParams.mPrevAccumColor",0}]   = ImageDescriptor{ prevAccumColor  , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-		descriptors[{"gParams.mPrevAccumMoments",0}] = ImageDescriptor{ prevAccumMoments, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{"gParams.mInstanceIndexMap",0}] = instanceIndexMap;
+		descriptors[{"gParams.mVisibility",0}]       = ImageDescriptor{ visibility       , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{"gParams.mPrevVisibility",0}]   = ImageDescriptor{ mPrevVisibility  , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{"gParams.mDepth",0}]            = ImageDescriptor{ depth            , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{"gParams.mPrevDepth",0}]        = ImageDescriptor{ mPrevDepth       , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{"gParams.mPrevUVs",0}]          = ImageDescriptor{ prevUVs          , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{"gParams.mInput",0}]            = ImageDescriptor{ radiance         , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{"gParams.mAlbedo",0}]           = ImageDescriptor{ albedo           , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{"gParams.mAccumColor",0}]       = ImageDescriptor{ accumColor       , vk::ImageLayout::eGeneral              , vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite, {} };
+		descriptors[{"gParams.mAccumMoments",0}]     = ImageDescriptor{ accumMoments     , vk::ImageLayout::eGeneral              , vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite, {} };
+		descriptors[{"gParams.mFilterImages", 0}]    = ImageDescriptor{ temp[0]          , vk::ImageLayout::eGeneral              , vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite, {} };
+		descriptors[{"gParams.mFilterImages", 1}]    = ImageDescriptor{ temp[1]          , vk::ImageLayout::eGeneral              , vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite, {} };
+		descriptors[{"gParams.mPrevAccumColor",0}]   = ImageDescriptor{ mPrevAccumColor  , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{"gParams.mPrevAccumMoments",0}] = ImageDescriptor{ mPrevAccumMoments, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
 
 		output = accumColor;
 
 		{ // temporal accumulation
 			ProfilerScope ps("Temporal accumulation", &commandBuffer);
-			auto temporalAccumulation = mTemporalAccumulationPipeline.get(commandBuffer.mDevice, defines);
-			temporalAccumulation->dispatchTiled(commandBuffer, extent, descriptors, {}, {
+			auto accumulationPipeline = mTemporalAccumulationPipeline.get(commandBuffer.mDevice, defines);
+			accumulationPipeline->dispatchTiled(commandBuffer, extent, mResourcePool.getDescriptorSets(*accumulationPipeline, "AccumulationDescriptors", descriptors), {}, {
 				{ "mViewCount", PushConstantValue((uint32_t)views.size()) },
 				{ "mHistoryLimit", PushConstantValue(mHistoryLimit) },
 			});
 		}
 
 		if (mAtrousIterations > 0) {
+
 			{ // estimate variance
 				temp[0].barrier(commandBuffer, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderWrite);
 				accumColor.barrier(commandBuffer, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 				accumMoments.barrier(commandBuffer, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 
 				ProfilerScope ps("Estimate variance", &commandBuffer);
-				auto estimateVariance = mEstimateVariancePipeline.get(commandBuffer.mDevice, defines);
-				estimateVariance->dispatchTiled(commandBuffer, extent, descriptors, {}, {
+				auto estimateVariancePipeline = mEstimateVariancePipeline.get(commandBuffer.mDevice, defines);
+				estimateVariancePipeline->dispatchTiled(commandBuffer, extent, mResourcePool.getDescriptorSets(*estimateVariancePipeline, "EstimateVarianceDescriptors", descriptors), {}, {
 					{ "mViewCount", PushConstantValue((uint32_t)views.size()) },
 					{ "mHistoryLimit", PushConstantValue(mHistoryLimit) },
 					{ "mVarianceBoostLength", PushConstantValue(mVarianceBoostLength) },
@@ -211,13 +206,13 @@ Image::View Denoiser::denoise(
 
 			ProfilerScope ps("Filter image", &commandBuffer);
 			auto atrousPipeline = mAtrousPipeline.get(commandBuffer.mDevice, defines);
-			auto atrousDescriptors = atrousPipeline->getDescriptorSets(descriptors);
+			auto atrousDescriptorSets = mResourcePool.getDescriptorSets(*atrousPipeline, "AtrousDescriptors", descriptors);
 
 			for (uint32_t i = 0; i < mAtrousIterations; i++) {
 				temp[0].barrier(commandBuffer, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 				temp[1].barrier(commandBuffer, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 
-				atrousPipeline->dispatchTiled(commandBuffer, extent, atrousDescriptors, {}, {
+				atrousPipeline->dispatchTiled(commandBuffer, extent, atrousDescriptorSets, {}, {
 					{ "mViewCount", PushConstantValue((uint32_t)views.size()) },
 					{ "mSigmaLuminanceBoost", PushConstantValue(mSigmaLuminanceBoost) },
 					{ "mIteration", PushConstantValue(i) },
@@ -225,11 +220,11 @@ Image::View Denoiser::denoise(
 				});
 
 				if (i+1 == mHistoryTap) {
-					// copy rgb (keep w) to AccumColor
+					// copy rgb (not alpha channel) to AccumColor
 					temp[0].barrier(commandBuffer, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 					temp[1].barrier(commandBuffer, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 					auto copyRgb = mCopyRGBPipeline.get(commandBuffer.mDevice, defines);
-					copyRgb->dispatchTiled(commandBuffer, extent, descriptors, {}, {});
+					copyRgb->dispatchTiled(commandBuffer, extent, mResourcePool.getDescriptorSets(*copyRgb, "CopyRGBDescriptors", descriptors));
 				}
 			}
 			output = temp[mAtrousIterations%2];
@@ -243,6 +238,8 @@ Image::View Denoiser::denoise(
 
 	mPrevVisibility = visibility;
 	mPrevDepth = depth;
+	mPrevAccumColor   = accumColor;
+	mPrevAccumMoments = accumMoments;
 
 	return output;
 }

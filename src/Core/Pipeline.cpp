@@ -6,18 +6,18 @@
 namespace stm2 {
 
 DescriptorSets::DescriptorSets(Pipeline& pipeline, const string& name) :
-	Device::Resource(pipeline.mDevice, name), mPipeline(pipeline), mDescriptorPool(pipeline.mDevice.descriptorPool()) {
+	Device::Resource(pipeline.mDevice, name), mPipeline(pipeline), mDescriptorPool(pipeline.mDevice.descriptorPool()), mDescriptorSetLayouts(mPipeline.descriptorSetLayouts()) {
 	// get descriptor set layouts
-	vector<vk::DescriptorSetLayout> layouts(mPipeline.descriptorSetLayouts().size());
-	ranges::transform(mPipeline.descriptorSetLayouts(), layouts.begin(), [](auto& l){ return **l; });
+	vector<vk::DescriptorSetLayout> layouts(mDescriptorSetLayouts.size());
+	ranges::transform(mDescriptorSetLayouts, layouts.begin(), [](auto& l){ return **l; });
 
 	// allocate descriptor sets
-	vk::raii::DescriptorSets sets(*mPipeline.mDevice, vk::DescriptorSetAllocateInfo(**mDescriptorPool, layouts));
+	vk::raii::DescriptorSets sets(*mDevice, vk::DescriptorSetAllocateInfo(**mDescriptorPool, layouts));
 
 	mDescriptorSets.resize(sets.size());
 	for (uint32_t i = 0; i < sets.size(); i++) {
 		mDescriptorSets[i] = make_shared<vk::raii::DescriptorSet>(move(sets[i]));
-		pipeline.mDevice.setDebugName(**mDescriptorSets[i], resourceName() + "[" + to_string(i) + "]");
+		mDevice.setDebugName(**mDescriptorSets[i], resourceName() + "[" + to_string(i) + "]");
 	}
 }
 

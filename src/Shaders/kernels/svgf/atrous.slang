@@ -232,5 +232,5 @@ void copy_rgb(uint3 index : SV_DispatchThreadID) {
 	uint2 resolution;
 	gParams.mAccumColor.GetDimensions(resolution.x, resolution.y);
 	if (any(index.xy >= resolution)) return;
-	gParams.mAccumColor[index.xy] = float4(gParams.mFilterImages[0][index.xy].rgb, gParams.mAccumColor[index.xy].w);
+	gParams.mAccumColor[index.xy] = float4(gParams.mFilterImages[0][index.xy].rgb, gParams.mAccumColor[index.xy].a);
 }

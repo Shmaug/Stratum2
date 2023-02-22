@@ -92,21 +92,26 @@ shared_ptr<Node> Scene::loadGltf(CommandBuffer& commandBuffer, const filesystem:
 
 	cout << "Loading materials..." << endl;
 	ranges::transform(model.materials, materials.begin(), [&](const tinygltf::Material& material) {
-		ImageValue<3> emission(double3::Map(material.emissiveFactor.data()).cast<float>(), getImage(material.emissiveTexture.index, true));
+		ImageValue<3> emission{
+			double3::Map(material.emissiveFactor.data()).cast<float>(),
+			getImage(material.emissiveTexture.index, true) };
 		if (material.extensions.find("KHR_materials_emissive_strength") != material.extensions.end())
 			emission.mValue *= (float)material.extensions.at("KHR_materials_emissive_strength").Get("emissiveStrength").GetNumberAsDouble();
 
-		ImageValue<3> baseColor(double3::Map(material.pbrMetallicRoughness.baseColorFactor.data()).cast<float>(), getImage(material.pbrMetallicRoughness.baseColorTexture.index, true));
-		ImageValue<4> metallicRoughness(double4(0, material.pbrMetallicRoughness.roughnessFactor, material.pbrMetallicRoughness.metallicFactor, 0).cast<float>(), getImage(material.pbrMetallicRoughness.metallicRoughnessTexture.index, false));
-		float eta = material.extensions.contains("KHR_materials_ior") ? (float)material.extensions.at("KHR_materials_ior").Get("ior").GetNumberAsDouble() : 1.5f;
-		float transmission = material.extensions.contains("KHR_materials_transmission") ? (float)material.extensions.at("KHR_materials_transmission").Get("transmissionFactor").GetNumberAsDouble() : 0;
-
+		const ImageValue<3> baseColor{
+			double3::Map(material.pbrMetallicRoughness.baseColorFactor.data()).cast<float>(),
+			getImage(material.pbrMetallicRoughness.baseColorTexture.index, true) };
+		const ImageValue<4> metallicRoughness{
+			double4(0, material.pbrMetallicRoughness.roughnessFactor, material.pbrMetallicRoughness.metallicFactor, 0).cast<float>(),
+			getImage(material.pbrMetallicRoughness.metallicRoughnessTexture.index, false) };
+		const float eta = material.extensions.contains("KHR_materials_ior") ? (float)material.extensions.at("KHR_materials_ior").Get("ior").GetNumberAsDouble() : 1.5f;
+		const float transmission = material.extensions.contains("KHR_materials_transmission") ? (float)material.extensions.at("KHR_materials_transmission").Get("transmissionFactor").GetNumberAsDouble() : 0;
 
 		Material m = makeMetallicRoughnessMaterial(commandBuffer, baseColor, metallicRoughness, ImageValue<3>(float3::Constant(transmission), {}), eta, emission);
 
 		if (material.extensions.contains("KHR_materials_clearcoat")) {
-			auto& v = material.extensions.at("KHR_materials_clearcoat");
-			m.clearcoat() = (float)v.Get("clearcoatFactor").GetNumberAsDouble();
+			const auto& v = material.extensions.at("KHR_materials_clearcoat");
+			m.mMaterialData.setClearcoat((float)v.Get("clearcoatFactor").GetNumberAsDouble());
 		}
 
 		m.mBumpImage = getImage(material.normalTexture.index, false);
@@ -284,8 +289,8 @@ shared_ptr<Node> Scene::loadGltf(CommandBuffer& commandBuffer, const filesystem:
 				sphere->mRadius = (float)l.extras.Get("radius").GetNumberAsDouble();
 				Material m;
 				const float3 emission = double3::Map(l.color.data()).cast<float>();
-				m.baseColor() = emission/luminance(emission);
-				m.emission() = luminance(emission) * (float)(l.intensity / (4*M_PI*sphere->mRadius*sphere->mRadius));
+				m.mMaterialData.setBaseColor(float3::Zero());
+				m.mMaterialData.setEmission(emission * (float)(l.intensity / (4*M_PI*sphere->mRadius*sphere->mRadius)));
 				sphere->mMaterial = make_shared<Material>(m);
 			}
 		}

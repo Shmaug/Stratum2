@@ -3,18 +3,6 @@
 #ifndef gShadingNormals
 #define gShadingNormals false
 #endif
-#ifndef gAlphaTest
-#define gAlphaTest false
-#endif
-#ifndef gHasMedia
-#define gHasMedia false
-#endif
-#ifndef gMaxNullCollisions
-#define gMaxNullCollisions 1000
-#endif
-#ifndef gPerformanceCounters
-#define gPerformanceCounters false
-#endif
 
 #include "scene.hlsli"
 
@@ -45,7 +33,7 @@ extension ShadingData {
     }
 
     float shadingNormalCorrection<let Adjoint : bool>(const float3 localDirIn, const float3 localDirOut) {
-        if (isMedium())
+        if (!isSurface())
             return 1;
 
         const float3 localGeometryNormal = toLocal(getGeometryNormal());
@@ -249,5 +237,5 @@ extension SceneParameters {
 		case InstanceType::eVolume:
 			return makeVolumeShadingData(reinterpret<VolumeInstanceData>(instance), transform.transformPoint(localPosition));
 		}
-	}
+    }
 }
