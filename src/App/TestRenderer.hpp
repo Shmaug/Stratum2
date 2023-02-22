@@ -21,7 +21,8 @@ public:
 	void render(CommandBuffer& commandBuffer, const Image::View& renderTarget);
 
 private:
-	ComputePipelineCache mPipeline;
+	ComputePipelineCache mRenderPipeline;
+	ComputePipelineCache mRenderIterationPipeline;
 	PushConstants mPushConstants;
 
 	bool mPerformanceCounters = false;
@@ -30,6 +31,7 @@ private:
 	bool mShadingNormals = true;
 	bool mSampleDirectIllumination = true;
 	bool mDebugPaths = false;
+	bool mMultiDispatch = false;
 
 	bool mRandomPerFrame = true;
 

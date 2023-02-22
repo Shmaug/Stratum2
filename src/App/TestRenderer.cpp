@@ -51,7 +51,8 @@ void TestRenderer::createPipelines(Device& device) {
 	};
 
 	const filesystem::path shaderPath = *device.mInstance.findArgument("shaderKernelPath");
-	mPipeline = ComputePipelineCache(shaderPath / "testrenderer.slang", "render", "sm_6_6", args, md);
+	mRenderPipeline          = ComputePipelineCache(shaderPath / "testrenderer.slang", "Render"         , "sm_6_6", args, md);
+	mRenderIterationPipeline = ComputePipelineCache(shaderPath / "testrenderer.slang", "RenderIteration", "sm_6_6", args, md);
 }
 
 void TestRenderer::drawGui() {
@@ -77,6 +78,7 @@ void TestRenderer::drawGui() {
 		if (ImGui::Checkbox("Shading normals", &mShadingNormals)) changed = true;
 		if (ImGui::Checkbox("Sample direct illumination", &mSampleDirectIllumination)) changed = true;
 
+		if (ImGui::Checkbox("Multi dispatch", &mMultiDispatch)) changed = true;
 		if (ImGui::Checkbox("Performance counters", &mPerformanceCounters)) changed = true;
 		if (ImGui::Checkbox("Debug paths", &mDebugPaths)) changed = true;
 		if (mDebugPaths) {
@@ -172,12 +174,15 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 
 	// assign descriptors
 
+	auto pathStates = mResourcePool.getBuffer<byte>(commandBuffer.mDevice,  "mPathStates", mMultiDispatch ? extent.width*extent.height*64 : 64);
+
 	Descriptors descriptors;
 	descriptors[{ "gRenderParams.mOutput", 0 }]     = ImageDescriptor{ outputImage    , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 	descriptors[{ "gRenderParams.mAlbedo", 0 }]     = ImageDescriptor{ albedoImage    , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 	descriptors[{ "gRenderParams.mPrevUVs", 0 }]    = ImageDescriptor{ prevUVsImage   , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 	descriptors[{ "gRenderParams.mVisibility", 0 }] = ImageDescriptor{ visibilityImage, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 	descriptors[{ "gRenderParams.mDepth", 0 }]      = ImageDescriptor{ depthImage     , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+	descriptors[{ "gRenderParams.mPathStates", 0 }] = pathStates;
 
 	bool changed = false;
 	bool hasMedia = false;
@@ -273,20 +278,32 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 	if (mPerformanceCounters)      defines["gPerformanceCounters"]      = "true";
 	if (mSampleDirectIllumination) defines["gSampleDirectIllumination"] = "true";
 	if (mDebugPaths)               defines["gDebugPaths"]               = "true";
+	if (mMultiDispatch)            defines["gMultiDispatch"]            = "true";
 
-	auto pipeline = mPipeline.get(commandBuffer.mDevice, defines);
+	auto renderPipeline = mRenderPipeline.get(commandBuffer.mDevice, defines);
 
 	// create descriptor sets
-	const shared_ptr<DescriptorSets> descriptorSets = mResourcePool.getDescriptorSets(*pipeline, "DescriptorSets", descriptors);
+	const shared_ptr<DescriptorSets> descriptorSets = mResourcePool.getDescriptorSets(*renderPipeline, "DescriptorSets", descriptors);
 
 	if (mRandomPerFrame)
 		mPushConstants["mRandomSeed"] = (uint32_t)rand();
 
 	// render
 	{
-		ProfilerScope ps("Sample visibility", &commandBuffer);
-		pipeline->dispatchTiled(commandBuffer, extent, descriptorSets, {}, mPushConstants);
+		ProfilerScope ps("Trace camera paths", &commandBuffer);
+		renderPipeline->dispatchTiled(commandBuffer, extent, descriptorSets, {}, mPushConstants);
+
+		if (mMultiDispatch) {
+			auto renderIterationPipeline = mRenderIterationPipeline.get(commandBuffer.mDevice, defines, renderPipeline->descriptorSetLayouts());
+			for (uint i = 1; i < mPushConstants["mMaxDepth"].get<uint32_t>(); i++) {
+				pathStates.barrier(commandBuffer,
+					vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
+					vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
+				renderIterationPipeline->dispatchTiled(commandBuffer, extent, descriptorSets, {}, mPushConstants);
+			}
+		}
 	}
+
 
 	// post processing
 
