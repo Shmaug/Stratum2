@@ -55,51 +55,6 @@ extension SceneParameters {
 		}
 		return mImages[NonUniformResourceIndex(imageIndex)].SampleLevel(mStaticSampler, uv, lod);
     }
-
-	// returns emission
-    float3 SampleEnvironment(const uint address, const float2 rnd, out float3 dirOut, out float2 uv, out float pdf) {
-        if (address == -1) {
-            pdf = 0;
-            return 0;
-        }
-
-        const uint4 packedData = mMaterialData.Load<uint4>((int)address);
-        float3 emission = asfloat(packedData.rgb);
-        const uint environmentImage = packedData.w;
-
-        if (environmentImage < gImageCount) {
-            uv = sampleTexel(mImages[environmentImage], rnd, pdf);
-            emission *= mImages[environmentImage].SampleLevel(mStaticSampler, uv, 0).rgb;
-            dirOut = sphericalUvToCartesian(uv);
-            pdf /= (2 * M_PI * M_PI * sqrt(1 - dirOut.y * dirOut.y));
-        } else {
-            dirOut = sampleUniformSphere(rnd.x, rnd.y);
-            uv = cartesianToSphericalUv(dirOut);
-            pdf = 1 / (4 * M_PI);
-        }
-		return emission;
-    }
-
-    // returns emission
-    float3 EvaluateEnvironment(const uint address, const float3 direction, out float pdfW) {
-        if (address == -1) {
-            pdfW = 0;
-            return 0;
-        }
-
-        const uint4 packedData = mMaterialData.Load<uint4>((int)address);
-        float3 emission = asfloat(packedData.rgb);
-        const uint environmentImage = packedData.w;
-
-        if (environmentImage < gImageCount) {
-            const float2 uv = cartesianToSphericalUv(direction);
-            emission *= mImages[environmentImage].SampleLevel(mStaticSampler, uv, 0).rgb;
-            pdfW = sampleTexelPdf(mImages[environmentImage], uv) / (2 * M_PI * M_PI * sqrt(1 - direction.y * direction.y));
-        } else {
-            pdfW = 1 / (4 * M_PI);
-        }
-        return emission;
-    }
 }
 
 uint getViewIndex(const uint2 index, const uint2 extent, const uint viewCount) {

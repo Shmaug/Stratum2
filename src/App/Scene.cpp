@@ -118,11 +118,14 @@ shared_ptr<Node> Scene::loadEnvironmentMap(CommandBuffer& commandBuffer, const f
 	Image::Metadata md = {};
 	shared_ptr<Buffer> pixels;
 	tie(pixels, md.mFormat, md.mExtent) = Image::loadFile(commandBuffer.mDevice, filepath, false);
-	md.mUsage = vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage;
+	md.mUsage = vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
+	md.mLevels = Image::maxMipLevels(md.mExtent);
 	const shared_ptr<Image> img = make_shared<Image>(commandBuffer.mDevice, filepath.filename().string(), md);
 
 	pixels->copyToImage(commandBuffer, img);
 	commandBuffer.trackResource(pixels);
+
+	img->generateMipMaps(commandBuffer);
 
 	const shared_ptr<Node> node = Node::create(filepath.stem().string());
 	node->makeComponent<EnvironmentMap>(ImageValue<3>{ float3::Ones(), img });

@@ -33,9 +33,6 @@ extension ShadingData {
     }
 
     float shadingNormalCorrection<let Adjoint : bool>(const float3 localDirIn, const float3 localDirOut) {
-        if (!isSurface())
-            return 1;
-
         const float3 localGeometryNormal = toLocal(getGeometryNormal());
         const float ngdotin = dot(localGeometryNormal, localDirIn);
         const float ngdotout = dot(localGeometryNormal, localDirOut);

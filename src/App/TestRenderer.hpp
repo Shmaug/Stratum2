@@ -24,10 +24,12 @@ private:
 	ComputePipelineCache mPipeline;
 	PushConstants mPushConstants;
 
+	bool mPerformanceCounters = false;
 	bool mAlphaTest = true;
 	bool mNormalMaps = true;
 	bool mShadingNormals = true;
-	bool mPerformanceCounters = false;
+	bool mSampleDirectIllumination = true;
+	bool mDebugPaths = false;
 
 	bool mRandomPerFrame = true;
 

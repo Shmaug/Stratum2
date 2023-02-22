@@ -244,13 +244,12 @@ extension SceneParameters {
         return false;
 	}
 
-    void traceVisibilityRay(RayDesc ray, inout RandomSampler rng, uint curMediumInstance, out float3 beta, out float dirPdf, out float neePdf) {
+    void traceVisibilityRay(RayDesc ray, inout RandomSampler rng, uint curMediumInstance, inout float3 beta, out float dirPdf, out float neePdf) {
         if (gPerformanceCounters)
             InterlockedAdd(mPerformanceCounters[1], 1);
 
 		dirPdf = 1;
 		neePdf = 1;
-		beta = 1;
 
 		if (!gHasMedia) {
             IntersectionResult isect;

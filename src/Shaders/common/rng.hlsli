@@ -34,7 +34,7 @@ uint4 pcg4d(uint4 v) {
 	return v;
 }
 
-#define unorm32ToFloat(x) (asfloat(0x3f800000 | ((x) >> 9)) - 1)
+#define unorm32ToFloat(x)
 
 struct RandomSampler {
 	uint4 mState;
@@ -49,37 +49,13 @@ struct RandomSampler {
 	}
 
 	[mutating]
-	uint next() {
+	uint4 next() {
 		mState.w++;
-        return pcg4d(mState).x;
-    }
-    [mutating]
-    uint2 next2() {
-        return uint2(next(), next());
-    }
-    [mutating]
-    uint3 next3() {
-        return uint3(next(), next(), next());
-    }
-    [mutating]
-    uint4 next4() {
-        return uint4(next(), next(), next(), next());
+        return pcg4d(mState);
     }
 
-	[mutating]
-    float nextFloat() {
-        return unorm32ToFloat(next());
-    }
     [mutating]
-    float2 nextFloat2() {
-        return unorm32ToFloat(next2());
-    }
-    [mutating]
-    float3 nextFloat3() {
-        return unorm32ToFloat(next3());
-    }
-    [mutating]
-    float4 nextFloat4() {
-        return unorm32ToFloat(next4());
+    float4 nextFloat() {
+        return (asfloat(0x3f800000 | ((next()) >> 9)) - 1);
     }
 };

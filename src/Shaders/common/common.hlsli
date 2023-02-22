@@ -38,8 +38,8 @@ float2 sampleUniformTriangle(const float u1, const float u2) {
     return float2(1 - a, a * u2);
 }
 float3 sampleUniformSphere(const float u1, const float u2) {
-	const float z = 1 - 2 * u2;
-    const float r = sqrt(max(0, 1 - z * z));
+	const float z = u2 * 2 - 1;
+    const float r = sqrt(max(1 - z * z, 0));
     const float phi = 2 * M_PI * u1;
 	return float3(r * cos(phi), r * sin(phi), z);
 }
@@ -74,96 +74,4 @@ float3 sampleCosHemisphere(const float u1, const float u2) {
 }
 float cosHemispherePdfW(const float cosTheta) {
 	return max(cosTheta, 0.f) / M_PI;
-}
-
-float2 sampleTexel(Texture2D<float4> image, float2 rnd, out float pdf, const uint maxIterations = 10) {
- 	uint2 imageExtent;
-	uint levelCount;
-	image.GetDimensions(0, imageExtent.x, imageExtent.y, levelCount);
-
-	pdf = 1;
-	int2 coord = 0;
-	uint2 lastExtent = 1;
- 	for (uint i = 1; i < min(maxIterations+1, levelCount-1); i++) {
-		const uint level = levelCount-1 - i;
-		uint tmp;
-		uint2 extent;
-		image.GetDimensions(level, extent.x, extent.y, tmp);
-		coord *= int2(extent/lastExtent);
-
-		float4 p = 0;
-		if (extent.x > 1) {
-			const float inv_h = 1/(float)extent.y;
-			float sy = sin(M_PI * (coord.y + 0.5f)*inv_h);
-			p[0] = luminance(image.Load(int3(coord + int2(0,0), (int)level)).rgb) * sy;
-			p[1] = luminance(image.Load(int3(coord + int2(1,0), (int)level)).rgb) * sy;
-			if (extent.y > 1) {
-				sy = sin(M_PI * (coord.y + 1 + 0.5f)*inv_h);
-				p[2] = luminance(image.Load(int3(coord + int2(0,1), (int)level)).rgb) * sy;
-				p[3] = luminance(image.Load(int3(coord + int2(1,1), (int)level)).rgb) * sy;
-			}
-		}
-		const float sum = dot(p, 1);
-		if (sum < 1e-6) continue;
-		p /= sum;
-
-		for (int j = 0; j < 4; j++) {
-			if (j == 3 || rnd.x < p[j]) {
-				coord += int2(j%2, j/2);
-				pdf *= p[j];
-				rnd.x /= p[j];
-				break;
-			}
-			rnd.x -= p[j];
-		}
-
-		lastExtent = extent;
-	}
-
-	pdf *= lastExtent.x*lastExtent.y;
-
-	return (float2(coord) + rnd) / float2(lastExtent);
-}
-float sampleTexelPdf(Texture2D<float4> image, const float2 uv, const uint maxIterations = 10) {
- 	uint2 imageExtent;
-	uint levelCount;
-	image.GetDimensions(0, imageExtent.x, imageExtent.y, levelCount);
-
-	float pdf = 1;
-	uint2 lastExtent = 1;
- 	for (uint i = 1; i < min(maxIterations+1, levelCount-1); i++) {
-		const uint level = levelCount-1 - i;
-		uint tmp;
-		uint2 size;
-		image.GetDimensions(level, size.x, size.y, tmp);
-
-		const int2 coord = int2(float2(size)*uv/2)*2;
-
-		float4 p = 0;
-		if (size.x > 1) {
-			const float inv_h = 1/(float)size.y;
-			float sy = sin(M_PI * (coord.y + 0.5f)*inv_h);
-			// TODO: preprocess image down to a single channel containing
-			// luminance and sin term, then use gather ops
-			p[0] = luminance(image.Load(int3(coord + int2(0,0), (int)level)).rgb) * sy;
-			p[1] = luminance(image.Load(int3(coord + int2(1,0), (int)level)).rgb) * sy;
-			if (size.y > 1) {
-				sy = sin(M_PI * (coord.y + 1 + 0.5f)*inv_h);
-				p[2] = luminance(image.Load(int3(coord + int2(0,1), (int)level)).rgb) * sy;
-				p[3] = luminance(image.Load(int3(coord + int2(1,1), (int)level)).rgb) * sy;
-			}
-		}
-		const float sum = dot(p, 1);
-		if (sum < 1e-6) continue;
-		p /= sum;
-
-		const uint2 o = min(uint2(uv*size) - coord, 1);
-		pdf *= p[o.y*2 + o.x];
-
-		lastExtent = size;
-	}
-
-	pdf *= lastExtent.x*lastExtent.y;
-
-	return pdf;
 }

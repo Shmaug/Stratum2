@@ -95,14 +95,14 @@ struct Medium {
 		dirPdf = 1;
 		neePdf = 1;
 
-		const uint channel = rng.next() % 3;
+		const uint channel = rng.next().x % 3;
 
         if (mDensityVolumeIndex == -1) {
 			// homogeneous volume
 
             const float3 sigma_t = density();
             if (sigma_t[channel] < 1e-6) return 0;
-            const float t = -log(1 - rng.nextFloat()) / sigma_t[channel];
+            const float t = -log(1 - rng.nextFloat().x) / sigma_t[channel];
             if (t < tmax) {
                 scattered = true;
                 beta   *= exp(-sigma_t * t) * (albedo() * sigma_t);
@@ -133,7 +133,7 @@ struct Medium {
         const float invMajorantMax = 1 / max3(majorant);
 
         for (uint iteration = 0; iteration < gMaxNullCollisions && any(beta > 0); iteration++) {
-            const float t = -log(1 - rng.nextFloat()) * invMajorantChannel;
+            const float t = -log(1 - rng.nextFloat().x) * invMajorantChannel;
 
 			if (t >= tmax) {
 				// transmitted without scattering
@@ -152,7 +152,7 @@ struct Medium {
 
             const float3 tr = exp(-majorant * t) * invMajorantMax;
 
-            if (Scattering && rng.nextFloat() < sigma_t[channel] * invMajorantChannel) {
+            if (Scattering && rng.nextFloat().x < sigma_t[channel] * invMajorantChannel) {
 				// real particle
                 beta   *= tr * sigma_t * sigma_s; // note: multiplication by localSigmaS is really part of BSDF computation
                 dirPdf *= tr * sigma_t;

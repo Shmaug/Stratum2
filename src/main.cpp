@@ -108,9 +108,12 @@ struct App {
 		auto pathTracerNode = sceneNode->addChild("Path tracer");
 		mInspector->select(pathTracerNode);
 		mRenderer = pathTracerNode->makeComponent<TestRenderer>(*pathTracerNode);
-		pathTracerNode->makeComponent<Denoiser>(*pathTracerNode);
-		pathTracerNode->makeComponent<Tonemapper>(*pathTracerNode);
-		mImageComparer = pathTracerNode->makeComponent<ImageComparer>(*pathTracerNode);
+
+		auto denoiserNode = pathTracerNode->addChild("Post process");
+		denoiserNode->makeComponent<Denoiser>(*pathTracerNode);
+		denoiserNode->makeComponent<Tonemapper>(*pathTracerNode);
+
+		mImageComparer = pathTracerNode->addChild("Image comparer")->makeComponent<ImageComparer>(*pathTracerNode);
 	}
 	inline ~App() {
 		(*mDevice)->waitIdle();

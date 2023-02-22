@@ -19,9 +19,11 @@ TestRenderer::TestRenderer(Node& node) : mNode(node) {
 	Device& device = *mNode.findAncestor<Device>();
 	createPipelines(device);
 
-	mPushConstants["mMinDepth"] = 2u;
+	mPushConstants["mRRDepth"] = 2u;
 	mPushConstants["mMaxDepth"] = 5u;
 	mPushConstants["mMaxNullCollisions"] = 1000;
+	mPushConstants["mDebugPathLengths"] = 3 | (1<<16);
+	mPushConstants["mEnvironmentSampleProbability"] = 0.9f;
 }
 
 void TestRenderer::createPipelines(Device& device) {
@@ -29,6 +31,7 @@ void TestRenderer::createPipelines(Device& device) {
 		vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eLinear,
 		vk::SamplerAddressMode::eRepeat, vk::SamplerAddressMode::eRepeat, vk::SamplerAddressMode::eRepeat,
 		0, true, 8, false, vk::CompareOp::eAlways, 0, VK_LOD_CLAMP_NONE));
+	device.setDebugName(**samplerRepeat, "TestRenderer/Sampler");
 
 	ComputePipeline::Metadata md;
 	md.mImmutableSamplers["gScene.mStaticSampler"]  = { samplerRepeat };
@@ -52,6 +55,8 @@ void TestRenderer::createPipelines(Device& device) {
 }
 
 void TestRenderer::drawGui() {
+	bool changed = false;
+
 	ImGui::PushID(this);
 	if (ImGui::Button("Clear resources")) {
 		Device& device = *mNode.findAncestor<Device>();
@@ -63,22 +68,36 @@ void TestRenderer::drawGui() {
 		Device& device = *mNode.findAncestor<Device>();
 		device->waitIdle();
 		createPipelines(device);
+		changed = true;
 	}
 
 	if (ImGui::CollapsingHeader("Configuration")) {
-		ImGui::Checkbox("Alpha testing", &mAlphaTest);
-		ImGui::Checkbox("Normal maps", &mNormalMaps);
-		ImGui::Checkbox("Shading normals", &mShadingNormals);
-		ImGui::Checkbox("Performance counters", &mPerformanceCounters);
+		if (ImGui::Checkbox("Alpha testing", &mAlphaTest)) changed = true;
+		if (ImGui::Checkbox("Normal maps", &mNormalMaps)) changed = true;
+		if (ImGui::Checkbox("Shading normals", &mShadingNormals)) changed = true;
+		if (ImGui::Checkbox("Sample direct illumination", &mSampleDirectIllumination)) changed = true;
 
-		ImGui::Checkbox("Random frame seed", &mRandomPerFrame);
+		if (ImGui::Checkbox("Performance counters", &mPerformanceCounters)) changed = true;
+		if (ImGui::Checkbox("Debug paths", &mDebugPaths)) changed = true;
+		if (mDebugPaths) {
+			if (ImGui::DragScalarN("Length, light vertices", ImGuiDataType_U16, &mPushConstants["mDebugPathLengths"].get<uint32_t>(), 2, .2f)) changed = true;
+		}
+
+		if (ImGui::Checkbox("Random frame seed", &mRandomPerFrame)) changed = true;
 		ImGui::PushItemWidth(40);
-		ImGui::DragScalar("Min depth", ImGuiDataType_U32, &mPushConstants["mMinDepth"].get<uint32_t>(), .2f);
-		ImGui::DragScalar("Max depth", ImGuiDataType_U32, &mPushConstants["mMaxDepth"].get<uint32_t>(), .2f);
-		ImGui::DragScalar("Max null collisions", ImGuiDataType_U32, &mPushConstants["mMaxNullCollisions"].get<uint32_t>());
+		if (ImGui::DragScalar("RR depth",  ImGuiDataType_U32, &mPushConstants["mRRDepth"].get<uint32_t>(), .2f)) changed = true;
+		if (ImGui::DragScalar("Max depth", ImGuiDataType_U32, &mPushConstants["mMaxDepth"].get<uint32_t>(), .2f)) changed = true;
+		if (ImGui::DragScalar("Max null collisions", ImGuiDataType_U32, &mPushConstants["mMaxNullCollisions"].get<uint32_t>())) changed = true;
+		if (ImGui::SliderFloat("Environment sample p", &mPushConstants["mEnvironmentSampleProbability"].get<float>(), 0, 1)) changed = true;
 		ImGui::PopItemWidth();
-		ImGui::Checkbox("Denoise ", &mDenoise);
-		ImGui::Checkbox("Tonemap", &mTonemap);
+		if (ImGui::Checkbox("Denoise ", &mDenoise)) changed = true;
+		if (ImGui::Checkbox("Tonemap", &mTonemap)) changed = true;
+	}
+
+	if (changed && mDenoise) {
+		const shared_ptr<Denoiser> denoiser = mNode.findDescendant<Denoiser>();
+		if (denoiser)
+			denoiser->resetAccumulation();
 	}
 
 	if (ImGui::CollapsingHeader("Resources")) {
@@ -238,15 +257,22 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 		mPushConstants["mOutputExtent"] = uint2(renderTarget.extent().width, renderTarget.extent().height);
 		mPushConstants["mViewCount"] = (uint32_t)views.size();
 		mPushConstants["mEnvironmentMaterialAddress"] = sceneData.mEnvironmentMaterialAddress;
+		mPushConstants["mLightCount"] = sceneData.mLightCount;
+		float4 sphere;
+		sphere.head<3>() = (sceneData.mAabbMax + sceneData.mAabbMin) / 2;
+		sphere[3] = length<float,3>(sceneData.mAabbMax - sphere.head<3>());
+		mPushConstants["mSceneSphere"] = sphere;
 	}
 
 
 	Defines defines;
-	if (hasMedia)             defines["gHasMedia"]            = "true";
-	if (mAlphaTest)           defines["gAlphaTest"]           = "true";
-	if (mNormalMaps)          defines["gNormalMaps"]          = "true";
-	if (mShadingNormals)      defines["gShadingNormals"]      = "true";
-	if (mPerformanceCounters) defines["gPerformanceCounters"] = "true";
+	if (hasMedia)                  defines["gHasMedia"]                 = "true";
+	if (mAlphaTest)                defines["gAlphaTest"]                = "true";
+	if (mNormalMaps)               defines["gNormalMaps"]               = "true";
+	if (mShadingNormals)           defines["gShadingNormals"]           = "true";
+	if (mPerformanceCounters)      defines["gPerformanceCounters"]      = "true";
+	if (mSampleDirectIllumination) defines["gSampleDirectIllumination"] = "true";
+	if (mDebugPaths)               defines["gDebugPaths"]               = "true";
 
 	auto pipeline = mPipeline.get(commandBuffer.mDevice, defines);
 
