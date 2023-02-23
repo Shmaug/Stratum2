@@ -75,8 +75,8 @@ extension SceneParameters {
 
 extension PackedMaterialData {
     void Store(RWTexture2D<float4> images[4], const uint2 index) {
-        images[0][index] = float4(getBaseColor(), 0);
-        images[1][index] = float4(getEmission(), 0);
+        images[0][index] = D3DX_R8G8B8A8_UNORM_to_FLOAT4(mPackedData[0]);
+        images[1][index] = D3DX_R8G8B8A8_UNORM_to_FLOAT4(mPackedData[1]);
         images[2][index] = D3DX_R8G8B8A8_UNORM_to_FLOAT4(mPackedData[2]);
         images[3][index] = D3DX_R8G8B8A8_UNORM_to_FLOAT4(mPackedData[3]);
 	}

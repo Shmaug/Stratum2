@@ -58,8 +58,10 @@ void from_gltf_pbr(uint3 index : SV_DispatchThreadId) {
     m.setClearcoat(1);
     m.setClearcoatGloss(1);
 	const float l = luminance(m.getBaseColor());
-	m.setTransmission(gUseTransmittance ? saturate(luminance(gTransmittance[index.xy].rgb)/(l > 0 ? l : 1)) : 1);
+    m.setTransmission(gUseTransmittance ? saturate(luminance(gTransmittance[index.xy].rgb) / (l > 0 ? l : 1)) : 1);
     m.setEta(1);
+    m.setSpecular(1);
+    m.setSheen(1);
 
     m.Store(gOutput, index.xy);
 }
@@ -98,6 +100,8 @@ void from_diffuse_specular(uint3 index : SV_DispatchThreadId) {
     m.setClearcoatGloss(1);
     m.setTransmission(gUseTransmittance ? saturate(lt / (ld + ls + lt)) : 1);
     m.setEta(1);
+    m.setSpecular(1);
+    m.setSheen(1);
 
     m.Store(gOutput, index.xy);
 }

@@ -203,6 +203,8 @@ Material Scene::makeMetallicRoughnessMaterial(CommandBuffer& commandBuffer, cons
 	m.mMaterialData.setClearcoatGloss(0);
 	m.mMaterialData.setTransmission(luminance(transmission.mValue));
 	m.mMaterialData.setEta(eta - 1);
+	m.mMaterialData.setSheen(0);
+	m.mMaterialData.setSpecular(1);
 	if (baseColor.mImage || metallic_roughness.mImage || transmission.mImage || emission.mImage) {
 		Descriptors descriptors;
 
@@ -267,6 +269,8 @@ Material Scene::makeDiffuseSpecularMaterial(CommandBuffer& commandBuffer, const 
 	m.mMaterialData.setClearcoatGloss(1);
 	m.mMaterialData.setTransmission(lt / (ld + ls + lt));
 	m.mMaterialData.setEta(eta - 1);
+	m.mMaterialData.setSheen(0);
+	m.mMaterialData.setSpecular(1);
 	if (diffuse.mImage || specular.mImage || transmission.mImage || roughness.mImage) {
 		Descriptors descriptors;
 
@@ -1084,14 +1088,16 @@ void Material::drawGui(Node& node) {
 	}
 
 	ImGui::PushItemWidth(80);
-	slider("Metallic",         mMaterialData.getMetallic(),       bind_front(&PackedMaterialData::setMetallic, &mMaterialData));
-	slider("Roughness",        mMaterialData.getRoughness(),      bind_front(&PackedMaterialData::setRoughness, &mMaterialData));
-	slider("Anisotropic",      mMaterialData.getAnisotropic(),    bind_front(&PackedMaterialData::setAnisotropic, &mMaterialData));
-	slider("Subsurface",       mMaterialData.getSubsurface(),     bind_front(&PackedMaterialData::setSubsurface, &mMaterialData));
-	slider("Clearcoat",        mMaterialData.getClearcoat(),      bind_front(&PackedMaterialData::setClearcoat, &mMaterialData));
+	slider("Roughness",        mMaterialData.getRoughness(),      bind_front(&PackedMaterialData::setRoughness,      &mMaterialData));
+	slider("Subsurface",       mMaterialData.getSubsurface(),     bind_front(&PackedMaterialData::setSubsurface,     &mMaterialData));
+	slider("Specular",         mMaterialData.getSpecular(),       bind_front(&PackedMaterialData::setSpecular,       &mMaterialData));
+	slider("Metallic",         mMaterialData.getMetallic(),       bind_front(&PackedMaterialData::setMetallic,       &mMaterialData));
+	slider("Anisotropic",      mMaterialData.getAnisotropic(),    bind_front(&PackedMaterialData::setAnisotropic,    &mMaterialData));
+	slider("Sheen",            mMaterialData.getSheen(),          bind_front(&PackedMaterialData::setSheen,          &mMaterialData));
+	slider("Clearcoat",        mMaterialData.getClearcoat(),      bind_front(&PackedMaterialData::setClearcoat,      &mMaterialData));
 	slider("Clearcoat gloss",  mMaterialData.getClearcoatGloss(), bind_front(&PackedMaterialData::setClearcoatGloss, &mMaterialData));
-	slider("Transmission",     mMaterialData.getTransmission(),   bind_front(&PackedMaterialData::setTransmission, &mMaterialData));
-	slider("Refraction index", mMaterialData.getEta(),            bind_front(&PackedMaterialData::setEta, &mMaterialData));
+	slider("Transmission",     mMaterialData.getTransmission(),   bind_front(&PackedMaterialData::setTransmission,   &mMaterialData));
+	slider("Refraction index", mMaterialData.getEta(),            bind_front(&PackedMaterialData::setEta,            &mMaterialData));
 
 	if (mBumpImage) {
 		if (ImGui::DragFloat("Bump Strength", &mBumpStrength, 0.1, 0, 10))

@@ -1,5 +1,3 @@
-#define gPerformanceCounters (false)
-
 #include "compat/path_tracer.h"
 struct PushConstants {
     uint mLightSubPathCount;
@@ -7,9 +5,6 @@ struct PushConstants {
     uint mSegmentIndex;
     float mLineRadius;
     float mLineLength;
-    float mMergeRadius;
-    float mHashGridMinCellSize;
-    float mHashGridCellPixelRadius;
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> gPushConstants;
 

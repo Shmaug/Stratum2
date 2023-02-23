@@ -7,6 +7,9 @@
 #ifndef gMultiDispatch
 #define gMultiDispatch false
 #endif
+#ifndef gPathSorting
+#define gPathSorting false
+#endif
 
 struct PushConstants {
 	uint mRandomSeed;
@@ -20,18 +23,26 @@ struct PushConstants {
     float mEnvironmentSampleProbability;
     float4 mSceneSphere;
     uint mDebugPathLengths;
+    uint mRenderIteration;
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> gPushConstants;
 
-#define gMaxNullCollisions gPushConstants.mMaxNullCollisions
-#define gLightCount gPushConstants.mLightCount
-#define gEnvironmentMaterialAddress gPushConstants.mEnvironmentMaterialAddress
-#define gEnvironmentSampleProbability gPushConstants.mEnvironmentSampleProbability
-#define gSceneSphere gPushConstants.mSceneSphere
 
+#define gMaxNullCollisions            gPushConstants.mMaxNullCollisions
+#define gLightCount                   gPushConstants.mLightCount
+#define gEnvironmentMaterialAddress   gPushConstants.mEnvironmentMaterialAddress
+#define gEnvironmentSampleProbability gPushConstants.mEnvironmentSampleProbability
+#define gSceneSphere                  gPushConstants.mSceneSphere
+
+#ifdef gLambertian
 #include "materials/lambertian.hlsli"
+#else
+#include "materials/disney.hlsli"
+#endif
+
 #include "common/intersection.hlsli"
 #include "common/lights.hlsli"
+#include "common/hashgrid.hlsli"
 
 
 struct PathState {
@@ -41,7 +52,7 @@ struct PathState {
     uint mPackedRayDirection;
     RandomSampler mRng;
     uint mPathLength; // number of segments
-    uint mPathIndex;
+    uint mPixelIndex;
     uint pad;
     float mDirPdfW;
 
@@ -49,8 +60,8 @@ struct PathState {
 		return unpackNormal(mPackedRayDirection);
 	}
 
-    uint2 getOutputIndex() {
-        return uint2(mPathIndex % gPushConstants.mOutputExtent.x, mPathIndex / gPushConstants.mOutputExtent.x);
+    uint2 getPixelCoord() {
+        return uint2(mPixelIndex % gPushConstants.mOutputExtent.x, mPixelIndex / gPushConstants.mOutputExtent.x);
 	}
 };
 
@@ -65,6 +76,8 @@ struct RenderParams {
     RWTexture2D<uint2> mVisibility;
     RWTexture2D<float4> mDepth;
     RWStructuredBuffer<PathState> mPathStates;
+    HashGrid<uint> mPathSort0;
+    HashGrid<uint> mPathSort1;
 
 	void StoreAuxillaryData(const uint2 index, const IntersectionResult isect, const float3 albedo) {
 		float2 prevPixelCoord = index + 0.5;
@@ -103,6 +116,8 @@ struct RenderParams {
 };
 ParameterBlock<RenderParams> gRenderParams;
 
+
+
 interface Interaction {
     bool canEvaluate();
     bool isSingular();
@@ -124,7 +139,7 @@ float mis(const float a, const float b) {
     return a2 / (a2 + b * b);
 }
 
-float PathWeight(const uint viewPathLength, const uint lightVertices, const float dirSamplePdfW, const float lightSamplePdfW) {
+float PathMisWeight(const uint viewPathLength, const uint lightVertices, const float dirSamplePdfW, const float lightSamplePdfW) {
     if (viewPathLength == 1 && lightVertices == 0)
         return 1;
 
@@ -138,8 +153,11 @@ float PathWeight(const uint viewPathLength, const uint lightVertices, const floa
         return mis(lightSamplePdfW, dirSamplePdfW);
 }
 
-void Connect(inout PathState state, const Interaction bsdf, const ShadingData shadingData) {
-    const IlluminationSampleRecord r = gScene.SampleIllumination(shadingData.mPosition, state.mRng.nextFloat());
+
+static PathState sPathState;
+
+void ConnectToLight(const Interaction bsdf, const ShadingData shadingData) {
+    const IlluminationSampleRecord r = gScene.SampleIllumination(shadingData.mPosition, sPathState.mRng.nextFloat());
     if (all(r.mRadiance <= 0) || r.mPdf <= 0)
         return;
 
@@ -152,10 +170,10 @@ void Connect(inout PathState state, const Interaction bsdf, const ShadingData sh
 
     float3 localDirIn, localDirOut;
     if (isMedium) {
-        localDirIn  = -state.getRayDirection();
+        localDirIn  = -sPathState.getRayDirection();
         localDirOut = r.mDirectionToLight;
     } else {
-        localDirIn  = shadingData.toLocal(-state.getRayDirection());
+        localDirIn  = shadingData.toLocal(-sPathState.getRayDirection());
         localDirOut = shadingData.toLocal(r.mDirectionToLight);
     }
 
@@ -170,140 +188,172 @@ void Connect(inout PathState state, const Interaction bsdf, const ShadingData sh
 		shadingData.mPosition :
 		rayOffset(shadingData.mPosition, shadingData.getGeometryNormal(), r.mDirectionToLight);
 
-    float dirPdf, neePdf;
+    float transDirPdf, transNeePdf;
     gScene.traceVisibilityRay(
         makeRay(rayOrigin, r.mDirectionToLight, 0, r.mDistanceToLight * 0.99),
-        state.mRng, state.mCurrentMedium, contrib, dirPdf, neePdf);
+        sPathState.mRng, sPathState.mCurrentMedium, contrib, transDirPdf, transNeePdf);
 
-	if (all(contrib <= 0) || neePdf <= 0)
+    if (all(contrib <= 0) || transNeePdf <= 0)
         return;
 
-    contrib /= neePdf;
+    contrib /= transNeePdf;
 
-    gRenderParams.AddRadiance(state.getOutputIndex(), state.mThroughput * contrib, PathWeight(state.mPathLength, 1, f.mFwdPdfW, r.mPdf * AtoW), state.mPathLength+1, 1);
+    gRenderParams.AddRadiance(sPathState.getPixelCoord(), sPathState.mThroughput * contrib, PathMisWeight(sPathState.mPathLength, 1, f.mFwdPdfW * transDirPdf, r.mPdf * AtoW * transNeePdf), sPathState.mPathLength+1, 1);
 }
 
-bool ProcessInteraction(inout PathState state, const Interaction bsdf, const IntersectionResult isect) {
+bool ProcessInteraction(const Interaction bsdf, const IntersectionResult isect, const float transDirPdf, const float transNeePdf) {
     const bool isMedium = gHasMedia && isect.mShadingData.isMedium();
 
-    if (state.mPathLength == 1)
-        gRenderParams.StoreAuxillaryData(state.getOutputIndex(), isect, bsdf.albedo());
+    if (sPathState.mPathLength == 1)
+        gRenderParams.StoreAuxillaryData(sPathState.getPixelCoord(), isect, bsdf.albedo());
 
     // surface lights are one-sided
-    if (isMedium || dot(state.getRayDirection(), isect.mShadingData.getGeometryNormal()) < 0) {
+    if (isMedium || dot(sPathState.getRayDirection(), isect.mShadingData.getGeometryNormal()) < 0) {
         gRenderParams.AddRadiance(
-            state.getOutputIndex(),
-			state.mThroughput * bsdf.emission(),
-			PathWeight(state.mPathLength, 0, state.mDirPdfW, gScene.LightSamplePdfW(state.getRayDirection(), isect)),
-			state.mPathLength + 1,
+            sPathState.getPixelCoord(),
+			sPathState.mThroughput * bsdf.emission(),
+			PathMisWeight(sPathState.mPathLength, 0, transDirPdf*sPathState.mDirPdfW, transNeePdf*gScene.LightSamplePdfW(sPathState.getRayDirection(), isect)),
+			sPathState.mPathLength + 1,
 			0);
     }
 
-    if (state.mPathLength >= gPushConstants.mMaxDepth)
+    if (sPathState.mPathLength >= gPushConstants.mMaxDepth)
         return false;
 
     if (!bsdf.canEvaluate())
         return false;
 
     if (gSampleDirectIllumination)
-		Connect(state, bsdf, isect.mShadingData);
+		ConnectToLight(bsdf, isect.mShadingData);
 
-    if (state.mPathLength >= gPushConstants.mRRDepth) {
+    if (sPathState.mPathLength >= gPushConstants.mRRDepth) {
         const float continueProb = bsdf.continuationProb();
         if (continueProb < 1) {
-            if (state.mRng.nextFloat().x >= continueProb)
+            if (sPathState.mRng.nextFloat().x >= continueProb)
                 return false;
-            state.mThroughput /= continueProb;
+            sPathState.mThroughput /= continueProb;
         }
     }
 
-    const float3 localDirIn = isMedium ? -state.getRayDirection() : isect.mShadingData.toLocal(-state.getRayDirection());
+    const float3 localDirIn = isMedium ? -sPathState.getRayDirection() : isect.mShadingData.toLocal(-sPathState.getRayDirection());
 
-    const DirectionSampleRecord s = bsdf.sampleDirection<false>(state.mRng.nextFloat().xyz, localDirIn);
-
-    state.mThroughput *= s.mReflectance / s.mFwdPdfW;
-    state.mDirPdfW = s.mFwdPdfW;
+    const DirectionSampleRecord s = bsdf.sampleDirection<false>(sPathState.mRng.nextFloat().xyz, localDirIn);
+    sPathState.mThroughput *= s.mReflectance / s.mFwdPdfW;
+    sPathState.mDirPdfW = s.mFwdPdfW;
 
     if (isMedium) {
-        state.mPackedRayDirection = packNormal(s.mDirection);
-        state.mRayOrigin = isect.mShadingData.mPosition;
+        sPathState.mPackedRayDirection = packNormal(s.mDirection);
+        sPathState.mRayOrigin = isect.mShadingData.mPosition;
     } else {
-		state.mThroughput  *= isect.mShadingData.shadingNormalCorrection<false>(localDirIn, s.mDirection);
-		state.mPackedRayDirection = packNormal(isect.mShadingData.toWorld(s.mDirection));
-        state.mRayOrigin = rayOffset(isect.mShadingData.mPosition, isect.mShadingData.getGeometryNormal(), state.getRayDirection());
+		sPathState.mThroughput  *= isect.mShadingData.shadingNormalCorrection<false>(localDirIn, s.mDirection);
+		sPathState.mPackedRayDirection = packNormal(isect.mShadingData.toWorld(s.mDirection));
+        sPathState.mRayOrigin = rayOffset(isect.mShadingData.mPosition, isect.mShadingData.getGeometryNormal(), sPathState.getRayDirection());
 	}
 
-    return !any(isnan(state.mThroughput)) && any(state.mThroughput > 0);
+    return !any(isnan(sPathState.mThroughput)) && any(sPathState.mThroughput > 0);
 }
 
-bool NextVertex(inout PathState state) {
+bool NextVertex() {
 	IntersectionResult isect;
 	float dirPdf, neePdf;
-	const bool hit = gScene.traceScatteringRay(makeRay(state.mRayOrigin, state.getRayDirection()), state.mRng, state.mCurrentMedium, state.mThroughput, dirPdf, neePdf, isect);
-	state.mThroughput /= dirPdf;
-	state.mPathLength++;
+	const bool hit = gScene.traceScatteringRay(makeRay(sPathState.mRayOrigin, sPathState.getRayDirection()), sPathState.mRng, sPathState.mCurrentMedium, sPathState.mThroughput, dirPdf, neePdf, isect);
+	sPathState.mThroughput /= dirPdf;
+	sPathState.mPathLength++;
 	isect.mShadingData.mTexcoordScreenSize = 0; // disable mipmaps for now
 
 	if (!hit) {
-        if (state.mPathLength == 1)
-            gRenderParams.StoreAuxillaryData(state.getOutputIndex(), isect, 1);
+        if (sPathState.mPathLength == 1)
+            gRenderParams.StoreAuxillaryData(sPathState.getPixelCoord(), isect, 1);
 		float envPdfW;
-		const float3 emission = gScene.EvaluateEnvironment(state.getRayDirection(), envPdfW);
-		gRenderParams.AddRadiance(
-			state.getOutputIndex(),
-			state.mThroughput * emission,
-			PathWeight(state.mPathLength, 0, state.mDirPdfW, envPdfW),
-			state.mPathLength+1,
+		const float3 emission = gScene.EvaluateEnvironment(sPathState.getRayDirection(), envPdfW);
+        gRenderParams.AddRadiance(
+            sPathState.getPixelCoord(),
+			sPathState.mThroughput * emission,
+			PathMisWeight(sPathState.mPathLength, 0, sPathState.mDirPdfW, envPdfW),
+			sPathState.mPathLength+1,
 			0);
 		return false;
 	}
 
 	if (gHasMedia && isect.mShadingData.isMedium()) {
-		return ProcessInteraction(state, Medium(isect.mShadingData.getMaterialAddress()), isect);
+		return ProcessInteraction(Medium(isect.mShadingData.getMaterialAddress()), isect, dirPdf, neePdf);
 	} else {
 		gScene.ApplyNormalMap(isect.mShadingData);
-		return ProcessInteraction(state, gScene.LoadMaterial(isect.mShadingData), isect);
+		return ProcessInteraction(gScene.LoadMaterial(isect.mShadingData), isect, dirPdf, neePdf);
 	}
 }
 
-PathState InitializeCameraPath(const uint2 index) {
-    const uint viewIndex = getViewIndex(index, gPushConstants.mOutputExtent, gPushConstants.mViewCount);
 
-    gRenderParams.mOutput[index] = float4(0, 0, 0, 1);
+void InitializeCameraPath(const uint2 index) {
+    const uint viewIndex = getViewIndex(index, gPushConstants.mOutputExtent, gPushConstants.mViewCount);
 
 	float2 uv;
 	const float3 localDir = gRenderParams.mViews[viewIndex].toWorld(index + 0.5, /*out*/ uv);
 	const TransformData t = gRenderParams.mViewTransforms[viewIndex];
 
-    PathState state;
-    state.mRayOrigin = float3(t.m[0][3], t.m[1][3], t.m[2][3]);
-    state.mPackedRayDirection = packNormal(normalize(t.transformVector(localDir)));
-    state.mCurrentMedium = gRenderParams.mViewMediumIndices[viewIndex];
-	state.mPathLength = 0;
-    state.mRng = RandomSampler(gPushConstants.mRandomSeed, index);
-    state.mThroughput = 1;
-    state.mPathIndex = index.y * gPushConstants.mOutputExtent.x + index.x;
-    return state;
+    sPathState.mRayOrigin = float3(t.m[0][3], t.m[1][3], t.m[2][3]);
+    sPathState.mCurrentMedium = gRenderParams.mViewMediumIndices[viewIndex];
+    sPathState.mThroughput = 1;
+    sPathState.mPackedRayDirection = packNormal(normalize(t.transformVector(localDir)));
+    sPathState.mRng = RandomSampler(gPushConstants.mRandomSeed, index);
+    sPathState.mPathLength = 0;
+    sPathState.mPixelIndex = index.y * gPushConstants.mOutputExtent.x + index.x;
+    sPathState.mDirPdfW = 0;
+
+    gRenderParams.mOutput[index] = float4(0, 0, 0, 1);
 }
 
+void LoadPathState(const uint threadIndex) {
+    if (gPathSorting) {
+        uint idx;
+        if ((gPushConstants.mRenderIteration % 2) == 0) {
+            if (threadIndex >= gRenderParams.mPathSort1.GetCurrentSize()) {
+				sPathState.mThroughput = 0;
+				return;
+			}
+			idx = gRenderParams.mPathSort1.mData[threadIndex];
+		} else {
+            if (threadIndex >= gRenderParams.mPathSort0.GetCurrentSize()) {
+				sPathState.mThroughput = 0;
+				return;
+			}
+            idx = gRenderParams.mPathSort0.mData[threadIndex];
+		}
+		sPathState = gRenderParams.mPathStates[idx];
+    } else
+        sPathState = gRenderParams.mPathStates[threadIndex];
+}
+
+void StorePathState(const uint threadIndex) {
+	gRenderParams.mPathStates[threadIndex] = sPathState;
+    if (gPathSorting) {
+        if (all(sPathState.mThroughput <= 0))
+            return;
+        if ((gPushConstants.mRenderIteration % 2) == 0) {
+            gRenderParams.mPathSort0.Append(sPathState.mRayOrigin, threadIndex);
+        } else {
+            gRenderParams.mPathSort1.Append(sPathState.mRayOrigin, threadIndex);
+        }
+    }
+}
 
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void Render(uint3 index: SV_DispatchThreadID, uint group_index: SV_GroupIndex) {
     if (any(index.xy >= gPushConstants.mOutputExtent)) return;
 
-    PathState state = InitializeCameraPath(index.xy);
+    InitializeCameraPath(index.xy);
 
-    while (state.mPathLength + 1 <= gPushConstants.mMaxDepth) {
-        if (!NextVertex(state)) {
-            state.mThroughput = 0;
+    while (sPathState.mPathLength + 1 <= gPushConstants.mMaxDepth) {
+        if (!NextVertex()) {
+            sPathState.mThroughput = 0;
             break;
         }
-		if (gMultiDispatch)
-			break;
+        if (gMultiDispatch) {
+            StorePathState(index.y * gPushConstants.mOutputExtent.x + index.x);
+            break;
+        }
 	}
-	if (gMultiDispatch)
-		gRenderParams.mPathStates[index.y * gPushConstants.mOutputExtent.x + index.x] = state;
 }
 
 [shader("compute")]
@@ -311,12 +361,11 @@ void Render(uint3 index: SV_DispatchThreadID, uint group_index: SV_GroupIndex) {
 void RenderIteration(uint3 index: SV_DispatchThreadID, uint group_index: SV_GroupIndex) {
     if (any(index.xy >= gPushConstants.mOutputExtent)) return;
 
-    PathState state = gRenderParams.mPathStates[index.y * gPushConstants.mOutputExtent.x + index.x];
+    LoadPathState(index.y * gPushConstants.mOutputExtent.x + index.x);
 
-    if (state.mPathLength + 1 <= gPushConstants.mMaxDepth) {
-        if (!NextVertex(state))
-            state.mThroughput = 0;
+    if (any(sPathState.mThroughput > 0) && sPathState.mPathLength + 1 <= gPushConstants.mMaxDepth) {
+        if (!NextVertex())
+            sPathState.mThroughput = 0;
+        StorePathState(index.y * gPushConstants.mOutputExtent.x + index.x);
     }
-
-    gRenderParams.mPathStates[index.y * gPushConstants.mOutputExtent.x + index.x] = state;
 }

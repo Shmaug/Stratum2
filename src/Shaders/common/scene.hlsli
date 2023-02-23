@@ -17,7 +17,7 @@ struct SceneParameters {
 	ByteAddressBuffer mMaterialData;
 	StructuredBuffer<MeshVertexInfo> mMeshVertexInfo;
 
-	RWStructuredBuffer<uint> mPerformanceCounters;
+	RWStructuredBuffer<uint> mRayCount;
 	SamplerState mStaticSampler;
 
 	ByteAddressBuffer mVertexBuffers[gVertexBufferCount];

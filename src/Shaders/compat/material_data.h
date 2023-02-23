@@ -11,8 +11,8 @@ STM_NAMESPACE_BEGIN
 
 struct PackedMaterialData {
     // The data is packed as a series of 8 bit quantities:
-    // { baseColor.r, baseColor.g   , baseColor.b , padding    }
-    // { emission.r , emission.g    , emission.b  , padding    }
+    // { baseColor.r, baseColor.g   , baseColor.b , specular   }
+    // { emission.r , emission.g    , emission.b  , sheen      }
 	// { metallic   , roughness     , anisotropic , subsurface }
 	// { clearcoat  , clearcoatGloss, transmission, eta        }
 	// Note: image indices, alpha mask, and normal map data are
@@ -32,6 +32,8 @@ struct PackedMaterialData {
             BF_GET(mPackedData[1],  8, 8) / float(255),
             BF_GET(mPackedData[1], 16, 8) / float(255)) * mEmissionScale;
     }
+    float getSpecular()       { return BF_GET(mPackedData[0], 24, 8) / float(255); }
+    float getSheen()          { return BF_GET(mPackedData[1], 24, 8) / float(255); }
 	float getMetallic()       { return BF_GET(mPackedData[2],  0, 8) / float(255); }
 	float getRoughness()      { return BF_GET(mPackedData[2],  8, 8) / float(255); }
 	float getAnisotropic()    { return BF_GET(mPackedData[2], 16, 8) / float(255); }
@@ -40,6 +42,9 @@ struct PackedMaterialData {
 	float getClearcoatGloss() { return BF_GET(mPackedData[3],  8, 8) / float(255); }
 	float getTransmission()   { return BF_GET(mPackedData[3], 16, 8) / float(255); }
 	float getEta()            { return BF_GET(mPackedData[3], 24, 8) / float(255); }
+
+    float getSpecularTint() { return 0; }
+    float getSheenTint()    { return 0; }
 
 
     SLANG_MUTATING
@@ -56,6 +61,8 @@ struct PackedMaterialData {
 		BF_SET(mPackedData[1], (uint)floor(saturate(newValue[1])*255 + 0.5f),  8, 8);
         BF_SET(mPackedData[1], (uint)floor(saturate(newValue[2])*255 + 0.5f), 16, 8);
     }
+	SLANG_MUTATING void setSpecular      (const float newValue) { BF_SET(mPackedData[0], (uint)floor(saturate(newValue)*255 + 0.5f), 24, 8); }
+	SLANG_MUTATING void setSheen         (const float newValue) { BF_SET(mPackedData[1], (uint)floor(saturate(newValue)*255 + 0.5f), 24, 8); }
 	SLANG_MUTATING void setMetallic      (const float newValue) { BF_SET(mPackedData[2], (uint)floor(saturate(newValue)*255 + 0.5f),  0, 8); }
 	SLANG_MUTATING void setRoughness     (const float newValue) { BF_SET(mPackedData[2], (uint)floor(saturate(newValue)*255 + 0.5f),  8, 8); }
 	SLANG_MUTATING void setAnisotropic   (const float newValue) { BF_SET(mPackedData[2], (uint)floor(saturate(newValue)*255 + 0.5f), 16, 8); }

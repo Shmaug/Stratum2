@@ -2,46 +2,43 @@
 
 #include "rng.hlsli"
 
-struct HashGrid<T, let bUseMergeRadius : bool> {
-    static const uint gNormalQuantization = 16384;
+struct HashGridConstants {
+    uint mCellCount;
+    uint mCellPixelRadius;
+    uint mMinCellSize;
+    uint pad;
+    float3 mCameraPosition;
+    float mDistanceScale;
+};
 
+struct HashGrid<T> {
 	RWStructuredBuffer<uint> mChecksums;
+    // mCounters[cellIndex] = number of items in cell
+    // mCounters[cellCount] = number of appended items
+    // mCounters[cellCount+1] = prefix sum counter
+    // mCounters[cellCount+2] = number of non-empty cells
 	RWStructuredBuffer<uint> mCounters;
 
 	// stores (cellIndex, indexInCell) in append-order.
-	// mAppendIndices[0][0] is the total number of appended items
-	// mAppendIndices[0][1] is used in ComputeIndices() for the prefix sum.
-	RWStructuredBuffer<uint2> mAppendIndices;
+	RWStructuredBuffer<uint2> mAppendDataIndices;
 	RWStructuredBuffer<T> mAppendData;
 
 	// mIndices[cellIndex] = offset in mData
-	// mCounters[cellIndex] = number of items in cell
 	RWStructuredBuffer<uint> mIndices;
 	RWStructuredBuffer<T> mData;
 
-    RWStructuredBuffer<uint> mActiveCells;
-    RWStructuredBuffer<float4> mCellCenters;
-    RWStructuredBuffer<int4> mCellNormals;
+    RWStructuredBuffer<uint> mActiveCellIndices;
 
-	// mStats[0] = number of failed inserts
-	// mStats[1] = number of non-empty cells
-    RWStructuredBuffer<uint> mStats;
+    ConstantBuffer<HashGridConstants> mConstants;
 
-
-	uint GetCellCount() { return gPushConstants.mHashGridCellCount; }
+    uint GetCurrentSize() { return mCounters[mConstants.mCellCount]; }
 
     float GetCellSize(const float3 aPosition) {
-        if (bUseMergeRadius && gUseVM) {
-            return gRenderParams.mVcmConstants.mMergeRadius * 2;
-        } else {
-			if (gPushConstants.mHashGridCellPixelRadius <= 0)
-				return gPushConstants.mHashGridMinCellSize;
-			const AbstractCamera gCamera = { 0 };
-			const float cameraDistance = length(gCamera.getTransform().transformPoint(0) - aPosition);
-			const float2 extent = gCamera.getView().extent();
-			const float step = cameraDistance * tan(gPushConstants.mHashGridCellPixelRadius * gCamera.getView().mProjection.mVerticalFoV * max(1/extent.y, extent.y/pow2(extent.x)));
-			return gPushConstants.mHashGridMinCellSize * (1 << uint(log2(step / gPushConstants.mHashGridMinCellSize)));
-        }
+        if (mConstants.mCellPixelRadius <= 0)
+            return mConstants.mMinCellSize;
+        const float cameraDistance = length(mConstants.mCameraPosition - aPosition);
+        const float step = cameraDistance * mConstants.mDistanceScale;
+		return mConstants.mMinCellSize * (1 << uint(log2(step / mConstants.mMinCellSize)));
 	}
 
 	uint2 GetCellDataRange(const uint cellIndex) {
@@ -49,17 +46,18 @@ struct HashGrid<T, let bUseMergeRadius : bool> {
         return uint2(start, start + mCounters[cellIndex]);
     }
 
-    uint FindCellIndex(const float3 aPosition, const float aCellSize, const int3 aOffset = 0, const bool insert = false) {
+    uint FindCellIndex<let bInsert : bool>(const float3 aPosition, float aCellSize = 0, const int3 aOffset = 0) {
+        if (aCellSize == 0) aCellSize = GetCellSize(aPosition);
         // compute index in hash grid
         const int3 p = int3(floor(aPosition / aCellSize)) + aOffset;
         const uint checksum = max(1, xxhash32(xxhash32(asuint(aCellSize)) + xxhash32(p.z + xxhash32(p.y + xxhash32(p.x)))));
-        const uint baseCellIndex = pcg(pcg(asuint(aCellSize)) + pcg(p.z + pcg(p.y + pcg(p.x)))) % GetCellCount();
+        const uint baseCellIndex = pcg(pcg(asuint(aCellSize)) + pcg(p.z + pcg(p.y + pcg(p.x)))) % mConstants.mCellCount;
 
         // resolve hash collisions with linear probing
         for (uint i = 0; i < 32; i++) {
-            const uint cellIndex = (baseCellIndex + i) % GetCellCount();
+            const uint cellIndex = (baseCellIndex + i) % mConstants.mCellCount;
             // find cell with matching checksum, or empty cell if inserting
-            if (insert) {
+            if (bInsert) {
                 uint prevChecksum;
                 InterlockedCompareExchange(mChecksums[cellIndex], 0, checksum, prevChecksum);
                 if (prevChecksum == 0 || prevChecksum == checksum)
@@ -70,65 +68,55 @@ struct HashGrid<T, let bUseMergeRadius : bool> {
             }
         }
 
-        // failed to find cell (hashgrid full)
+        // collision resolution failed - hashgrid full?
         return -1;
     }
 
-    void Append(const float3 aPosition, const float3 aNormal, const float aWeight, const T data) {
-        const float cellSize = GetCellSize(aPosition);
-        const uint cellIndex = FindCellIndex(aPosition, cellSize, 0, true);
+    uint Append(const float3 aPosition, const T data, float aCellSize = 0) {
+        if (aCellSize == 0) aCellSize = GetCellSize(aPosition);
+        const uint cellIndex = FindCellIndex<true>(aPosition, aCellSize);
         if (cellIndex == -1) {
-			if (gPerformanceCounters)
-                InterlockedAdd(mStats[0], 1); // failed inserts
-			return;
+			return -1;
         }
 
 		// append item to cell by incrementing cell counter
 		uint indexInCell;
 		InterlockedAdd(mCounters[cellIndex], 1, indexInCell);
 
-		uint appendIndex;
-		InterlockedAdd(mAppendIndices[0][0], 1, appendIndex);
-		mAppendIndices[1 + appendIndex] = uint2(cellIndex, indexInCell);
-		mAppendData[appendIndex] = data;
-
-        // first time the cell was used
-        if (indexInCell == 0 && (bUseMergeRadius || gPerformanceCounters)) {
+        // keep track of non-empty cells
+        if (indexInCell == 0) {
             uint count;
-            InterlockedAdd(mStats[1], 1, count);
-            if (bUseMergeRadius) {
-                mActiveCells[count] = cellIndex;
-                mCellCenters[cellIndex] = float4((floor(aPosition / cellSize) + 0.5) * cellSize, 0);
-            }
+            InterlockedAdd(mCounters[mConstants.mCellCount + 2], 1, count);
+            mActiveCellIndices[count] = cellIndex;
         }
-        if (bUseMergeRadius) {
-			InterlockedAdd(mCellNormals[cellIndex][0], int(aNormal[0] * gNormalQuantization));
-			InterlockedAdd(mCellNormals[cellIndex][1], int(aNormal[1] * gNormalQuantization));
-            InterlockedAdd(mCellNormals[cellIndex][2], int(aNormal[2] * gNormalQuantization));
-            InterlockedAdd(mCellNormals[cellIndex][3], int(aWeight * gNormalQuantization));
-        }
+
+		// store payload
+		uint appendIndex;
+		InterlockedAdd(mCounters[mConstants.mCellCount], 1, appendIndex);
+		mAppendDataIndices[appendIndex] = uint2(cellIndex, indexInCell);
+        mAppendData[appendIndex] = data;
+        return appendIndex;
 	}
 
 
 	// Prefix sum over cell counter values to determine indices. Should be called with 1 thread per cell.
-	void _ComputeIndices(const uint aCellIndex) {
-		if (aCellIndex >= GetCellCount()) return;
+    void ComputeIndices(const uint aCellIndex) {
+        if (aCellIndex >= mConstants.mCellCount) return;
 
-		uint offset;
-		InterlockedAdd(mAppendIndices[0][1], mCounters[aCellIndex], offset);
+        uint offset;
+        InterlockedAdd(mCounters[mConstants.mCellCount + 1], mCounters[aCellIndex], offset);
 
 		mIndices[aCellIndex] = offset;
 	}
 
 	// Sort items from append order into cells. Should be called with 1 thread per item.
-	void _Swizzle(const uint aAppendIndex) {
-		if (aAppendIndex >= mAppendIndices[0][0]) return;
+    void Swizzle(const uint aAppendIndex) {
+        if (aAppendIndex >= GetCurrentSize()) return;
 
-		const uint2 data = mAppendIndices[1 + aAppendIndex];
+		const uint2 data = mAppendDataIndices[aAppendIndex];
 		const uint cellIndex   = data[0];
 		const uint indexInCell = data[1];
 
-		const uint dstIndex = mIndices[cellIndex] + indexInCell;
-		mData[dstIndex] = mAppendData[aAppendIndex];
+        mData[mIndices[cellIndex] + indexInCell] = mAppendData[aAppendIndex];
 	}
 };

@@ -21,17 +21,24 @@ public:
 	void render(CommandBuffer& commandBuffer, const Image::View& renderTarget);
 
 private:
-	ComputePipelineCache mRenderPipeline;
-	ComputePipelineCache mRenderIterationPipeline;
+	unordered_map<string, ComputePipelineCache> mPipelines;
 	PushConstants mPushConstants;
 
-	bool mPerformanceCounters = false;
-	bool mAlphaTest = true;
-	bool mNormalMaps = true;
-	bool mShadingNormals = true;
-	bool mSampleDirectIllumination = true;
-	bool mDebugPaths = false;
-	bool mMultiDispatch = false;
+	uint32_t mHashGridCellCount = 100000;
+	float mHashGridCellSize = 0.1f;
+	float mHashGridCellPixelRadius = 0;
+
+	unordered_map<string, bool> mDefines {
+		{ "gAlphaTest", true },
+		{ "gNormalMaps", true },
+		{ "gShadingNormals", true },
+		{ "gSampleDirectIllumination", true },
+		{ "gMultiDispatch", false },
+		{ "gPathSorting", false },
+		{ "gDebugPaths", false },
+		{ "gLambertian", false },
+	};
+
 
 	bool mRandomPerFrame = true;
 

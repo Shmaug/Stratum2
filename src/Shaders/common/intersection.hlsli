@@ -6,8 +6,8 @@
 #ifndef gAlphaTest
 #define gAlphaTest false
 #endif
-#ifndef gPerformanceCounters
-#define gPerformanceCounters false
+#ifndef gCountRays
+#define gCountRays false
 #endif
 
 #include "material.hlsli"
@@ -61,8 +61,8 @@ RayDesc makeRay(const float3 origin, const float3 direction, const float tmin = 
 
 extension SceneParameters {
     bool traceRay(const RayDesc ray, const bool closest, out IntersectionResult isect) {
-        if (gPerformanceCounters)
-			InterlockedAdd(mPerformanceCounters[0], 1);
+        if (gCountRays)
+            InterlockedAdd(mRayCount[0], 1);
 
 		// trace ray
 
@@ -245,8 +245,8 @@ extension SceneParameters {
 	}
 
     void traceVisibilityRay(RayDesc ray, inout RandomSampler rng, uint curMediumInstance, inout float3 beta, out float dirPdf, out float neePdf) {
-        if (gPerformanceCounters)
-            InterlockedAdd(mPerformanceCounters[1], 1);
+        if (gCountRays)
+            InterlockedAdd(mRayCount[1], 1);
 
 		dirPdf = 1;
 		neePdf = 1;
