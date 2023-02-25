@@ -27,6 +27,35 @@ struct SceneParameters {
 	StructuredBuffer<uint> mVolumes[gVolumeCount];
 };
 
+uint3 LoadTriangleIndices(const ByteAddressBuffer indices, const uint offset, const uint indexStride, const uint primitiveIndex) {
+    const int offsetBytes = (int)(offset + primitiveIndex * 3 * indexStride);
+    uint3 tri;
+    if (indexStride == 2) {
+        // https://github.com/microsoft/DirectX-Graphics-Samples/blob/master/Samples/Desktop/D3D12Raytracing/src/D3D12RaytracingSimpleLighting/Raytracing.hlsl
+        const int dwordAlignedOffset = offsetBytes & ~3;
+        const uint2 four16BitIndices = indices.Load2(dwordAlignedOffset);
+        if (dwordAlignedOffset == offsetBytes) {
+            tri.x = four16BitIndices.x & 0xffff;
+            tri.y = (four16BitIndices.x >> 16) & 0xffff;
+            tri.z = four16BitIndices.y & 0xffff;
+        } else {
+            tri.x = (four16BitIndices.x >> 16) & 0xffff;
+            tri.y = four16BitIndices.y & 0xffff;
+            tri.z = (four16BitIndices.y >> 16) & 0xffff;
+        }
+    } else
+        tri = indices.Load3(offsetBytes);
+    return tri;
+}
+T LoadVertexAttribute<T>(const ByteAddressBuffer vertexBuffer, const uint offset, const uint stride, const uint index) {
+    return vertexBuffer.Load<T>(int(offset + stride * index));
+}
+void LoadTriangleAttribute<T>(const ByteAddressBuffer vertexBuffer, const uint offset, const uint stride, const uint3 tri, out T v0, out T v1, out T v2) {
+    v0 = LoadVertexAttribute<T>(vertexBuffer, offset, stride, tri[0]);
+    v1 = LoadVertexAttribute<T>(vertexBuffer, offset, stride, tri[1]);
+    v2 = LoadVertexAttribute<T>(vertexBuffer, offset, stride, tri[2]);
+}
+
 extension SceneParameters {
 	float SampleImage1(const uint imageIndex, const float2 uv, const float uvScreenSize) {
 		float lod = 0;
@@ -54,6 +83,13 @@ extension SceneParameters {
 			lod = log2(max(uvScreenSize * max(w, h), 1e-6f));
 		}
 		return mImages[NonUniformResourceIndex(imageIndex)].SampleLevel(mStaticSampler, uv, lod);
+    }
+
+    uint3 LoadTriangleIndices(const MeshVertexInfo vertexInfo, const uint primitiveIndex) {
+        return LoadTriangleIndices(mVertexBuffers[NonUniformResourceIndex(vertexInfo.indexBuffer())], vertexInfo.indexOffset(), vertexInfo.indexStride(), primitiveIndex);
+    }
+    uint3 LoadTriangleIndicesUniform(const MeshVertexInfo vertexInfo, const uint primitiveIndex) {
+        return LoadTriangleIndices(mVertexBuffers[vertexInfo.indexBuffer()], vertexInfo.indexOffset(), vertexInfo.indexStride(), primitiveIndex);
     }
 }
 

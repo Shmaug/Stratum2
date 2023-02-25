@@ -123,9 +123,9 @@ extension SceneParameters {
                     if (vertexInfo.texcoordBuffer() >= gVertexBufferCount)
                         break;
 
-                    const uint3 tri = loadTriangleIndices(mVertexBuffers[NonUniformResourceIndex(vertexInfo.indexBuffer())], vertexInfo.indexStride(), vertexInfo.indexStride(), rayQuery.CandidatePrimitiveIndex());
+                    const uint3 tri = LoadTriangleIndices(mVertexBuffers[NonUniformResourceIndex(vertexInfo.indexBuffer())], vertexInfo.indexStride(), vertexInfo.indexStride(), rayQuery.CandidatePrimitiveIndex());
 					float2 v0,v1,v2;
-					loadTriangleAttribute(mVertexBuffers[NonUniformResourceIndex(vertexInfo.texcoordBuffer())], vertexInfo.texcoordOffset(), vertexInfo.texcoordStride(), tri, v0, v1, v2);
+					LoadTriangleAttribute(mVertexBuffers[NonUniformResourceIndex(vertexInfo.texcoordBuffer())], vertexInfo.texcoordOffset(), vertexInfo.texcoordStride(), tri, v0, v1, v2);
 
 					const float2 barycentrics = rayQuery.CandidateTriangleBarycentrics();
                     const float2 uv = v0 + (v1 - v0) * barycentrics.x + (v2 - v0) * barycentrics.y;

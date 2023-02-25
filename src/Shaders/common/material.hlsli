@@ -11,24 +11,29 @@
 
 extension SceneParameters {
     // see Material::store() in Material.hpp
+    PackedMaterialData LoadMaterial(const uint address, out uint4 imageIndices) {
+        PackedMaterialData m;
+        m.mPackedData    = mMaterialData.Load<uint4>(int(address));
+        imageIndices     = mMaterialData.Load<uint4>(int(address + 16));
+        m.mEmissionScale = mMaterialData.Load<float>(int(address + 32));
+        return m;
+    }
+
     PackedMaterialData LoadMaterial(const ShadingData shadingData) {
-		PackedMaterialData m;
-		m.mPackedData = mMaterialData.Load<uint4>(int(shadingData.getMaterialAddress()));
-		const uint4 indices = mMaterialData.Load<uint4>(int(shadingData.getMaterialAddress() + 16));
+        uint4 imageIndices;
+        PackedMaterialData m = LoadMaterial(shadingData.getMaterialAddress(), imageIndices);
 
-		m.mEmissionScale = mMaterialData.Load<float>(int(shadingData.getMaterialAddress() + 32));
-
-		if (indices.x < gImageCount) {
-			m.setBaseColor(m.getBaseColor() * SampleImage4(indices.x, shadingData.mTexcoord, shadingData.mTexcoordScreenSize).rgb);
+		if (imageIndices.x < gImageCount) {
+			m.setBaseColor(m.getBaseColor() * SampleImage4(imageIndices.x, shadingData.mTexcoord, shadingData.mTexcoordScreenSize).rgb);
 		}
-		if (indices.y < gImageCount) {
-			m.setEmission(m.getEmission() * SampleImage4(indices.y, shadingData.mTexcoord, shadingData.mTexcoordScreenSize).rgb);
+		if (imageIndices.y < gImageCount) {
+			m.setEmission(m.getEmission() * SampleImage4(imageIndices.y, shadingData.mTexcoord, shadingData.mTexcoordScreenSize).rgb);
 		}
-		if (indices.z < gImageCount) {
-			m.mPackedData[2] = D3DX_FLOAT4_to_R8G8B8A8_UNORM(D3DX_R8G8B8A8_UNORM_to_FLOAT4(m.mPackedData[2]) * SampleImage4(indices.z, shadingData.mTexcoord, shadingData.mTexcoordScreenSize));
+		if (imageIndices.z < gImageCount) {
+			m.mPackedData[2] = D3DX_FLOAT4_to_R8G8B8A8_UNORM(D3DX_R8G8B8A8_UNORM_to_FLOAT4(m.mPackedData[2]) * SampleImage4(imageIndices.z, shadingData.mTexcoord, shadingData.mTexcoordScreenSize));
 		}
-		if (indices.w < gImageCount) {
-			m.mPackedData[3] = D3DX_FLOAT4_to_R8G8B8A8_UNORM(D3DX_R8G8B8A8_UNORM_to_FLOAT4(m.mPackedData[3]) * SampleImage4(indices.w, shadingData.mTexcoord, shadingData.mTexcoordScreenSize));
+		if (imageIndices.w < gImageCount) {
+			m.mPackedData[3] = D3DX_FLOAT4_to_R8G8B8A8_UNORM(D3DX_R8G8B8A8_UNORM_to_FLOAT4(m.mPackedData[3]) * SampleImage4(imageIndices.w, shadingData.mTexcoord, shadingData.mTexcoordScreenSize));
 		}
 		return m;
     }

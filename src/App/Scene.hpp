@@ -66,14 +66,15 @@ struct Camera {
 class Scene {
 public:
 	struct FrameData {
+		vector<pair<InstanceData, TransformData>> mInstances;
+		vector<shared_ptr<Buffer>> mVertexBuffers;
+		vector<MeshVertexInfo> mMeshVertexInfo;
+
 		unordered_map<const void* /* address of component */, pair<TransformData, uint32_t /* instance index */ >> mInstanceTransformMap;
 		vector<weak_ptr<Node>> mInstanceNodes;
 		uint32_t mLightCount;
 
 		DeviceResourcePool mResourcePool;
-
-		vector<shared_ptr<Buffer>> mVertexBuffers;
-		vector<MeshVertexInfo> mMeshVertexInfo;
 
 		MaterialResources mMaterialResources;
 		uint32_t mEnvironmentMaterialAddress;

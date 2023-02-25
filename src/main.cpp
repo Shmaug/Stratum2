@@ -12,13 +12,14 @@
 
 #include <GLFW/glfw3.h>
 
-#include <App/TestRenderer.hpp>
 #include <App/Denoiser.hpp>
 #include <App/Tonemapper.hpp>
 #include <App/ImageComparer.hpp>
+#include <App/RasterRenderer.hpp>
 
 namespace stm2 {
 
+using Renderer = RasterRenderer;
 
 
 template<int N>
@@ -56,7 +57,7 @@ struct App {
 	shared_ptr<FlyCamera> mFlyCamera;
 	shared_ptr<Camera> mCamera;
 
-	shared_ptr<TestRenderer> mRenderer;
+	shared_ptr<Renderer> mRenderer;
 	shared_ptr<ImageComparer> mImageComparer;
 
 	chrono::high_resolution_clock::time_point mLastUpdate;
@@ -107,7 +108,7 @@ struct App {
 
 		auto pathTracerNode = sceneNode->addChild("Path tracer");
 		mInspector->select(pathTracerNode);
-		mRenderer = pathTracerNode->makeComponent<TestRenderer>(*pathTracerNode);
+		mRenderer = pathTracerNode->makeComponent<Renderer>(*pathTracerNode);
 
 		auto denoiserNode = pathTracerNode->addChild("Post process");
 		denoiserNode->makeComponent<Denoiser>(*pathTracerNode);

@@ -19,21 +19,7 @@ RasterRenderer::RasterRenderer(Node& node) : mNode(node) {
 		inspector->setInspectCallback<RasterRenderer>();
 }
 
-void RasterRenderer::createPipelines(Device& device, const vk::Extent3D renderExtent, const vk::Format renderFormat) {
-	const auto samplerRepeat = make_shared<vk::raii::Sampler>(*device, vk::SamplerCreateInfo({},
-		vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eLinear,
-		vk::SamplerAddressMode::eRepeat, vk::SamplerAddressMode::eRepeat, vk::SamplerAddressMode::eRepeat,
-		0, true, 8, false, vk::CompareOp::eAlways, 0, VK_LOD_CLAMP_NONE));
-
-	const vector<string>& args = {
-		"-matrix-layout-row-major",
-		"-O3",
-		"-Wno-30081",
-		"-capability", "spirv_1_5",
-	};
-	const filesystem::path shaderPath = *device.mInstance.findArgument("shaderKernelPath");
-	const filesystem::path kernelPath = shaderPath / "vcm.slang";
-
+void RasterRenderer::createPipelines(Device& device, const vk::Format renderFormat) {
 	GraphicsPipeline::GraphicsMetadata gmd;
 	gmd.mColorBlendState = GraphicsPipeline::ColorBlendState();
 	gmd.mColorBlendState->mAttachments = { vk::PipelineColorBlendAttachmentState(
@@ -49,11 +35,11 @@ void RasterRenderer::createPipelines(Device& device, const vk::Extent3D renderEx
 	gmd.mDynamicStates = { vk::DynamicState::eViewport, vk::DynamicState::eScissor };
 
 	gmd.mDynamicRenderingState = GraphicsPipeline::DynamicRenderingState();
-	gmd.mDynamicRenderingState->mColorFormats = { format };
+	gmd.mDynamicRenderingState->mColorFormats = { renderFormat };
 	gmd.mDynamicRenderingState->mDepthFormat = vk::Format::eD32Sfloat;
 
-	gmd.mViewports = { vk::Viewport(0, 0, extent.width, extent.height, 0, 1) };
-	gmd.mScissors = { vk::Rect2D({0,0}, extent) };
+	gmd.mViewports = { vk::Viewport(0, 0, 0, 0, 0, 1) };
+	gmd.mScissors  = { vk::Rect2D({ 0, 0 }, { 0, 0 }) };
 
 	gmd.mVertexInputState   = vk::PipelineVertexInputStateCreateInfo();
 	gmd.mInputAssemblyState = vk::PipelineInputAssemblyStateCreateInfo({}, vk::PrimitiveTopology::eTriangleList);
@@ -84,17 +70,27 @@ void RasterRenderer::createPipelines(Device& device, const vk::Extent3D renderEx
 		{}     // maxDepthBounds_
 	);
 
+	gmd.mImmutableSamplers["gScene.mStaticSampler"] = { make_shared<vk::raii::Sampler>(*device, vk::SamplerCreateInfo({},
+		vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eLinear,
+		vk::SamplerAddressMode::eRepeat, vk::SamplerAddressMode::eRepeat, vk::SamplerAddressMode::eRepeat,
+		0, true, 8, false, vk::CompareOp::eAlways, 0, VK_LOD_CLAMP_NONE)) };
+	gmd.mBindingFlags["gScene.mVertexBuffers"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	gmd.mBindingFlags["gScene.mImages"]  = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	gmd.mBindingFlags["gScene.mImage2s"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	gmd.mBindingFlags["gScene.mImage1s"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	gmd.mBindingFlags["gScene.mVolumes"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+
 	const filesystem::path shaderPath = *device.mInstance.findArgument("shaderKernelPath");
-	const filesystem::path rasterShaderPath = shaderPath / "vcm_vis.slang";
+	const filesystem::path rasterShaderPath = shaderPath / "raster_scene.slang";
 	const vector<string>& rasterArgs = {
 		"-matrix-layout-row-major",
 		"-O3",
 		"-Wno-30081",
 		"-capability", "spirv_1_5",
 	};
-	mRasterLightPathPipeline = GraphicsPipelineCache({
-		{ vk::ShaderStageFlagBits::eVertex  , GraphicsPipelineCache::ShaderSourceInfo(rasterShaderPath, "LightVertexVS", "sm_6_6") },
-		{ vk::ShaderStageFlagBits::eFragment, GraphicsPipelineCache::ShaderSourceInfo(rasterShaderPath, "LightVertexFS", "sm_6_6") }
+	mRasterPipeline = GraphicsPipelineCache({
+		{ vk::ShaderStageFlagBits::eVertex  , GraphicsPipelineCache::ShaderSourceInfo(rasterShaderPath, "vsmain", "sm_6_6") },
+		{ vk::ShaderStageFlagBits::eFragment, GraphicsPipelineCache::ShaderSourceInfo(rasterShaderPath, "fsmain", "sm_6_6") }
 	}, rasterArgs, gmd);
 }
 
@@ -108,7 +104,7 @@ void RasterRenderer::drawGui() {
 	if (ImGui::Button("Reload shaders")) {
 		Device& device = *mNode.findAncestor<Device>();
 		device->waitIdle();
-		createPipelines(device);
+		mRasterPipeline.clear();
 	}
 	ImGui::PopID();
 
@@ -117,78 +113,85 @@ void RasterRenderer::drawGui() {
 }
 
 void RasterRenderer::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
-	if (renderTarget.image()->format() != mRasterLightPathPipeline.pipelineMetadata().mDynamicRenderingState->mColorFormats[0])
-		createPipelines(commandBuffer.mDevice, vk::Extent2D(renderTarget.extent().width, renderTarget.extent().height), renderTarget.image()->format());
+	ProfilerScope ps("RasterRenderer::render", &commandBuffer);
+
+	if (!mRasterPipeline.pipelineMetadata().mDynamicRenderingState || renderTarget.image()->format() != mRasterPipeline.pipelineMetadata().mDynamicRenderingState->mColorFormats[0])
+		createPipelines(commandBuffer.mDevice, renderTarget.image()->format());
+
+	const shared_ptr<Scene> scene = mNode.findAncestor<Scene>();
+
+	vector<ViewData> views;
+	vector<TransformData> viewTransforms;
+	vector<TransformData> viewInverseTransforms;
+	scene->mNode.forEachDescendant<Camera>([&](Node& node, const shared_ptr<Camera>& camera) {
+		views.emplace_back(camera->view());
+		viewInverseTransforms.emplace_back( viewTransforms.emplace_back(nodeToWorld(node)).inverse() );
+	});
 
 	Descriptors descriptors;
+	descriptors[{"gParams.mViews",0}]                 = mResourcePool.uploadData<ViewData>     (commandBuffer, "mViews"                , views);
+	descriptors[{"gParams.mViewTransforms",0}]        = mResourcePool.uploadData<TransformData>(commandBuffer, "mViewTransforms"       , viewTransforms);
+	descriptors[{"gParams.mViewInverseTransforms",0}] = mResourcePool.uploadData<TransformData>(commandBuffer, "mViewInverseTransforms", viewInverseTransforms);
+	for (const auto&[id,descriptor] : scene->frameData().mDescriptors)
+		descriptors[{ "gScene." + id.first, id.second }] = descriptor;
 
-	for (auto d : {
-		"mViews",
-		"mViewTransforms",
-		"mViewInverseTransforms",
-		"mLightVertices",
-		"mLightPathLengths" }) {
-		descriptors[{string("gParams.")+d,0}] = frame.mBuffers.at(d);
-	}
-	descriptors[{"gParams.mDepth",0}] = ImageDescriptor{get<Image::View>(frame.mImages.at("mDepth")), vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}};
 
 	const vk::Extent3D extent = renderTarget.extent();
 
-	if (!frame.mRasterDepthBuffer || extent.width > frame.mRasterDepthBuffer.extent().width || extent.height > frame.mRasterDepthBuffer.extent().height) {
-		Image::Metadata md = {};
-		md.mExtent = extent;
-		md.mFormat = vk::Format::eD32Sfloat;
-		md.mUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment|vk::ImageUsageFlagBits::eTransferDst;
-		frame.mRasterDepthBuffer = make_shared<Image>(commandBuffer.mDevice, "gRasterDepthBuffer", md);
+	auto colorBuffer = (renderTarget.image()->usage() & (vk::ImageUsageFlagBits::eColorAttachment|vk::ImageUsageFlagBits::eTransferSrc)) ?
+		renderTarget : mResourcePool.getImage(commandBuffer.mDevice, "ColorBuffer", Image::Metadata{
+		.mFormat = vk::Format::eR8G8B8A8Unorm,
+		.mExtent = extent,
+		.mUsage = vk::ImageUsageFlagBits::eColorAttachment|vk::ImageUsageFlagBits::eTransferDst|vk::ImageUsageFlagBits::eTransferSrc });
+	auto depthBuffer = mResourcePool.getImage(commandBuffer.mDevice, "DepthBuffer", Image::Metadata{
+		.mFormat = vk::Format::eD32Sfloat,
+		.mExtent = extent,
+		.mUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment });
+
+	auto pipeline = mRasterPipeline.get(commandBuffer.mDevice);
+	auto descriptorSets = pipeline->getDescriptorSets(descriptors);
+
+	// render
+
+	colorBuffer.barrier(commandBuffer, vk::ImageLayout::eColorAttachmentOptimal, vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::AccessFlagBits::eColorAttachmentWrite);
+	depthBuffer.barrier(commandBuffer, vk::ImageLayout::eDepthStencilAttachmentOptimal, vk::PipelineStageFlagBits::eEarlyFragmentTests, vk::AccessFlagBits::eDepthStencilAttachmentRead|vk::AccessFlagBits::eDepthStencilAttachmentWrite);\
+	descriptorSets->transitionImages(commandBuffer);
+
+	vk::RenderingAttachmentInfo colorAttachment(
+		*colorBuffer, vk::ImageLayout::eColorAttachmentOptimal,
+		vk::ResolveModeFlagBits::eNone,	{}, vk::ImageLayout::eUndefined,
+		vk::AttachmentLoadOp::eClear,
+		vk::AttachmentStoreOp::eStore,
+		vk::ClearValue{vk::ClearColorValue{array<float,4>{0,0,0,0}}});
+	vk::RenderingAttachmentInfo depthAttachment(
+		*depthBuffer, vk::ImageLayout::eDepthStencilAttachmentOptimal,
+		vk::ResolveModeFlagBits::eNone,	{}, vk::ImageLayout::eUndefined,
+		vk::AttachmentLoadOp::eClear,
+		vk::AttachmentStoreOp::eDontCare,
+		vk::ClearValue{vk::ClearDepthStencilValue{0,0}});
+	commandBuffer->beginRendering(vk::RenderingInfo(
+		vk::RenderingFlags{},
+		vk::Rect2D(vk::Offset2D(0,0), vk::Extent2D(extent.width, extent.height)),
+		1, 0, colorAttachment, &depthAttachment, nullptr));
+
+	commandBuffer->setViewport(0, vk::Viewport(0, 0, extent.width, extent.height, 0, 1));
+	commandBuffer->setScissor(0, vk::Rect2D(vk::Offset2D(0,0), vk::Extent2D(extent.width, extent.height)));
+
+	commandBuffer->bindPipeline(vk::PipelineBindPoint::eGraphics, ***pipeline);
+	descriptorSets->bind(commandBuffer);
+	commandBuffer.trackResource(descriptorSets);
+
+	pipeline->pushConstants(commandBuffer, { { "mViewIndex", 0 } });
+	for (uint32_t instanceIndex = 0; instanceIndex < scene->frameData().mInstances.size(); instanceIndex++) {
+		const MeshInstanceData* instance = reinterpret_cast<const MeshInstanceData*>(&scene->frameData().mInstances[instanceIndex].first);
+		commandBuffer->draw(instance->primitiveCount()*3, 1, 0, instanceIndex);
 	}
 
-	auto lightPathPipeline = mRasterLightPathPipeline.get(commandBuffer.mDevice);
-	auto descriptorSets = lightPathPipeline->getDescriptorSets(descriptors);
 
-	// render light paths
-	{
-		renderTarget.barrier(commandBuffer, vk::ImageLayout::eColorAttachmentOptimal, vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::AccessFlagBits::eColorAttachmentWrite);
-		frame.mRasterDepthBuffer.barrier(commandBuffer, vk::ImageLayout::eDepthStencilAttachmentOptimal, vk::PipelineStageFlagBits::eEarlyFragmentTests, vk::AccessFlagBits::eDepthStencilAttachmentRead|vk::AccessFlagBits::eDepthStencilAttachmentWrite);
+	commandBuffer->endRendering();
 
-		descriptorSets->transitionImages(commandBuffer);
-
-		vk::RenderingAttachmentInfo colorAttachment(
-			*renderTarget, vk::ImageLayout::eColorAttachmentOptimal,
-			vk::ResolveModeFlagBits::eNone,	{}, vk::ImageLayout::eUndefined,
-			vk::AttachmentLoadOp::eLoad,
-			vk::AttachmentStoreOp::eStore,
-			vk::ClearValue{});
-		vk::RenderingAttachmentInfo depthAttachment(
-			*frame.mRasterDepthBuffer, vk::ImageLayout::eDepthStencilAttachmentOptimal,
-			vk::ResolveModeFlagBits::eNone,	{}, vk::ImageLayout::eUndefined,
-			vk::AttachmentLoadOp::eClear,
-			vk::AttachmentStoreOp::eDontCare,
-			vk::ClearValue{vk::ClearDepthStencilValue{0,0}});
-		commandBuffer->beginRendering(vk::RenderingInfo(
-			vk::RenderingFlags{},
-			vk::Rect2D(vk::Offset2D(0,0), vk::Extent2D(extent.width, extent.height)),
-			1, 0, colorAttachment, &depthAttachment, nullptr));
-
-		commandBuffer->setViewport(0, vk::Viewport(0, 0, extent.width, extent.height, 0, 1));
-		commandBuffer->setScissor(0, vk::Rect2D(vk::Offset2D(0,0), vk::Extent2D(extent.width, extent.height)));
-
-		commandBuffer->bindPipeline(vk::PipelineBindPoint::eGraphics, ***lightPathPipeline);
-		descriptorSets->bind(commandBuffer);
-		lightPathPipeline->pushConstants(commandBuffer, {
-			{ "mLightSubPathCount", mPushConstants.mLightSubPathCount },
-			{ "mHashGridCellCount", mPushConstants.mHashGridCellCount },
-			{ "mSegmentIndex", mVisualizeSegmentIndex },
-			{ "mLineRadius", mVisualizeLightPathRadius },
-			{ "mLineLength", mVisualizeLightPathLength },
-			{ "mMergeRadius", frame.mBuffers.at("mVcmConstants").cast<VcmConstants>()[0].mMergeRadius },
-		});
-		commandBuffer->draw((mPushConstants.mMaxPathLength+1)*6, min(mVisualizeLightPathCount, mPushConstants.mLightSubPathCount), 0, 0);
-
-		commandBuffer.trackResource(lightPathPipeline);
-		commandBuffer.trackResource(descriptorSets);
-
-		commandBuffer->endRendering();
-	}
+	if (colorBuffer != renderTarget)
+		Image::copy(commandBuffer, colorBuffer, renderTarget);
 }
 
 }

@@ -398,6 +398,7 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 
 	mFrameData.mAabbMin = float3::Constant(numeric_limits<float>::infinity());
 	mFrameData.mAabbMax = float3::Constant(-numeric_limits<float>::infinity());
+	mFrameData.mInstances.clear();
 
 	vector<vk::AccelerationStructureInstanceKHR> instancesAS;
 	vector<vk::BufferMemoryBarrier> blasBarriers;
@@ -455,6 +456,7 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 		instanceTransforms.emplace_back(transform);
 		instanceInverseTransforms.emplace_back(invTransform);
 		instanceMotionTransforms.emplace_back(makeMotionTransform(invTransform, prevTransform));
+		mFrameData.mInstances.emplace_back(make_pair(instance, transform));
 		return instanceIndex;
 	};
 

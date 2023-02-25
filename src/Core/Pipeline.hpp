@@ -168,6 +168,11 @@ public:
 
 	[[nodiscard]] shared_ptr<GraphicsPipeline> get(Device& device, const Defines& defines = {}, const vector<shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts = {}, optional<pair<vk::RenderPass, uint32_t>> renderPass = {});
 
+	inline void clear() {
+		mCachedShaders.clear();
+		mCachedPipelines.clear();
+	}
+
 private:
 	unordered_map<vk::ShaderStageFlagBits, ShaderSourceInfo> mEntryPointProfiles;
 	vector<string> mCompileArgs;
@@ -200,6 +205,10 @@ public:
 	inline const Pipeline::Metadata& pipelineMetadata() const { return mPipelineMetadata; }
 
 	[[nodiscard]] shared_ptr<ComputePipeline> get(Device& device, const Defines& defines = {}, const vector<shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts = {});
+
+	inline void clear() {
+		mCachedPipelines.clear();
+	}
 
 private:
 	filesystem::path mSourceFile;

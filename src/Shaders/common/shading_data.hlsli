@@ -54,32 +54,6 @@ extension ShadingData {
     }
 };
 
-uint3 loadTriangleIndices(ByteAddressBuffer indices, const uint offset, const uint indexStride, const uint primitiveIndex) {
-	const int offsetBytes = (int)(offset + primitiveIndex*3*indexStride);
-	uint3 tri;
-	if (indexStride == 2) {
-		// https://github.com/microsoft/DirectX-Graphics-Samples/blob/master/Samples/Desktop/D3D12Raytracing/src/D3D12RaytracingSimpleLighting/Raytracing.hlsl
-		const int dwordAlignedOffset = offsetBytes & ~3;
-		const uint2 four16BitIndices = indices.Load2(dwordAlignedOffset);
-		if (dwordAlignedOffset == offsetBytes) {
-				tri.x = four16BitIndices.x & 0xffff;
-				tri.y = (four16BitIndices.x >> 16) & 0xffff;
-				tri.z = four16BitIndices.y & 0xffff;
-		} else {
-				tri.x = (four16BitIndices.x >> 16) & 0xffff;
-				tri.y = four16BitIndices.y & 0xffff;
-				tri.z = (four16BitIndices.y >> 16) & 0xffff;
-		}
-	} else
-		tri = indices.Load3(offsetBytes);
-	return tri;
-}
-void loadTriangleAttribute<T>(const ByteAddressBuffer vertexBuffer, const uint offset, const uint stride, const uint3 tri, out T v0, out T v1, out T v2) {
-	v0 = vertexBuffer.Load<T>(int(offset + stride*tri[0]));
-	v1 = vertexBuffer.Load<T>(int(offset + stride*tri[1]));
-	v2 = vertexBuffer.Load<T>(int(offset + stride*tri[2]));
-}
-
 extension SceneParameters {
 	// doesn't assign mPosition
 	ShadingData makeTriangleShadingDataWithoutPosition(const uint materialAddress, const TransformData transform, const MeshVertexInfo vertexInfo, const uint3 tri, const float2 bary, const float3 v0, const float3 v1, const float3 v2) {
@@ -97,7 +71,7 @@ extension SceneParameters {
 
 		float2 t0,t1,t2;
 		if (vertexInfo.texcoordBuffer() < gVertexBufferCount)
-			loadTriangleAttribute(mVertexBuffers[NonUniformResourceIndex(vertexInfo.texcoordBuffer())], vertexInfo.texcoordOffset(), vertexInfo.texcoordStride(), tri, t0, t1, t2);
+			LoadTriangleAttribute(mVertexBuffers[NonUniformResourceIndex(vertexInfo.texcoordBuffer())], vertexInfo.texcoordOffset(), vertexInfo.texcoordStride(), tri, t0, t1, t2);
         else
             t0 = t1 = t2 = 0;
 
@@ -135,7 +109,7 @@ extension SceneParameters {
         float3 shadingNormal;
         float3 n0, n1, n2;
         if (gShadingNormals && vertexInfo.normalBuffer() < gVertexBufferCount) {
-			loadTriangleAttribute(mVertexBuffers[NonUniformResourceIndex(vertexInfo.normalBuffer())], vertexInfo.normalOffset(), vertexInfo.normalStride(), tri, n0, n1, n2);
+			LoadTriangleAttribute(mVertexBuffers[NonUniformResourceIndex(vertexInfo.normalBuffer())], vertexInfo.normalOffset(), vertexInfo.normalStride(), tri, n0, n1, n2);
 
 			shadingNormal = n0 + (n1 - n0)*bary.x + (n2 - n0)*bary.y;
 			shadingNormalValid = !(all(shadingNormal.xyz == 0) || any(isnan(shadingNormal)));
@@ -166,22 +140,22 @@ extension SceneParameters {
 	}
 
 	ShadingData makeTriangleShadingData(const MeshInstanceData instance, const TransformData transform, const uint primitiveIndex, const float2 bary) {
-		const MeshVertexInfo vertexInfo = mMeshVertexInfo[instance.vertexInfoIndex()];
-		const uint3 tri = loadTriangleIndices(mVertexBuffers[NonUniformResourceIndex(vertexInfo.indexBuffer())], vertexInfo.indexOffset(), vertexInfo.indexStride(), primitiveIndex);
+        const MeshVertexInfo vertexInfo = mMeshVertexInfo[instance.vertexInfoIndex()];
+        const uint3 tri = LoadTriangleIndices(vertexInfo, primitiveIndex);
 
 		float3 v0,v1,v2;
-		loadTriangleAttribute(mVertexBuffers[NonUniformResourceIndex(vertexInfo.positionBuffer())], vertexInfo.positionOffset(), vertexInfo.positionStride(), tri, v0, v1, v2);
+		LoadTriangleAttribute(mVertexBuffers[NonUniformResourceIndex(vertexInfo.positionBuffer())], vertexInfo.positionOffset(), vertexInfo.positionStride(), tri, v0, v1, v2);
 
 		ShadingData r = makeTriangleShadingDataWithoutPosition(instance.getMaterialAddress(), transform, vertexInfo, tri, bary, v0, v1, v2);
 		r.mPosition = transform.transformPoint(v0 + (v1 - v0)*bary.x + (v2 - v0)*bary.y);
 		return r;
 	}
 	ShadingData makeTriangleShadingData(const MeshInstanceData instance, const TransformData transform, const uint primitiveIndex, const float3 localPosition) {
-		const MeshVertexInfo vertexInfo = mMeshVertexInfo[instance.vertexInfoIndex()];
-		const uint3 tri = loadTriangleIndices(mVertexBuffers[NonUniformResourceIndex(vertexInfo.indexBuffer())], vertexInfo.indexOffset(), vertexInfo.indexStride(), primitiveIndex);
+        const MeshVertexInfo vertexInfo = mMeshVertexInfo[instance.vertexInfoIndex()];
+        const uint3 tri = LoadTriangleIndices(vertexInfo, primitiveIndex);
 
 		float3 v0,v1,v2;
-		loadTriangleAttribute(mVertexBuffers[NonUniformResourceIndex(vertexInfo.positionBuffer())], vertexInfo.positionOffset(), vertexInfo.positionStride(), tri, v0, v1, v2);
+		LoadTriangleAttribute(mVertexBuffers[NonUniformResourceIndex(vertexInfo.positionBuffer())], vertexInfo.positionOffset(), vertexInfo.positionStride(), tri, v0, v1, v2);
 
 		const float3 v1v0 = v1 - v0;
 		const float3 v2v0 = v2 - v0;

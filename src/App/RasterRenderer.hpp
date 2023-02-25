@@ -12,13 +12,13 @@ public:
 
 	RasterRenderer(Node& node);
 
-	void createPipelines(Device& device, const vk::Extent3D renderExtent, const vk::Format renderFormat);
+	void createPipelines(Device& device, const vk::Format renderFormat);
 
 	void drawGui();
 	void render(CommandBuffer& commandBuffer, const Image::View& renderTarget);
 
 private:
-	GraphicsPipelineCache mRasterLightPathPipeline;
+	GraphicsPipelineCache mRasterPipeline;
 
 	bool mTonemap = true;
 
