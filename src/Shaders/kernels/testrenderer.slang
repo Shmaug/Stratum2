@@ -7,8 +7,11 @@
 #ifndef gMultiDispatch
 #define gMultiDispatch false
 #endif
-#ifndef gPathSorting
-#define gPathSorting false
+#ifndef gDeferShadowRays
+#define gDeferShadowRays false
+#endif
+#ifndef gSortShadowRays
+#define gSortShadowRays false
 #endif
 
 struct PushConstants {
@@ -65,19 +68,39 @@ struct PathState {
 	}
 };
 
+struct ShadowRay {
+    float3 mContribution;
+    float pad;
+    float3 mRayOrigin;
+    uint mPathLength;
+    float3 mRayDirection;
+    float mDistance;
+    float mNeePdfW;
+    float mDirPdfW;
+    uint mPixelIndex;
+    uint mLightVertices;
+
+    uint2 getPixelCoord() {
+        return uint2(mPixelIndex % gPushConstants.mOutputExtent.x, mPixelIndex / gPushConstants.mOutputExtent.x);
+    }
+};
+#define gQuantizationFactor 16384
+
 struct RenderParams {
     StructuredBuffer<ViewData> mViews;
     StructuredBuffer<TransformData> mViewTransforms;
     StructuredBuffer<TransformData> mPrevViewInverseTransforms;
     StructuredBuffer<uint> mViewMediumIndices;
-	RWTexture2D<float4> mOutput;
+    RWTexture2D<float4> mOutput;
     RWTexture2D<float4> mAlbedo;
 	RWTexture2D<float2> mPrevUVs;
     RWTexture2D<uint2> mVisibility;
-    RWTexture2D<float4> mDepth;
+	RWTexture2D<float4> mDepth;
+
     RWStructuredBuffer<PathState> mPathStates;
-    HashGrid<uint> mPathSort0;
-    HashGrid<uint> mPathSort1;
+
+    HashGrid<ShadowRay> mShadowRays;
+    RWStructuredBuffer<uint4> mOutputAtomic;
 
 	void StoreAuxillaryData(const uint2 index, const IntersectionResult isect, const float3 albedo) {
 		float2 prevPixelCoord = index + 0.5;
@@ -111,7 +134,26 @@ struct RenderParams {
             return;
         }
         if (any(radiance > 0) && weight > 0)
-        	mOutput[index].rgb += radiance * weight;
+            mOutput[index].rgb += radiance * weight;
+    }
+
+    void AddRadianceInterlocked(const uint2 index, const float3 radiance) {
+        const uint idx = index.y * gPushConstants.mOutputExtent.x + index.x;
+        const int3 ri = int3(max(0,radiance) * gQuantizationFactor);
+        uint3 p;
+        InterlockedAdd(mOutputAtomic[idx][0], ri[0], p[0]);
+        InterlockedAdd(mOutputAtomic[idx][1], ri[1], p[1]);
+        InterlockedAdd(mOutputAtomic[idx][2], ri[2], p[2]);
+	}
+
+    void AddRadianceInterlocked(const uint2 index, const float3 radiance, const float weight, const uint viewVertices, const uint lightVertices) {
+        if (gDebugPaths) {
+            if (BF_GET(gPushConstants.mDebugPathLengths, 0, 16) == viewVertices + lightVertices && BF_GET(gPushConstants.mDebugPathLengths, 16, 16) == lightVertices)
+                AddRadianceInterlocked(index, radiance);
+            return;
+        }
+        if (any(radiance > 0) && weight > 0)
+            AddRadianceInterlocked(index, radiance * weight);
     }
 };
 ParameterBlock<RenderParams> gRenderParams;
@@ -148,13 +190,49 @@ float PathMisWeight(const uint viewPathLength, const uint lightVertices, const f
     }
 
     if (lightVertices == 0)
-        return mis(dirSamplePdfW, lightSamplePdfW);
+        return mis(dirSamplePdfW, lightSamplePdfW); // camera path
+    else if (lightVertices == 1)
+        return mis(lightSamplePdfW, dirSamplePdfW); // nee
     else
-        return mis(lightSamplePdfW, dirSamplePdfW);
+        return 0; // bdpt connections
 }
 
 
 static PathState sPathState;
+
+void TraceConnectionRay(const float3 rayOrigin, const float3 rayDirection, const float rayDistance, const float neePdfW, const float dirPdfW, float3 contrib, const uint lightVertices) {
+    if (gDeferShadowRays) {
+        ShadowRay ray;
+        ray.mContribution = sPathState.mThroughput * contrib;
+        ray.mRayOrigin = rayOrigin;
+        ray.mPathLength = sPathState.mPathLength;
+        ray.mRayDirection = rayDirection;
+        ray.mDistance = rayDistance;
+        ray.mNeePdfW = neePdfW;
+        ray.mDirPdfW = dirPdfW;
+        ray.mPixelIndex = sPathState.mPixelIndex;
+        ray.mLightVertices = 1;
+        if (gSortShadowRays)
+            gRenderParams.mShadowRays.Append(ray.mRayOrigin, ray);
+        else {
+            uint appendIndex;
+            InterlockedAdd(gRenderParams.mShadowRays.mCounters[gRenderParams.mShadowRays.mConstants.mCellCount], 1, appendIndex);
+            gRenderParams.mShadowRays.mData[appendIndex] = ray;
+        }
+    } else {
+        float transDirPdf, transNeePdf;
+        gScene.traceVisibilityRay(
+            makeRay(rayOrigin, rayDirection, 0, rayDistance),
+            sPathState.mRng, sPathState.mCurrentMedium, contrib, transDirPdf, transNeePdf);
+
+        if (all(contrib <= 0) || transNeePdf <= 0)
+            return;
+
+        contrib /= transNeePdf;
+
+        gRenderParams.AddRadiance(sPathState.getPixelCoord(), sPathState.mThroughput * contrib, PathMisWeight(sPathState.mPathLength, lightVertices, dirPdfW * transDirPdf, neePdfW * transNeePdf), sPathState.mPathLength + 1 + (lightVertices-1), lightVertices);
+    }
+}
 
 void ConnectToLight(const Interaction bsdf, const ShadingData shadingData) {
     const IlluminationSampleRecord r = gScene.SampleIllumination(shadingData.mPosition, sPathState.mRng.nextFloat());
@@ -188,17 +266,7 @@ void ConnectToLight(const Interaction bsdf, const ShadingData shadingData) {
 		shadingData.mPosition :
 		rayOffset(shadingData.mPosition, shadingData.getGeometryNormal(), r.mDirectionToLight);
 
-    float transDirPdf, transNeePdf;
-    gScene.traceVisibilityRay(
-        makeRay(rayOrigin, r.mDirectionToLight, 0, r.mDistanceToLight * 0.99),
-        sPathState.mRng, sPathState.mCurrentMedium, contrib, transDirPdf, transNeePdf);
-
-    if (all(contrib <= 0) || transNeePdf <= 0)
-        return;
-
-    contrib /= transNeePdf;
-
-    gRenderParams.AddRadiance(sPathState.getPixelCoord(), sPathState.mThroughput * contrib, PathMisWeight(sPathState.mPathLength, 1, f.mFwdPdfW * transDirPdf, r.mPdf * AtoW * transNeePdf), sPathState.mPathLength+1, 1);
+    TraceConnectionRay(rayOrigin, r.mDirectionToLight, r.mDistanceToLight * 0.99, r.mPdf * AtoW, f.mFwdPdfW, contrib, 1);
 }
 
 bool ProcessInteraction(const Interaction bsdf, const IntersectionResult isect, const float transDirPdf, const float transNeePdf) {
@@ -304,42 +372,16 @@ void InitializeCameraPath(const uint2 index) {
 }
 
 void LoadPathState(const uint threadIndex) {
-    if (gPathSorting) {
-        uint idx;
-        if ((gPushConstants.mRenderIteration % 2) == 0) {
-            if (threadIndex >= gRenderParams.mPathSort1.GetCurrentSize()) {
-				sPathState.mThroughput = 0;
-				return;
-			}
-			idx = gRenderParams.mPathSort1.mData[threadIndex];
-		} else {
-            if (threadIndex >= gRenderParams.mPathSort0.GetCurrentSize()) {
-				sPathState.mThroughput = 0;
-				return;
-			}
-            idx = gRenderParams.mPathSort0.mData[threadIndex];
-		}
-		sPathState = gRenderParams.mPathStates[idx];
-    } else
-        sPathState = gRenderParams.mPathStates[threadIndex];
+    sPathState = gRenderParams.mPathStates[threadIndex];
 }
 
 void StorePathState(const uint threadIndex) {
 	gRenderParams.mPathStates[threadIndex] = sPathState;
-    if (gPathSorting) {
-        if (all(sPathState.mThroughput <= 0))
-            return;
-        if ((gPushConstants.mRenderIteration % 2) == 0) {
-            gRenderParams.mPathSort0.Append(sPathState.mRayOrigin, threadIndex);
-        } else {
-            gRenderParams.mPathSort1.Append(sPathState.mRayOrigin, threadIndex);
-        }
-    }
 }
 
 [shader("compute")]
-[numthreads(8, 8, 1)]
-void Render(uint3 index: SV_DispatchThreadID, uint group_index: SV_GroupIndex) {
+[numthreads(8, 4, 1)]
+void Render(uint3 index: SV_DispatchThreadID) {
     if (any(index.xy >= gPushConstants.mOutputExtent)) return;
 
     InitializeCameraPath(index.xy);
@@ -357,8 +399,8 @@ void Render(uint3 index: SV_DispatchThreadID, uint group_index: SV_GroupIndex) {
 }
 
 [shader("compute")]
-[numthreads(8, 8, 1)]
-void RenderIteration(uint3 index: SV_DispatchThreadID, uint group_index: SV_GroupIndex) {
+[numthreads(8, 4, 1)]
+void RenderIteration(uint3 index: SV_DispatchThreadID) {
     if (any(index.xy >= gPushConstants.mOutputExtent)) return;
 
     LoadPathState(index.y * gPushConstants.mOutputExtent.x + index.x);
@@ -368,4 +410,33 @@ void RenderIteration(uint3 index: SV_DispatchThreadID, uint group_index: SV_Grou
             sPathState.mThroughput = 0;
         StorePathState(index.y * gPushConstants.mOutputExtent.x + index.x);
     }
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void ProcessShadowRays(uint3 index: SV_DispatchThreadID) {
+    const uint idx = index.y * gPushConstants.mOutputExtent.x + index.x;
+    if (idx >= gRenderParams.mShadowRays.GetCurrentSize()) return;
+
+    ShadowRay ray = gRenderParams.mShadowRays.mData[idx];
+
+	float transDirPdf, transNeePdf;
+    gScene.traceVisibilityRay(
+        makeRay(ray.mRayOrigin, ray.mRayDirection, 0, ray.mDistance),
+        sPathState.mRng, sPathState.mCurrentMedium, ray.mContribution, transDirPdf, transNeePdf);
+
+    if (all(ray.mContribution <= 0) || transNeePdf <= 0)
+        return;
+
+    ray.mContribution /= transNeePdf;
+
+    gRenderParams.AddRadianceInterlocked(ray.getPixelCoord(), ray.mContribution, PathMisWeight(ray.mPathLength, ray.mLightVertices, ray.mDirPdfW * transDirPdf, ray.mNeePdfW * transNeePdf), ray.mPathLength + 1 + (ray.mLightVertices-1), ray.mLightVertices);
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void ProcessAtomicOutput(uint3 index: SV_DispatchThreadID) {
+    if (any(index.xy >= gPushConstants.mOutputExtent)) return;
+    uint4 c = gRenderParams.mOutputAtomic[index.y * gPushConstants.mOutputExtent.x + index.x];
+    gRenderParams.mOutput[index.xy].rgb += c.rgb/float(gQuantizationFactor);
 }

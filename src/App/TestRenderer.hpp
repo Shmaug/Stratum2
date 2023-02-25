@@ -34,7 +34,8 @@ private:
 		{ "gShadingNormals", true },
 		{ "gSampleDirectIllumination", true },
 		{ "gMultiDispatch", false },
-		{ "gPathSorting", false },
+		{ "gDeferShadowRays", false },
+		{ "gSortShadowRays", false },
 		{ "gDebugPaths", false },
 		{ "gLambertian", false },
 	};

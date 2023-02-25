@@ -53,10 +53,12 @@ void TestRenderer::createPipelines(Device& device) {
 
 	const filesystem::path shaderPath = *device.mInstance.findArgument("shaderKernelPath");
 	mPipelines.clear();
-	mPipelines.emplace("Render",                 ComputePipelineCache(shaderPath / "testrenderer.slang", "Render"         , "sm_6_6", args, md));
-	mPipelines.emplace("RenderIteration",        ComputePipelineCache(shaderPath / "testrenderer.slang", "RenderIteration", "sm_6_6", args, md));
+	mPipelines.emplace("Render",                 ComputePipelineCache(shaderPath / "testrenderer.slang", "Render"             , "sm_6_6", args, md));
+	mPipelines.emplace("RenderIteration",        ComputePipelineCache(shaderPath / "testrenderer.slang", "RenderIteration"    , "sm_6_6", args, md));
+	mPipelines.emplace("ProcessShadowRays",      ComputePipelineCache(shaderPath / "testrenderer.slang", "ProcessShadowRays"  , "sm_6_6", args, md));
+	mPipelines.emplace("ProcessAtomicOutput",    ComputePipelineCache(shaderPath / "testrenderer.slang", "ProcessAtomicOutput", "sm_6_6", args, md));
 	mPipelines.emplace("HashGridComputeIndices", ComputePipelineCache(shaderPath / "hashgrid.slang", "ComputeIndices", "sm_6_6", { "-O3", "-matrix-layout-row-major", "-capability", "spirv_1_5" }));
-	mPipelines.emplace("HashGridSwizzle"       , ComputePipelineCache(shaderPath / "hashgrid.slang", "Swizzle"       , "sm_6_6", { "-O3", "-matrix-layout-row-major", "-capability", "spirv_1_5" }));
+	mPipelines.emplace("HashGridSwizzle",        ComputePipelineCache(shaderPath / "hashgrid.slang", "Swizzle"       , "sm_6_6", { "-O3", "-matrix-layout-row-major", "-capability", "spirv_1_5" }));
 }
 
 void TestRenderer::drawGui() {
@@ -189,7 +191,8 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 
 	Descriptors descriptors;
 
-	auto pathStates = mResourcePool.getBuffer<byte>(commandBuffer.mDevice,  "mPathStates", mDefines.at("gMultiDispatch") ? extent.width*extent.height*64 : 64);
+	auto pathStates   = mResourcePool.getBuffer<byte> (commandBuffer.mDevice,  "mPathStates", mDefines.at("gMultiDispatch") ? extent.width*extent.height*64 : 64);
+	auto atomicOutput = mResourcePool.getBuffer<uint4>(commandBuffer.mDevice, "mOutputAtomic", mDefines.at("gDeferShadowRays") ? extent.width*extent.height : 1, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst);
 
 	descriptors[{ "gRenderParams.mOutput", 0 }]     = ImageDescriptor{ outputImage    , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 	descriptors[{ "gRenderParams.mAlbedo", 0 }]     = ImageDescriptor{ albedoImage    , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
@@ -197,6 +200,7 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 	descriptors[{ "gRenderParams.mVisibility", 0 }] = ImageDescriptor{ visibilityImage, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 	descriptors[{ "gRenderParams.mDepth", 0 }]      = ImageDescriptor{ depthImage     , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 	descriptors[{ "gRenderParams.mPathStates", 0 }] = pathStates;
+	descriptors[{ "gRenderParams.mOutputAtomic", 0 }] = atomicOutput;
 
 	bool changed = false;
 	bool hasMedia = false;
@@ -341,7 +345,7 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 				vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
 				vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 
-			computeIndicesPipeline->dispatchTiled(commandBuffer, vk::Extent3D{cellCount, 1, 1}, hashGridDescriptorSets);
+			computeIndicesPipeline->dispatchTiled(commandBuffer, vk::Extent3D{cellCount%1024, cellCount/1024, 1}, hashGridDescriptorSets);
 		}
 
 		{
@@ -353,7 +357,7 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 				vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
 
 			auto swizzlePipeline = mPipelines.at("HashGridSwizzle").get(commandBuffer.mDevice, { { "DataType", dataTypeStr } }, computeIndicesPipeline->descriptorSetLayouts());
-			swizzlePipeline->dispatchTiled(commandBuffer, vk::Extent3D{size, 1, 1}, hashGridDescriptorSets);
+			swizzlePipeline->dispatchTiled(commandBuffer, vk::Extent3D{size%1024, size/1024, 1}, hashGridDescriptorSets);
 
 			get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mData",0})).barrier(
 				commandBuffer,
@@ -370,14 +374,10 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 		if (enabled)
 			defines[define] = to_string(enabled);
 
-	auto renderPipeline = mPipelines.at("Render").get(commandBuffer.mDevice, defines);
+	const shared_ptr<ComputePipeline> renderPipeline = mPipelines.at("Render").get(commandBuffer.mDevice, defines);
 
 	// create descriptor sets
-	const bool useHashGrid = mDefines.at("gMultiDispatch") && mDefines.at("gPathSorting");
-	const array<Descriptors,2> pathSort {
-		makeHashGrid.operator()<uint32_t>("mPathSort0", useHashGrid ? extent.width*extent.height : 1, useHashGrid ? mHashGridCellCount : 1),
-		makeHashGrid.operator()<uint32_t>("mPathSort1", useHashGrid ? extent.width*extent.height : 1, useHashGrid ? mHashGridCellCount : 1)
-	};
+	const Descriptors shadowRays = makeHashGrid.operator()<float4x4>("mShadowRays", mDefines.at("gDeferShadowRays") ? extent.width*extent.height*(mPushConstants["mMaxDepth"].get<uint32_t>()-1) : 1, mDefines.at("gDeferShadowRays") ? mHashGridCellCount : 1);
 
 	const shared_ptr<DescriptorSets> descriptorSets = mResourcePool.getDescriptorSets(*renderPipeline, "DescriptorSets", descriptors);
 
@@ -385,26 +385,40 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 	{
 		ProfilerScope ps("Trace camera paths", &commandBuffer);
 
-		if (useHashGrid) {
-			clearHashGrid(pathSort[0]);
+		if (mDefines.at("gDeferShadowRays")) {
+			clearHashGrid(shadowRays);
 		}
 
-		mPushConstants["mRenderIteration"] = 0;
 		renderPipeline->dispatchTiled(commandBuffer, extent, descriptorSets, {}, mPushConstants);
 
 		if (mDefines.at("gMultiDispatch")) {
-			auto renderIterationPipeline = mPipelines.at("RenderIteration").get(commandBuffer.mDevice, defines, renderPipeline->descriptorSetLayouts());
+			const shared_ptr<ComputePipeline> renderIterationPipeline = mPipelines.at("RenderIteration").get(commandBuffer.mDevice, defines, renderPipeline->descriptorSetLayouts());
 			for (uint32_t i = 1; i < mPushConstants["mMaxDepth"].get<uint32_t>(); i++) {
-				mPushConstants["mRenderIteration"] = i;
-				if (useHashGrid) {
-					buildHashGrid(pathSort[(i-1)%2], "uint", extent.width*extent.height, mHashGridCellCount);
-					clearHashGrid(pathSort[i%2]);
-				}
 				pathStates.barrier(commandBuffer,
 					vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
 					vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 				renderIterationPipeline->dispatchTiled(commandBuffer, extent, descriptorSets, {}, mPushConstants);
 			}
+		}
+
+		if (mDefines.at("gDeferShadowRays")) {
+			if (mDefines.at("gSortShadowRays"))
+				buildHashGrid(shadowRays, "float4x4", extent.width*extent.height*(mPushConstants["mMaxDepth"].get<uint32_t>()-1), mHashGridCellCount);
+
+			atomicOutput.fill(commandBuffer, 0);
+			Buffer::barriers(commandBuffer, { atomicOutput },
+				vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
+				vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
+
+			const shared_ptr<ComputePipeline> processShadowRaysPipeline = mPipelines.at("ProcessShadowRays").get(commandBuffer.mDevice, defines, renderPipeline->descriptorSetLayouts());
+			processShadowRaysPipeline->dispatchTiled(commandBuffer, vk::Extent3D{extent.width,extent.height*(mPushConstants["mMaxDepth"].get<uint32_t>()-1),1}, descriptorSets, {}, mPushConstants);
+
+			Buffer::barriers(commandBuffer, { atomicOutput },
+				vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
+				vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
+
+			const shared_ptr<ComputePipeline> processAtomicOutputPipeline = mPipelines.at("ProcessAtomicOutput").get(commandBuffer.mDevice, defines, renderPipeline->descriptorSetLayouts());
+			processAtomicOutputPipeline->dispatchTiled(commandBuffer, vk::Extent3D{extent.width,extent.height,1}, descriptorSets, {}, mPushConstants);
 		}
 	}
 
