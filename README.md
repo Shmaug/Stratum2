@@ -42,7 +42,6 @@ Currently, Stratum requires the following arguments in order to function:
 * --shaderKernelPath=${Stratum2_Dir}/src/Shaders/kernels
 * --shaderInclude=${Stratum2_Dir}/extern
 * --shaderInclude=${Stratum2_Dir}/src/Shaders
-* --deviceExtension=VK_KHR_ray_query
 * --debugMessenger
 
 Optionally, the following arguments are recommended:

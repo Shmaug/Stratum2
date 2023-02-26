@@ -1,26 +1,22 @@
 #include <Core/Instance.hpp>
 #include <Core/Window.hpp>
 #include <Core/Swapchain.hpp>
-#include <Core/CommandBuffer.hpp>
 #include <Core/Profiler.hpp>
-#include <Core/Pipeline.hpp>
 
 #include <App/Gui.hpp>
 #include <App/Scene.hpp>
 #include <App/Inspector.hpp>
 #include <App/FlyCamera.hpp>
 
-#include <GLFW/glfw3.h>
-
 #include <App/Denoiser.hpp>
 #include <App/Tonemapper.hpp>
 #include <App/ImageComparer.hpp>
-#include <App/RasterRenderer.hpp>
+#include <App/Renderer.hpp>
+
+#include <GLFW/glfw3.h>
+
 
 namespace stm2 {
-
-using Renderer = RasterRenderer;
-
 
 template<int N>
 inline VectorType<float, N> parseFloatVector(const string& arg) {
@@ -57,7 +53,8 @@ struct App {
 	shared_ptr<FlyCamera> mFlyCamera;
 	shared_ptr<Camera> mCamera;
 
-	shared_ptr<Renderer> mRenderer;
+	Renderer mRenderer;
+	RendererType mRendererType;
 	shared_ptr<ImageComparer> mImageComparer;
 
 	chrono::high_resolution_clock::time_point mLastUpdate;
@@ -106,15 +103,20 @@ struct App {
 		mFlyCamera = cameraNode->makeComponent<FlyCamera>(*cameraNode);
 		mCamera = cameraNode->makeComponent<Camera>(ProjectionData::makePerspective(radians(70.f), mSwapchain->extent().width / mSwapchain->extent().height, float2::Zero(), -.001f));
 
-		auto pathTracerNode = sceneNode->addChild("Path tracer");
-		mInspector->select(pathTracerNode);
-		mRenderer = pathTracerNode->makeComponent<Renderer>(*pathTracerNode);
+		mRendererType = RendererType::eTest;
+		if (auto arg = mInstance->findArgument("renderer"))
+			if (auto it = StringToRendererTypeMap.find(*arg); it != StringToRendererTypeMap.end())
+				mRendererType = it->second;
 
-		auto denoiserNode = pathTracerNode->addChild("Post process");
-		denoiserNode->makeComponent<Denoiser>(*pathTracerNode);
-		denoiserNode->makeComponent<Tonemapper>(*pathTracerNode);
+		auto rendererNode = sceneNode->addChild("Renderer");
+		mInspector->select(rendererNode);
+		mRenderer = make_renderer(mRendererType, *rendererNode);
 
-		mImageComparer = pathTracerNode->addChild("Image comparer")->makeComponent<ImageComparer>(*pathTracerNode);
+		auto denoiserNode = rendererNode->addChild("Post process");
+		denoiserNode->makeComponent<Denoiser>(*rendererNode);
+		denoiserNode->makeComponent<Tonemapper>(*rendererNode);
+
+		mImageComparer = rendererNode->addChild("Image comparer")->makeComponent<ImageComparer>(*rendererNode);
 	}
 	inline ~App() {
 		(*mDevice)->waitIdle();
@@ -122,6 +124,41 @@ struct App {
 
 	inline void drawGui() {
 		ProfilerScope ps("App::drawGui");
+
+		// renderer picker
+		if (ImGui::Begin("Renderer")) {
+			if (ImGui::BeginCombo("Renderer", to_string(mRendererType).c_str())) {
+				RendererType newType = mRendererType;
+				if (ImGui::Selectable("Test", mRendererType == RendererType::eTest))
+					newType = RendererType::eTest;
+				if (ImGui::Selectable("Raster", mRendererType == RendererType::eRaster))
+					newType = RendererType::eRaster;
+				if (ImGui::Selectable("Non euclidian", mRendererType == RendererType::eNonEuclidian))
+					newType = RendererType::eNonEuclidian;
+				if (newType != mRendererType) {
+					(*mDevice)->waitIdle();
+					shared_ptr<Node> node;
+					switch (mRendererType) {
+					case RendererType::eTest:
+						node = get<shared_ptr<TestRenderer>>(mRenderer)->mNode.getPtr();
+						node->removeComponent<TestRenderer>();
+						break;
+					case RendererType::eRaster:
+						node = get<shared_ptr<RasterRenderer>>(mRenderer)->mNode.getPtr();
+						node->removeComponent<RasterRenderer>();
+						break;
+					case RendererType::eNonEuclidian:
+						node = get<shared_ptr<NonEuclidianRenderer>>(mRenderer)->mNode.getPtr();
+						node->removeComponent<NonEuclidianRenderer>();
+						break;
+					}
+					mRendererType = newType;
+					mRenderer = make_renderer(mRendererType, *node);
+				}
+			}
+		}
+		ImGui::End();
+
 
 		// profiler timings
 
@@ -168,7 +205,9 @@ struct App {
 			mCamera->mProjection = ProjectionData::makePerspective(fovy, aspect, mCamera->mProjection.mOffset, mCamera->mProjection.mNearPlane);
 		}
 
-		mRenderer->render(commandBuffer, renderTarget);
+		visit(
+			[&](const auto& renderer){ renderer->render(commandBuffer, renderTarget); },
+			mRenderer);
 		mGui->render(commandBuffer, renderTarget);
 	}
 

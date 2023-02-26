@@ -142,10 +142,10 @@ Mesh loadSerialized(CommandBuffer& commandBuffer, const filesystem::path& filena
 	// bool face_normals = flags & EFaceNormals;
 
 	vk::BufferUsageFlags bufferUsage = vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer;
-#ifdef VK_KHR_buffer_device_address
-	bufferUsage |= vk::BufferUsageFlagBits::eShaderDeviceAddress;
-	bufferUsage |= vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
-#endif
+	if (commandBuffer.mDevice.accelerationStructureFeatures().accelerationStructure) {
+		bufferUsage |= vk::BufferUsageFlagBits::eShaderDeviceAddress;
+		bufferUsage |= vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
+	}
 
 	Mesh::Vertices attributes;
 

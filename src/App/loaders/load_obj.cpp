@@ -243,10 +243,10 @@ Mesh loadObj(CommandBuffer& commandBuffer, const filesystem::path &filename) {
     memcpy(indices_tmp.data(), indices.data(), indices_tmp.sizeBytes());
 
 	vk::BufferUsageFlags bufferUsage = vk::BufferUsageFlagBits::eTransferSrc|vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer;
-	#ifdef VK_KHR_buffer_device_address
-	bufferUsage |= vk::BufferUsageFlagBits::eShaderDeviceAddress;
-	bufferUsage |= vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
-	#endif
+	if (commandBuffer.mDevice.accelerationStructureFeatures().accelerationStructure) {
+		bufferUsage |= vk::BufferUsageFlagBits::eShaderDeviceAddress;
+		bufferUsage |= vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
+	}
 
     Mesh::Vertices vao;
 	vao[Mesh::VertexAttributeType::ePosition].emplace_back(

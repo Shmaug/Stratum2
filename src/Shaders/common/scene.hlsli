@@ -4,7 +4,9 @@
 #include "compat/material_data.h"
 
 struct SceneParameters {
+#ifndef NO_SCENE_ACCELERATION_STRUCTURE
 	RaytracingAccelerationStructure mAccelerationStructure;
+#endif
 
 	StructuredBuffer<InstanceData> mInstances;
 	StructuredBuffer<TransformData> mInstanceTransforms;

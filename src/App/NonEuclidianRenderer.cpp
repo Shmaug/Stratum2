@@ -1,4 +1,4 @@
-#include "RasterRenderer.hpp"
+#include "NonEuclidianRenderer.hpp"
 #include "Tonemapper.hpp"
 #include "Gui.hpp"
 #include "Inspector.hpp"
@@ -14,12 +14,12 @@
 
 namespace stm2 {
 
-RasterRenderer::RasterRenderer(Node& node) : mNode(node) {
+NonEuclidianRenderer::NonEuclidianRenderer(Node& node) : mNode(node) {
 	if (shared_ptr<Inspector> inspector = mNode.root()->findDescendant<Inspector>())
-		inspector->setInspectCallback<RasterRenderer>();
+		inspector->setInspectCallback<NonEuclidianRenderer>();
 }
 
-void RasterRenderer::createPipelines(Device& device, const vk::Format renderFormat) {
+void NonEuclidianRenderer::createPipelines(Device& device, const vk::Format renderFormat) {
 	vk::PipelineColorBlendAttachmentState blendState(
 		false,
 		vk::BlendFactor::eZero,
@@ -83,7 +83,7 @@ void RasterRenderer::createPipelines(Device& device, const vk::Format renderForm
 	gmd.mBindingFlags["gScene.mVolumes"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
 
 	const filesystem::path shaderPath = *device.mInstance.findArgument("shaderKernelPath");
-	const filesystem::path rasterShaderPath = shaderPath / "raster_scene.slang";
+	const filesystem::path rasterShaderPath = shaderPath / "raster_scene_noneuclid.slang";
 	const vector<string>& rasterArgs = {
 		"-matrix-layout-row-major",
 		"-O3",
@@ -96,7 +96,7 @@ void RasterRenderer::createPipelines(Device& device, const vk::Format renderForm
 	}, rasterArgs, gmd);
 }
 
-void RasterRenderer::drawGui() {
+void NonEuclidianRenderer::drawGui() {
 	ImGui::PushID(this);
 	if (ImGui::Button("Clear resources")) {
 		Device& device = *mNode.findAncestor<Device>();
@@ -111,13 +111,16 @@ void RasterRenderer::drawGui() {
 	ImGui::PopID();
 
 	ImGui::Checkbox("Alpha masks", &mAlphaMasks);
+	ImGui::SliderFloat("Lorentz sign", &mLorentzSign, -1, 1);
+	ImGui::SetNextItemWidth(40);
+		ImGui::DragFloat("Scale factor", &mScaleFactor, 0.05f);
 
 	if (auto tonemapper = mNode.getComponent<Tonemapper>(); tonemapper)
 		ImGui::Checkbox("Enable tonemapper", &mTonemap);
 }
 
-void RasterRenderer::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
-	ProfilerScope ps("RasterRenderer::render", &commandBuffer);
+void NonEuclidianRenderer::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
+	ProfilerScope ps("NonEuclidianRenderer::render", &commandBuffer);
 
 	if (!mRasterPipeline.pipelineMetadata().mDynamicRenderingState || renderTarget.image()->format() != mRasterPipeline.pipelineMetadata().mDynamicRenderingState->mColorFormats[0])
 		createPipelines(commandBuffer.mDevice, renderTarget.image()->format());
@@ -195,14 +198,12 @@ void RasterRenderer::render(CommandBuffer& commandBuffer, const Image::View& ren
 	descriptorSets->transitionImages(commandBuffer);
 
 	vector<vk::RenderingAttachmentInfo> colorAttachments{
-		{
-			*colorBuffer, vk::ImageLayout::eColorAttachmentOptimal,
+		{   *colorBuffer, vk::ImageLayout::eColorAttachmentOptimal,
 			vk::ResolveModeFlagBits::eNone,	{}, vk::ImageLayout::eUndefined,
 			vk::AttachmentLoadOp::eClear,
 			vk::AttachmentStoreOp::eStore,
 			vk::ClearValue{vk::ClearColorValue{array<uint32_t,4>{~0u,0u,0u,0u}}} },
-		{
-			*visibilityBuffer, vk::ImageLayout::eColorAttachmentOptimal,
+		{   *visibilityBuffer, vk::ImageLayout::eColorAttachmentOptimal,
 			vk::ResolveModeFlagBits::eNone,	{}, vk::ImageLayout::eUndefined,
 			vk::AttachmentLoadOp::eClear,
 			vk::AttachmentStoreOp::eStore,
@@ -231,27 +232,36 @@ void RasterRenderer::render(CommandBuffer& commandBuffer, const Image::View& ren
 	alphaMasked.reserve(instances.size());
 
 	struct PushConstants {
-		uint mViewIndex;
-		uint mInstanceIndex;
-		uint mMaterialAddress;
+		uint32_t mViewIndex;
+		uint32_t mInstanceIndex;
+		uint32_t mMaterialAddress;
+    	uint32_t pad;
+		float mLorentzSign;
+		float mScale;
+    	uint32_t pad1;
+    	uint32_t pad2;
 	};
 	PushConstants pushConstants;
-
 	pushConstants.mViewIndex = 0;
+	pushConstants.mLorentzSign = mLorentzSign;
+	pushConstants.mScale = mScaleFactor;
 
-	for (uint32_t instanceIndex = 0; instanceIndex < instances.size(); instanceIndex++) {
-		const auto&[instanceData, material, transform] = instances[instanceIndex];
-		if (instanceData.getType() != InstanceType::eMesh) continue;
-		const MeshInstanceData* instance = reinterpret_cast<const MeshInstanceData*>(&instanceData);
+	{
+		ProfilerScope ps("Render instances", &commandBuffer);
+		for (uint32_t instanceIndex = 0; instanceIndex < instances.size(); instanceIndex++) {
+			const auto&[instanceData, material, transform] = instances[instanceIndex];
+			if (instanceData.getType() != InstanceType::eMesh) continue;
+			const MeshInstanceData* instance = reinterpret_cast<const MeshInstanceData*>(&instanceData);
 
-		if (mAlphaMasks && material->alphaTest()) {
-			alphaMasked.emplace_back(instance->getMaterialAddress(), instance->primitiveCount()*3, instanceIndex);
-			continue;
+			if (mAlphaMasks && material->alphaTest()) {
+				alphaMasked.emplace_back(instance->getMaterialAddress(), instance->primitiveCount()*3, instanceIndex);
+				continue;
+			}
+			pushConstants.mInstanceIndex = instanceIndex;
+			pushConstants.mMaterialAddress = instance->getMaterialAddress();
+			commandBuffer->pushConstants<PushConstants>(**pipeline->layout(), vk::ShaderStageFlagBits::eVertex|vk::ShaderStageFlagBits::eFragment, 0, pushConstants);
+			commandBuffer->draw(instance->primitiveCount()*3, 1, 0, instanceIndex);
 		}
-		pushConstants.mInstanceIndex = instanceIndex;
-		pushConstants.mMaterialAddress = instance->getMaterialAddress();
-		pipeline->pushConstants(commandBuffer, { { "", pushConstants } });
-		commandBuffer->draw(instance->primitiveCount()*3, 1, 0, instanceIndex);
 	}
 
 	if (mAlphaMasks && !alphaMasked.empty()) {
@@ -262,11 +272,12 @@ void RasterRenderer::render(CommandBuffer& commandBuffer, const Image::View& ren
 
 		commandBuffer->bindPipeline(vk::PipelineBindPoint::eGraphics, ***alphaPipeline);
 		descriptorSets->bind(commandBuffer);
-		commandBuffer.trackResource(descriptorSets);
+
+		ProfilerScope ps("Render alpha masked instances", &commandBuffer);
 		for (const auto& data : alphaMasked) {
 			pushConstants.mInstanceIndex = data[2];
 			pushConstants.mMaterialAddress = data[0];
-			alphaPipeline->pushConstants(commandBuffer, { { "", pushConstants } });
+			commandBuffer->pushConstants<PushConstants>(**alphaPipeline->layout(), vk::ShaderStageFlagBits::eVertex|vk::ShaderStageFlagBits::eFragment, 0, pushConstants);
 			commandBuffer->draw(data[1], 1, 0, data[2]);
 		}
 	}

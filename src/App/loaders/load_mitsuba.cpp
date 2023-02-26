@@ -230,10 +230,10 @@ float3 parse_color(pugi::xml_node node) {
 
 Mesh create_mesh(CommandBuffer& commandBuffer, const vector<float3>& vertices, const vector<float3>& normals, const vector<float2>& uvs, const vector<uint32_t>& indices) {
 	vk::BufferUsageFlags bufferUsage = vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer;
-#ifdef VK_KHR_buffer_device_address
-	bufferUsage |= vk::BufferUsageFlagBits::eShaderDeviceAddress;
-	bufferUsage |= vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
-#endif
+	if (commandBuffer.mDevice.accelerationStructureFeatures().accelerationStructure) {
+		bufferUsage |= vk::BufferUsageFlagBits::eShaderDeviceAddress;
+		bufferUsage |= vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
+	}
 
 	// create staging buffers
 	Buffer::View<float3> positions_tmp = make_shared<Buffer>(commandBuffer.mDevice, "positions_tmp", vertices.size() * sizeof(float3), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);

@@ -219,10 +219,10 @@ shared_ptr<Node> Scene::loadAssimp(CommandBuffer& commandBuffer, const filesyste
 
 
 		vk::BufferUsageFlags bufferUsage = vk::BufferUsageFlagBits::eTransferSrc|vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer;
-		#ifdef VK_KHR_buffer_device_address
-		bufferUsage |= vk::BufferUsageFlagBits::eShaderDeviceAddress;
-		bufferUsage |= vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
-		#endif
+		if (commandBuffer.mDevice.accelerationStructureFeatures().accelerationStructure) {
+			bufferUsage |= vk::BufferUsageFlagBits::eShaderDeviceAddress;
+			bufferUsage |= vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
+		}
 
 		Buffer::View<float> vertexBuffer   = make_shared<Buffer>(commandBuffer.mDevice, filename.stem().string() + "/Vertices" , vertexDataSize*sizeof(float), bufferUsage|vk::BufferUsageFlagBits::eVertexBuffer);
 		Buffer::View<uint32_t> indexBuffer = make_shared<Buffer>(commandBuffer.mDevice, filename.stem().string() + "/Indices" , indexDataSize*sizeof(uint32_t), bufferUsage|vk::BufferUsageFlagBits::eIndexBuffer);

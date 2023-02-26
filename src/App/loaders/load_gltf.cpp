@@ -77,10 +77,10 @@ shared_ptr<Node> Scene::loadGltf(CommandBuffer& commandBuffer, const filesystem:
 	cout << "Loading buffers..." << endl;
 
 	vk::BufferUsageFlags bufferUsage = vk::BufferUsageFlagBits::eVertexBuffer|vk::BufferUsageFlagBits::eIndexBuffer|vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eTransferSrc;
-	#ifdef VK_KHR_buffer_device_address
-	bufferUsage |= vk::BufferUsageFlagBits::eShaderDeviceAddress;
-	bufferUsage |= vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
-	#endif
+	if (commandBuffer.mDevice.accelerationStructureFeatures().accelerationStructure) {
+		bufferUsage |= vk::BufferUsageFlagBits::eShaderDeviceAddress;
+		bufferUsage |= vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR;
+	}
 	ranges::transform(model.buffers, buffers.begin(), [&](const tinygltf::Buffer& buffer) {
 		Buffer::View<unsigned char> tmp = make_shared<Buffer>(device, buffer.name+"/Staging", buffer.data.size(), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
 		ranges::copy(buffer.data, tmp.begin());

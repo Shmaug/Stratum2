@@ -400,6 +400,7 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 	mFrameData.mAabbMax = float3::Constant(-numeric_limits<float>::infinity());
 	mFrameData.mInstances.clear();
 
+	const bool useAccelerationStructure = commandBuffer.mDevice.accelerationStructureFeatures().accelerationStructure;
 	vector<vk::AccelerationStructureInstanceKHR> instancesAS;
 	vector<vk::BufferMemoryBarrier> blasBarriers;
 
@@ -510,29 +511,34 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 			const uint32_t primitiveCount = prim->mMesh->indices().size() / (prim->mMesh->indices().stride() * 3);
 
 			// get/build BLAS
-			const size_t key = hashArgs(positions.buffer(), positions.offset(), positions.sizeBytes(), positionsDesc, prim->mMaterial->alphaTest());
-			auto it = mMeshAccelerationStructures.find(key);
-			if (it == mMeshAccelerationStructures.end()) {
-				ProfilerScope ps("Build acceleration structure", &commandBuffer);
+			vk::DeviceAddress accelerationStructureAddress;
+			if (useAccelerationStructure) {
+				const size_t key = hashArgs(positions.buffer(), positions.offset(), positions.sizeBytes(), positionsDesc, prim->mMaterial->alphaTest());
+				auto it = mMeshAccelerationStructures.find(key);
+				if (it == mMeshAccelerationStructures.end()) {
+					ProfilerScope ps("Build acceleration structure", &commandBuffer);
 
-				vk::AccelerationStructureGeometryTrianglesDataKHR triangles;
-				triangles.vertexFormat = positionsDesc.mFormat;
-				triangles.vertexData = positions.deviceAddress();
-				triangles.vertexStride = positionsDesc.mStride;
-				triangles.maxVertex = vertexCount;
-				triangles.indexType = prim->mMesh->indexType();
-				triangles.indexData = prim->mMesh->indices().deviceAddress();
-				vk::AccelerationStructureGeometryKHR triangleGeometry(vk::GeometryTypeKHR::eTriangles, triangles, prim->mMaterial->alphaTest() ? vk::GeometryFlagBitsKHR{} : vk::GeometryFlagBitsKHR::eOpaque);
-				vk::AccelerationStructureBuildRangeInfoKHR range(primitiveCount);
+					vk::AccelerationStructureGeometryTrianglesDataKHR triangles;
+					triangles.vertexFormat = positionsDesc.mFormat;
+					triangles.vertexData = positions.deviceAddress();
+					triangles.vertexStride = positionsDesc.mStride;
+					triangles.maxVertex = vertexCount;
+					triangles.indexType = prim->mMesh->indexType();
+					triangles.indexData = prim->mMesh->indices().deviceAddress();
+					vk::AccelerationStructureGeometryKHR triangleGeometry(vk::GeometryTypeKHR::eTriangles, triangles, prim->mMaterial->alphaTest() ? vk::GeometryFlagBitsKHR{} : vk::GeometryFlagBitsKHR::eOpaque);
+					vk::AccelerationStructureBuildRangeInfoKHR range(primitiveCount);
 
-				auto [as, asbuf] = buildAccelerationStructure(commandBuffer, primNode.name() + "/BLAS", vk::AccelerationStructureTypeKHR::eBottomLevel, triangleGeometry, range);
+					auto [as, asbuf] = buildAccelerationStructure(commandBuffer, primNode.name() + "/BLAS", vk::AccelerationStructureTypeKHR::eBottomLevel, triangleGeometry, range);
 
-				blasBarriers.emplace_back(
-					vk::AccessFlagBits::eAccelerationStructureWriteKHR, vk::AccessFlagBits::eAccelerationStructureReadKHR,
-					VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-					**asbuf.buffer(), asbuf.offset(), asbuf.sizeBytes());
+					blasBarriers.emplace_back(
+						vk::AccessFlagBits::eAccelerationStructureWriteKHR, vk::AccessFlagBits::eAccelerationStructureReadKHR,
+						VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+						**asbuf.buffer(), asbuf.offset(), asbuf.sizeBytes());
 
-				it = mMeshAccelerationStructures.emplace(key, make_pair(as, asbuf)).first;
+					it = mMeshAccelerationStructures.emplace(key, make_pair(as, asbuf)).first;
+				}
+
+				accelerationStructureAddress = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**it->second.first);
 			}
 
 			Buffer::View<byte> normals, texcoords;
@@ -563,7 +569,7 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 			float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
 			instance.instanceCustomIndex = appendInstanceData(primNode, prim.get(), MeshInstanceData(materialAddress, vertexInfoIndex, primitiveCount), transform, area, prim->mMaterial);
 			instance.mask = BVH_FLAG_TRIANGLES;
-			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**it->second.first);
+			instance.accelerationStructureReference = accelerationStructureAddress;
 
 			const vk::AabbPositionsKHR& aabb = prim->mMesh->vertices().mAabb;
 			for (uint32_t i = 0; i < 8; i++) {
@@ -596,13 +602,17 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 			if (!prim->mMaterial->mMaterialData.getEmission().isZero())
 				mFrameData.mEmissivePrimitiveCount++;
 
-			const auto& [as, asbuf] = getAabbBlas(-float3::Constant(radius), float3::Constant(radius), !prim->mMaterial->alphaTest());
+			vk::DeviceAddress accelerationStructureAddress;
+			if (useAccelerationStructure) {
+				const auto& [as, asbuf] = getAabbBlas(-float3::Constant(radius), float3::Constant(radius), !prim->mMaterial->alphaTest());
+				accelerationStructureAddress = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**as);
+			}
 
 			vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
 			float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
 			instance.instanceCustomIndex = appendInstanceData(primNode, prim.get(), SphereInstanceData(materialAddress, radius), transform, 4 * M_PI * radius * radius, prim->mMaterial);
 			instance.mask = BVH_FLAG_SPHERES;
-			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**as);
+			instance.accelerationStructureReference = accelerationStructureAddress;
 
 			const float3 center = transform.transformPoint(float3::Zero());
 			mFrameData.mAabbMin = min<float, 3>(mFrameData.mAabbMin, center - float3::Constant(radius));
@@ -615,42 +625,47 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 		mNode.forEachDescendant<Medium>([&](Node& primNode, const shared_ptr<Medium>& vol) {
 			if (!vol) return;
 
-			const uint32_t materialAddress = appendMaterialData(vol.get());
-
 			auto densityGrid = vol->mDensityGrid->grid<float>();
 
-			// get/build BLAS
 			const nanovdb::Vec3R& mn = densityGrid->worldBBox().min();
 			const nanovdb::Vec3R& mx = densityGrid->worldBBox().max();
-			const size_t key = hashArgs((float)mn[0], (float)mn[1], (float)mn[2], (float)mx[0], (float)mx[1], (float)mx[2]);
-			auto aabb_it = mAABBs.find(key);
-			if (aabb_it == mAABBs.end()) {
-				Buffer::View<vk::AabbPositionsKHR> aabb = make_shared<Buffer>(
-					commandBuffer.mDevice,
-					"aabb data",
-					sizeof(vk::AabbPositionsKHR),
-					vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress,
-					vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-				aabb[0].minX = (float)mn[0];
-				aabb[0].minY = (float)mn[1];
-				aabb[0].minZ = (float)mn[2];
-				aabb[0].maxX = (float)mx[0];
-				aabb[0].maxY = (float)mx[1];
-				aabb[0].maxZ = (float)mx[2];
-				vk::AccelerationStructureGeometryAabbsDataKHR aabbs(aabb.deviceAddress(), sizeof(vk::AabbPositionsKHR));
-				vk::AccelerationStructureGeometryKHR aabbGeometry(vk::GeometryTypeKHR::eAabbs, aabbs, vk::GeometryFlagBitsKHR::eOpaque);
-				vk::AccelerationStructureBuildRangeInfoKHR range(1);
-				commandBuffer.trackResource(aabb.buffer());
 
-				auto [as, asbuf] = buildAccelerationStructure(commandBuffer, "aabb BLAS", vk::AccelerationStructureTypeKHR::eBottomLevel, aabbGeometry, range);
+			// get/build BLAS
+			vk::DeviceAddress accelerationStructureAddress;
+			if (useAccelerationStructure) {
+				const size_t key = hashArgs((float)mn[0], (float)mn[1], (float)mn[2], (float)mx[0], (float)mx[1], (float)mx[2]);
+				auto aabb_it = mAABBs.find(key);
+				if (aabb_it == mAABBs.end()) {
+					Buffer::View<vk::AabbPositionsKHR> aabb = make_shared<Buffer>(
+						commandBuffer.mDevice,
+						"aabb data",
+						sizeof(vk::AabbPositionsKHR),
+						vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress,
+						vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+					aabb[0].minX = (float)mn[0];
+					aabb[0].minY = (float)mn[1];
+					aabb[0].minZ = (float)mn[2];
+					aabb[0].maxX = (float)mx[0];
+					aabb[0].maxY = (float)mx[1];
+					aabb[0].maxZ = (float)mx[2];
+					vk::AccelerationStructureGeometryAabbsDataKHR aabbs(aabb.deviceAddress(), sizeof(vk::AabbPositionsKHR));
+					vk::AccelerationStructureGeometryKHR aabbGeometry(vk::GeometryTypeKHR::eAabbs, aabbs, vk::GeometryFlagBitsKHR::eOpaque);
+					vk::AccelerationStructureBuildRangeInfoKHR range(1);
+					commandBuffer.trackResource(aabb.buffer());
 
-				blasBarriers.emplace_back(
-					vk::AccessFlagBits::eAccelerationStructureWriteKHR, vk::AccessFlagBits::eAccelerationStructureReadKHR,
-					VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-					**asbuf.buffer(), asbuf.offset(), asbuf.sizeBytes());
+					auto [as, asbuf] = buildAccelerationStructure(commandBuffer, "aabb BLAS", vk::AccelerationStructureTypeKHR::eBottomLevel, aabbGeometry, range);
 
-				aabb_it = mAABBs.emplace(key, make_pair(as, asbuf)).first;
+					blasBarriers.emplace_back(
+						vk::AccessFlagBits::eAccelerationStructureWriteKHR, vk::AccessFlagBits::eAccelerationStructureReadKHR,
+						VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
+						**asbuf.buffer(), asbuf.offset(), asbuf.sizeBytes());
+
+					aabb_it = mAABBs.emplace(key, make_pair(as, asbuf)).first;
+				}
+				accelerationStructureAddress = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**aabb_it->second.first);
 			}
+
+			const uint32_t materialAddress = appendMaterialData(vol.get());
 
 			// append to instance list
 			const TransformData transform = nodeToWorld(primNode);
@@ -658,7 +673,7 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 			float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
 			instance.instanceCustomIndex = appendInstanceData(primNode, vol.get(), VolumeInstanceData(materialAddress, mFrameData.mMaterialResources.mVolumeDataMap.at({ vol->mDensityBuffer.buffer(),vol->mDensityBuffer.offset() })), transform, 0, {});
 			instance.mask = BVH_FLAG_VOLUME;
-			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**aabb_it->second.first);
+			instance.accelerationStructureReference = accelerationStructureAddress;
 
 			for (uint32_t i = 0; i < 8; i++) {
 				const int3 idx(i % 2, (i % 4) / 2, i / 4);
@@ -683,7 +698,8 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 		});
 	}
 
-	{ // Build TLAS
+	// Build TLAS
+	if (useAccelerationStructure) {
 		ProfilerScope s("Build TLAS", &commandBuffer);
 		commandBuffer->pipelineBarrier(vk::PipelineStageFlagBits::eAccelerationStructureBuildKHR, vk::PipelineStageFlagBits::eAccelerationStructureBuildKHR, vk::DependencyFlagBits::eByRegion, {}, blasBarriers, {});
 
@@ -1117,8 +1133,6 @@ void Material::drawGui(Node& node) {
 			ImGui::Image(Gui::getTextureID(image), ImVec2(w, w * image.extent().height / (float)image.extent().width));
 		}
 	if (mAlphaMask) {
-		if (ImGui::SliderFloat("Alpha cutoff", &mAlphaCutoff, 0, 1))
-			changed = true;
 		ImGui::Text(mAlphaMask.image()->resourceName().c_str());
 		ImGui::Image(Gui::getTextureID(mAlphaMask), ImVec2(w, w * mAlphaMask.extent().height / (float)mAlphaMask.extent().width));
 	}

@@ -123,7 +123,10 @@ Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) :
 	allocatorInfo.instance = **mInstance;
 	allocatorInfo.vulkanApiVersion = mInstance.vulkanVersion();
 	allocatorInfo.preferredLargeHeapBlockSize = 1024 * 1024;
-	allocatorInfo.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+	if (get<vk::PhysicalDeviceBufferDeviceAddressFeatures>(mFeatureChain).bufferDeviceAddress)
+		allocatorInfo.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+	else
+		allocatorInfo.flags = 0;
 	vmaCreateAllocator(&allocatorInfo, &mAllocator);
 }
 Device::~Device() {

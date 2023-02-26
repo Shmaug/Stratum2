@@ -136,7 +136,7 @@ struct ProjectionData {
 	inline bool isOrthographic() CONST_CPP { return mVerticalFoV < 0; }
 
 	// uses reversed z (1 at near plane -> 0 at far plane)
-	inline float4 projectPoint(const float3 v) CONST_CPP {
+	inline float4 projectPoint(const float4 v) CONST_CPP {
 		float4 r;
 		if (isOrthographic()) {
 			// orthographic
@@ -151,8 +151,11 @@ struct ProjectionData {
 			r[2] = abs(mNearPlane);
 			r[3] = v[2] * sign(mNearPlane);
 		}
-		return r;
-	}
+        return r;
+    }
+    inline float4 projectPoint(const float3 v) CONST_CPP {
+        return projectPoint(float4(v[0], v[1], v[2], 1));
+    }
 	inline float3 backProject(const float2 v) CONST_CPP {
 		float3 r;
 		if (isOrthographic()) {
