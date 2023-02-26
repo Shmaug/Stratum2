@@ -18,24 +18,44 @@ extension SceneParameters {
         m.mEmissionScale = mMaterialData.Load<float>(int(address + 32));
         return m;
     }
-
-    PackedMaterialData LoadMaterial(const ShadingData shadingData) {
+    PackedMaterialData LoadMaterial(const uint address, const float2 uv, const float uvScreenSize) {
         uint4 imageIndices;
-        PackedMaterialData m = LoadMaterial(shadingData.getMaterialAddress(), imageIndices);
+        PackedMaterialData m = LoadMaterial(address, imageIndices);
 
-		if (imageIndices.x < gImageCount) {
-			m.setBaseColor(m.getBaseColor() * SampleImage4(imageIndices.x, shadingData.mTexcoord, shadingData.mTexcoordScreenSize).rgb);
-		}
-		if (imageIndices.y < gImageCount) {
-			m.setEmission(m.getEmission() * SampleImage4(imageIndices.y, shadingData.mTexcoord, shadingData.mTexcoordScreenSize).rgb);
-		}
-		if (imageIndices.z < gImageCount) {
-			m.mPackedData[2] = D3DX_FLOAT4_to_R8G8B8A8_UNORM(D3DX_R8G8B8A8_UNORM_to_FLOAT4(m.mPackedData[2]) * SampleImage4(imageIndices.z, shadingData.mTexcoord, shadingData.mTexcoordScreenSize));
-		}
-		if (imageIndices.w < gImageCount) {
-			m.mPackedData[3] = D3DX_FLOAT4_to_R8G8B8A8_UNORM(D3DX_R8G8B8A8_UNORM_to_FLOAT4(m.mPackedData[3]) * SampleImage4(imageIndices.w, shadingData.mTexcoord, shadingData.mTexcoordScreenSize));
-		}
-		return m;
+        if (imageIndices.x < gImageCount) {
+            m.setBaseColor(m.getBaseColor() * SampleImage4(imageIndices.x, uv, uvScreenSize).rgb);
+        }
+        if (imageIndices.y < gImageCount) {
+            m.setEmission(m.getEmission()   * SampleImage4(imageIndices.y, uv, uvScreenSize).rgb);
+        }
+        if (imageIndices.z < gImageCount) {
+            m.mPackedData[2] = D3DX_FLOAT4_to_R8G8B8A8_UNORM(D3DX_R8G8B8A8_UNORM_to_FLOAT4(m.mPackedData[2]) * SampleImage4(imageIndices.z, uv, uvScreenSize));
+        }
+        if (imageIndices.w < gImageCount) {
+            m.mPackedData[3] = D3DX_FLOAT4_to_R8G8B8A8_UNORM(D3DX_R8G8B8A8_UNORM_to_FLOAT4(m.mPackedData[3]) * SampleImage4(imageIndices.w, uv, uvScreenSize));
+        }
+        return m;
+    }
+    PackedMaterialData LoadMaterialUniform(const uint address, const float2 uv) {
+        uint4 imageIndices;
+        PackedMaterialData m = LoadMaterial(address, imageIndices);
+
+        if (imageIndices.x < gImageCount) {
+            m.setBaseColor(m.getBaseColor() * mImages[imageIndices.x].Sample(mStaticSampler, uv).rgb);
+        }
+        if (imageIndices.y < gImageCount) {
+            m.setEmission(m.getEmission()   * mImages[imageIndices.y].Sample(mStaticSampler, uv).rgb);
+        }
+        if (imageIndices.z < gImageCount) {
+            m.mPackedData[2] = D3DX_FLOAT4_to_R8G8B8A8_UNORM(D3DX_R8G8B8A8_UNORM_to_FLOAT4(m.mPackedData[2]) * mImages[imageIndices.z].Sample(mStaticSampler, uv));
+        }
+        if (imageIndices.w < gImageCount) {
+            m.mPackedData[3] = D3DX_FLOAT4_to_R8G8B8A8_UNORM(D3DX_R8G8B8A8_UNORM_to_FLOAT4(m.mPackedData[3]) * mImages[imageIndices.w].Sample(mStaticSampler, uv));
+        }
+        return m;
+    }
+    PackedMaterialData LoadMaterial(const ShadingData shadingData) {
+        return LoadMaterial(shadingData.getMaterialAddress(), shadingData.mTexcoord, shadingData.mTexcoordScreenSize);
     }
 
     void getMaterialAlphaMask(const uint materialAddress, out uint alphaMask, out float alphaCutoff) {

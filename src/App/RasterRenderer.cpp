@@ -20,9 +20,7 @@ RasterRenderer::RasterRenderer(Node& node) : mNode(node) {
 }
 
 void RasterRenderer::createPipelines(Device& device, const vk::Format renderFormat) {
-	GraphicsPipeline::GraphicsMetadata gmd;
-	gmd.mColorBlendState = GraphicsPipeline::ColorBlendState();
-	gmd.mColorBlendState->mAttachments = { vk::PipelineColorBlendAttachmentState(
+	vk::PipelineColorBlendAttachmentState blendState(
 		false,
 		vk::BlendFactor::eZero,
 		vk::BlendFactor::eZero,
@@ -30,12 +28,16 @@ void RasterRenderer::createPipelines(Device& device, const vk::Format renderForm
 		vk::BlendFactor::eZero,
 		vk::BlendFactor::eZero,
 		vk::BlendOp::eAdd,
-		vk::ColorComponentFlags{vk::FlagTraits<vk::ColorComponentFlagBits>::allFlags}) };
+		vk::ColorComponentFlags{vk::FlagTraits<vk::ColorComponentFlagBits>::allFlags});
+
+	GraphicsPipeline::GraphicsMetadata gmd;
+	gmd.mColorBlendState = GraphicsPipeline::ColorBlendState();
+	gmd.mColorBlendState->mAttachments = { blendState, blendState };
 
 	gmd.mDynamicStates = { vk::DynamicState::eViewport, vk::DynamicState::eScissor };
 
 	gmd.mDynamicRenderingState = GraphicsPipeline::DynamicRenderingState();
-	gmd.mDynamicRenderingState->mColorFormats = { renderFormat };
+	gmd.mDynamicRenderingState->mColorFormats = { renderFormat, vk::Format::eR32G32Uint };
 	gmd.mDynamicRenderingState->mDepthFormat = vk::Format::eD32Sfloat;
 
 	gmd.mViewports = { vk::Viewport(0, 0, 0, 0, 0, 1) };
@@ -108,6 +110,8 @@ void RasterRenderer::drawGui() {
 	}
 	ImGui::PopID();
 
+	ImGui::Checkbox("Alpha masks", &mAlphaMasks);
+
 	if (auto tonemapper = mNode.getComponent<Tonemapper>(); tonemapper)
 		ImGui::Checkbox("Enable tonemapper", &mTonemap);
 }
@@ -119,6 +123,34 @@ void RasterRenderer::render(CommandBuffer& commandBuffer, const Image::View& ren
 		createPipelines(commandBuffer.mDevice, renderTarget.image()->format());
 
 	const shared_ptr<Scene> scene = mNode.findAncestor<Scene>();
+
+
+	// scene object picker
+	for (auto it = mSelectionData.begin(); it != mSelectionData.end();) {
+		if (it->first.buffer()->inFlight())
+			break;
+
+		const uint32_t selectedInstance = it->first.cast<VisibilityData>()[0].instanceIndex();
+		if (shared_ptr<Inspector> inspector = mNode.root()->findDescendant<Inspector>()) {
+			if (selectedInstance == INVALID_INSTANCE || selectedInstance >= scene->frameData().mInstanceNodes.size())
+				inspector->select(nullptr);
+			else {
+				if (shared_ptr<Node> selected = scene->frameData().mInstanceNodes[selectedInstance].lock()) {
+					if (it->second) {
+						shared_ptr<Node> tn;
+						if (selected->findAncestor<TransformData>(&tn))
+							inspector->select(tn);
+						else
+							inspector->select(selected);
+					} else
+						inspector->select(selected);
+				}
+			}
+		}
+
+		it = mSelectionData.erase(it);
+	}
+
 
 	vector<ViewData> views;
 	vector<TransformData> viewTransforms;
@@ -143,6 +175,10 @@ void RasterRenderer::render(CommandBuffer& commandBuffer, const Image::View& ren
 		.mFormat = vk::Format::eR8G8B8A8Unorm,
 		.mExtent = extent,
 		.mUsage = vk::ImageUsageFlagBits::eColorAttachment|vk::ImageUsageFlagBits::eTransferDst|vk::ImageUsageFlagBits::eTransferSrc });
+	auto visibilityBuffer = mResourcePool.getImage(commandBuffer.mDevice, "VisibilityBuffer", Image::Metadata{
+		.mFormat = vk::Format::eR32G32Uint,
+		.mExtent = extent,
+		.mUsage = vk::ImageUsageFlagBits::eColorAttachment|vk::ImageUsageFlagBits::eTransferDst|vk::ImageUsageFlagBits::eTransferSrc });
 	auto depthBuffer = mResourcePool.getImage(commandBuffer.mDevice, "DepthBuffer", Image::Metadata{
 		.mFormat = vk::Format::eD32Sfloat,
 		.mExtent = extent,
@@ -154,15 +190,23 @@ void RasterRenderer::render(CommandBuffer& commandBuffer, const Image::View& ren
 	// render
 
 	colorBuffer.barrier(commandBuffer, vk::ImageLayout::eColorAttachmentOptimal, vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::AccessFlagBits::eColorAttachmentWrite);
+	visibilityBuffer.barrier(commandBuffer, vk::ImageLayout::eColorAttachmentOptimal, vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::AccessFlagBits::eColorAttachmentWrite);
 	depthBuffer.barrier(commandBuffer, vk::ImageLayout::eDepthStencilAttachmentOptimal, vk::PipelineStageFlagBits::eEarlyFragmentTests, vk::AccessFlagBits::eDepthStencilAttachmentRead|vk::AccessFlagBits::eDepthStencilAttachmentWrite);\
 	descriptorSets->transitionImages(commandBuffer);
 
-	vk::RenderingAttachmentInfo colorAttachment(
-		*colorBuffer, vk::ImageLayout::eColorAttachmentOptimal,
-		vk::ResolveModeFlagBits::eNone,	{}, vk::ImageLayout::eUndefined,
-		vk::AttachmentLoadOp::eClear,
-		vk::AttachmentStoreOp::eStore,
-		vk::ClearValue{vk::ClearColorValue{array<float,4>{0,0,0,0}}});
+	vector<vk::RenderingAttachmentInfo> colorAttachments{
+		{
+			*colorBuffer, vk::ImageLayout::eColorAttachmentOptimal,
+			vk::ResolveModeFlagBits::eNone,	{}, vk::ImageLayout::eUndefined,
+			vk::AttachmentLoadOp::eClear,
+			vk::AttachmentStoreOp::eStore,
+			vk::ClearValue{vk::ClearColorValue{array<uint32_t,4>{~0u,0u,0u,0u}}} },
+		{
+			*visibilityBuffer, vk::ImageLayout::eColorAttachmentOptimal,
+			vk::ResolveModeFlagBits::eNone,	{}, vk::ImageLayout::eUndefined,
+			vk::AttachmentLoadOp::eClear,
+			vk::AttachmentStoreOp::eStore,
+			vk::ClearValue{vk::ClearColorValue{array<float,4>{0,0,0,0}}} } };
 	vk::RenderingAttachmentInfo depthAttachment(
 		*depthBuffer, vk::ImageLayout::eDepthStencilAttachmentOptimal,
 		vk::ResolveModeFlagBits::eNone,	{}, vk::ImageLayout::eUndefined,
@@ -172,7 +216,7 @@ void RasterRenderer::render(CommandBuffer& commandBuffer, const Image::View& ren
 	commandBuffer->beginRendering(vk::RenderingInfo(
 		vk::RenderingFlags{},
 		vk::Rect2D(vk::Offset2D(0,0), vk::Extent2D(extent.width, extent.height)),
-		1, 0, colorAttachment, &depthAttachment, nullptr));
+		1, 0, colorAttachments, &depthAttachment, nullptr));
 
 	commandBuffer->setViewport(0, vk::Viewport(0, 0, extent.width, extent.height, 0, 1));
 	commandBuffer->setScissor(0, vk::Rect2D(vk::Offset2D(0,0), vk::Extent2D(extent.width, extent.height)));
@@ -181,14 +225,63 @@ void RasterRenderer::render(CommandBuffer& commandBuffer, const Image::View& ren
 	descriptorSets->bind(commandBuffer);
 	commandBuffer.trackResource(descriptorSets);
 
-	pipeline->pushConstants(commandBuffer, { { "mViewIndex", 0 } });
-	for (uint32_t instanceIndex = 0; instanceIndex < scene->frameData().mInstances.size(); instanceIndex++) {
-		const MeshInstanceData* instance = reinterpret_cast<const MeshInstanceData*>(&scene->frameData().mInstances[instanceIndex].first);
+	const auto& instances = scene->frameData().mInstances;
+
+	vector<uint3> alphaMasked;
+	alphaMasked.reserve(instances.size());
+
+	struct PushConstants {
+		uint mViewIndex;
+		uint mInstanceIndex;
+		uint mMaterialAddress;
+	};
+	PushConstants pushConstants;
+
+	pushConstants.mViewIndex = 0;
+
+	for (uint32_t instanceIndex = 0; instanceIndex < instances.size(); instanceIndex++) {
+		const auto&[instanceData, material, transform] = instances[instanceIndex];
+		const MeshInstanceData* instance = reinterpret_cast<const MeshInstanceData*>(&instanceData);
+
+		if (mAlphaMasks && material->alphaTest()) {
+			alphaMasked.emplace_back(instance->getMaterialAddress(), instance->primitiveCount()*3, instanceIndex);
+			continue;
+		}
+		pushConstants.mInstanceIndex = instanceIndex;
+		pushConstants.mMaterialAddress = instance->getMaterialAddress();
+		pipeline->pushConstants(commandBuffer, { { "", pushConstants } });
 		commandBuffer->draw(instance->primitiveCount()*3, 1, 0, instanceIndex);
+	}
+
+	if (mAlphaMasks && !alphaMasked.empty()) {
+		auto alphaPipeline = mRasterPipeline.get(commandBuffer.mDevice, {{ "gUseAlphaMask", "1" }}, pipeline->descriptorSetLayouts());
+
+		commandBuffer->bindPipeline(vk::PipelineBindPoint::eGraphics, ***alphaPipeline);
+		descriptorSets->bind(commandBuffer);
+		commandBuffer.trackResource(descriptorSets);
+		for (const auto& data : alphaMasked) {
+			pushConstants.mInstanceIndex = data[2];
+			pushConstants.mMaterialAddress = data[0];
+			alphaPipeline->pushConstants(commandBuffer, { { "", pushConstants } });
+			commandBuffer->draw(data[1], 1, 0, data[2]);
+		}
 	}
 
 
 	commandBuffer->endRendering();
+
+	// copy VisibilityData for selected pixel for scene object picking
+	if (!ImGui::GetIO().WantCaptureMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsUsing()) {
+		const ImVec2 c = ImGui::GetIO().MousePos;
+		for (const ViewData& view : views)
+			if (view.isInside(int2(c.x, c.y))) {
+				Buffer::View<VisibilityData> selectionBuffer = make_shared<Buffer>(commandBuffer.mDevice, "SelectionData", sizeof(uint2), vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+				visibilityBuffer.barrier(commandBuffer, vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferRead);
+				selectionBuffer.copyFromImage(commandBuffer, visibilityBuffer.image(), visibilityBuffer.subresourceLayer(), vk::Offset3D{int(c.x), int(c.y), 0}, vk::Extent3D{1,1,1});
+				mSelectionData.push_back(make_pair(selectionBuffer, ImGui::GetIO().KeyShift));
+				break;
+			}
+	}
 
 	if (colorBuffer != renderTarget)
 		Image::copy(commandBuffer, colorBuffer, renderTarget);

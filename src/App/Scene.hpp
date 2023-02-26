@@ -66,7 +66,7 @@ struct Camera {
 class Scene {
 public:
 	struct FrameData {
-		vector<pair<InstanceData, TransformData>> mInstances;
+		vector<tuple<InstanceData, shared_ptr<Material>, TransformData>> mInstances;
 		vector<shared_ptr<Buffer>> mVertexBuffers;
 		vector<MeshVertexInfo> mMeshVertexInfo;
 

@@ -427,7 +427,7 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 		return materialMap_it->second;
 	};
 
-	auto appendInstanceData = [&](Node& node, const void* primPtr, const InstanceData& instance, const TransformData& transform, const float emissivePower) {
+	auto appendInstanceData = [&](Node& node, const void* primPtr, const InstanceData& instance, const TransformData& transform, const float area, const shared_ptr<Material>& material) {
 		const uint32_t instanceIndex = (uint32_t)instanceDatas.size();
 		instanceDatas.emplace_back(instance);
 		mFrameData.mInstanceNodes.emplace_back(node.getPtr());
@@ -436,9 +436,8 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 
 		// add light if emissive
 
-		if (emissivePower > 0) {
+		if (material && (material->mMaterialData.getEmission() > 0).any()) {
 			lightIndex = (uint32_t)lightInstanceMap.size();
-			//instanceDatas[instanceIndex].lightIndex(lightIndex);
 			lightInstanceMap.emplace_back(instanceIndex);
 			mFrameData.mLightCount++;
 		}
@@ -456,7 +455,7 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 		instanceTransforms.emplace_back(transform);
 		instanceInverseTransforms.emplace_back(invTransform);
 		instanceMotionTransforms.emplace_back(makeMotionTransform(invTransform, prevTransform));
-		mFrameData.mInstances.emplace_back(make_pair(instance, transform));
+		mFrameData.mInstances.emplace_back(make_tuple(instance, material, transform));
 		return instanceIndex;
 	};
 
@@ -562,7 +561,7 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 
 			vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
 			float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
-			instance.instanceCustomIndex = appendInstanceData(primNode, prim.get(), MeshInstanceData(materialAddress, vertexInfoIndex, primitiveCount), transform, luminance(prim->mMaterial->mMaterialData.getEmission()) * area);
+			instance.instanceCustomIndex = appendInstanceData(primNode, prim.get(), MeshInstanceData(materialAddress, vertexInfoIndex, primitiveCount), transform, area, prim->mMaterial);
 			instance.mask = BVH_FLAG_TRIANGLES;
 			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**it->second.first);
 
@@ -601,7 +600,7 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 
 			vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
 			float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
-			instance.instanceCustomIndex = appendInstanceData(primNode, prim.get(), SphereInstanceData(materialAddress, radius), transform, luminance(prim->mMaterial->mMaterialData.getEmission()) * (4 * M_PI * radius * radius));
+			instance.instanceCustomIndex = appendInstanceData(primNode, prim.get(), SphereInstanceData(materialAddress, radius), transform, 4 * M_PI * radius * radius, prim->mMaterial);
 			instance.mask = BVH_FLAG_SPHERES;
 			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**as);
 
@@ -657,7 +656,7 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 			const TransformData transform = nodeToWorld(primNode);
 			vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
 			float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
-			instance.instanceCustomIndex = appendInstanceData(primNode, vol.get(), VolumeInstanceData(materialAddress, mFrameData.mMaterialResources.mVolumeDataMap.at({ vol->mDensityBuffer.buffer(),vol->mDensityBuffer.offset() })), transform, 0);
+			instance.instanceCustomIndex = appendInstanceData(primNode, vol.get(), VolumeInstanceData(materialAddress, mFrameData.mMaterialResources.mVolumeDataMap.at({ vol->mDensityBuffer.buffer(),vol->mDensityBuffer.offset() })), transform, 0, {});
 			instance.mask = BVH_FLAG_VOLUME;
 			instance.accelerationStructureReference = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**aabb_it->second.first);
 

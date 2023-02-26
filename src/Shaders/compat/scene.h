@@ -163,7 +163,7 @@ struct VisibilityData {
 	uint mInstancePrimitiveIndex;
 	uint mPackedNormal;
 
-    inline uint instanceIndex() { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
+    inline uint instanceIndex()  { return BF_GET(mInstancePrimitiveIndex,  0, 16); }
     inline uint primitiveIndex() { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
 #ifdef __SLANG_COMPILER__
 	inline float3 normal()       { return unpackNormal(mPackedNormal); }

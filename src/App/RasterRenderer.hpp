@@ -20,10 +20,11 @@ public:
 private:
 	GraphicsPipelineCache mRasterPipeline;
 
+	bool mAlphaMasks = true;
 	bool mTonemap = true;
 
 	DeviceResourcePool mResourcePool;
-	vector<pair<ViewData,TransformData>> mLastViews;
+	list<pair<Buffer::View<byte>, bool>> mSelectionData;
 };
 
 }
