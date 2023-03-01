@@ -16,27 +16,26 @@ TestRenderer::TestRenderer(Node& node) : mNode(node) {
 	if (shared_ptr<Inspector> inspector = mNode.root()->findDescendant<Inspector>())
 		inspector->setInspectCallback<TestRenderer>();
 
-	mPushConstants["mRRDepth"] = 2u;
 	mPushConstants["mMaxDepth"] = 5u;
 	mPushConstants["mMaxNullCollisions"] = 1000;
 	mPushConstants["mDebugPathLengths"] = 3 | (1<<16);
 	mPushConstants["mEnvironmentSampleProbability"] = 0.9f;
 
 	Device& device = *mNode.findAncestor<Device>();
-	createPipelines(device);
 
-}
-
-void TestRenderer::createPipelines(Device& device) {
-	const auto samplerRepeat = make_shared<vk::raii::Sampler>(*device, vk::SamplerCreateInfo({},
+	mStaticSampler = make_shared<vk::raii::Sampler>(*device, vk::SamplerCreateInfo({},
 		vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eLinear,
 		vk::SamplerAddressMode::eRepeat, vk::SamplerAddressMode::eRepeat, vk::SamplerAddressMode::eRepeat,
 		0, true, 8, false, vk::CompareOp::eAlways, 0, VK_LOD_CLAMP_NONE));
-	device.setDebugName(**samplerRepeat, "TestRenderer/Sampler");
+	device.setDebugName(**mStaticSampler, "TestRenderer/Sampler");
 
+	createPipelines(device);
+}
+
+void TestRenderer::createPipelines(Device& device) {
 	ComputePipeline::Metadata md;
-	md.mImmutableSamplers["gScene.mStaticSampler"]  = { samplerRepeat };
-	md.mImmutableSamplers["gScene.mStaticSampler1"] = { samplerRepeat };
+	md.mImmutableSamplers["gScene.mStaticSampler"]  = { mStaticSampler };
+	md.mImmutableSamplers["gScene.mStaticSampler1"] = { mStaticSampler };
 	md.mBindingFlags["gScene.mVertexBuffers"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
 	md.mBindingFlags["gScene.mImages"]  = vk::DescriptorBindingFlagBits::ePartiallyBound;
 	md.mBindingFlags["gScene.mImage2s"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
@@ -83,6 +82,7 @@ void TestRenderer::drawGui() {
 			if (ImGui::Checkbox(define.c_str(), &enabled)) changed = true;
 		}
 	}
+	if (ImGui::Checkbox("Light tracing", &mLightTrace)) changed = true;
 
 	if (ImGui::CollapsingHeader("Configuration")) {
 		if (mDefines.at("gDebugPaths")) {
@@ -90,10 +90,13 @@ void TestRenderer::drawGui() {
 		}
 		if (ImGui::Checkbox("Random frame seed", &mRandomPerFrame)) changed = true;
 		ImGui::PushItemWidth(40);
-		if (ImGui::DragScalar("RR depth",  ImGuiDataType_U32, &mPushConstants["mRRDepth"].get<uint32_t>(), .2f)) changed = true;
 		if (ImGui::DragScalar("Max depth", ImGuiDataType_U32, &mPushConstants["mMaxDepth"].get<uint32_t>(), .2f)) changed = true;
 		if (ImGui::DragScalar("Max null collisions", ImGuiDataType_U32, &mPushConstants["mMaxNullCollisions"].get<uint32_t>())) changed = true;
 		if (ImGui::SliderFloat("Environment sample p", &mPushConstants["mEnvironmentSampleProbability"].get<float>(), 0, 1)) changed = true;
+
+		if (mDefines.at("gUseVC") || mLightTrace) {
+			if (ImGui::SliderFloat("Light subpath count", &mLightSubpathCount, 0, 2)) changed = true;
+		}
 
 		if (ImGui::CollapsingHeader("Hash grid")) {
 			ImGui::Indent();
@@ -192,7 +195,7 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 	Descriptors descriptors;
 
 	auto pathStates   = mResourcePool.getBuffer<byte> (commandBuffer.mDevice,  "mPathStates", mDefines.at("gMultiDispatch") ? extent.width*extent.height*64 : 64);
-	auto atomicOutput = mResourcePool.getBuffer<uint4>(commandBuffer.mDevice, "mOutputAtomic", mDefines.at("gDeferShadowRays") ? extent.width*extent.height : 1, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst);
+	auto atomicOutput = mResourcePool.getBuffer<uint4>(commandBuffer.mDevice, "mOutputAtomic", (mDefines.at("gDeferShadowRays")||mDefines.at("gUseVC")||mLightTrace) ? extent.width*extent.height : 1, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst);
 
 	descriptors[{ "gRenderParams.mOutput", 0 }]     = ImageDescriptor{ outputImage    , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 	descriptors[{ "gRenderParams.mAlbedo", 0 }]     = ImageDescriptor{ albedoImage    , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
@@ -241,11 +244,13 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 
 		viewsBufferData.resize(views.size());
 		viewTransformsBufferData.resize(views.size());
+		vector<TransformData> inverseViewTransformsData(views.size());
 		vector<TransformData> prevInverseViewTransformsData(views.size());
 		for (uint32_t i = 0; i < views.size(); i++) {
 			const auto&[view,viewTransform] = views[i];
 			viewsBufferData[i] = view;
 			viewTransformsBufferData[i] = viewTransform;
+			inverseViewTransformsData[i] = viewTransform.inverse();
 			if (mPrevViewTransforms.size() == views.size()) {
 				prevInverseViewTransformsData[i] = mPrevViewTransforms[i].inverse();
 				if ((mPrevViewTransforms[i].m != viewTransform.m).any())
@@ -260,6 +265,7 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 
 		descriptors[{ "gRenderParams.mViews", 0 }]                     = viewsBuffer;
 		descriptors[{ "gRenderParams.mViewTransforms", 0 }]            = mResourcePool.uploadData<TransformData>(commandBuffer, "mViewTransforms", viewTransformsBufferData);
+		descriptors[{ "gRenderParams.mViewInverseTransforms", 0 }]     = mResourcePool.uploadData<TransformData>(commandBuffer, "mViewInverseTransforms", inverseViewTransformsData);
 		descriptors[{ "gRenderParams.mPrevViewInverseTransforms", 0 }] = mResourcePool.uploadData<TransformData>(commandBuffer, "mPrevViewInverseTransforms", prevInverseViewTransformsData);
 
 
@@ -279,6 +285,7 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 		descriptors[{ "gRenderParams.mViewMediumIndices", 0 }] = mResourcePool.uploadData<uint>(commandBuffer, "mViewMediumIndices", viewMediumIndices);
 
 		mPushConstants["mOutputExtent"] = uint2(renderTarget.extent().width, renderTarget.extent().height);
+		mPushConstants["mLightSubpathCount"] = max(1u, uint32_t(renderTarget.extent().width * renderTarget.extent().height * mLightSubpathCount));
 		mPushConstants["mViewCount"] = (uint32_t)views.size();
 		mPushConstants["mEnvironmentMaterialAddress"] = sceneData.mEnvironmentMaterialAddress;
 		mPushConstants["mLightCount"] = sceneData.mLightCount;
@@ -289,7 +296,6 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 		if (mRandomPerFrame)
 			mPushConstants["mRandomSeed"] = (uint32_t)rand();
 	}
-
 
 	auto makeHashGrid = [&]<typename T>(const string& name, const uint32_t size, const uint cellCount) {
 		struct HashGridConstants {
@@ -367,6 +373,15 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 	};
 
 
+	const uint32_t maxShadowRays = max(1u, (2*extent.width*extent.height + mPushConstants["mLightSubpathCount"].get<uint32_t>())*(mPushConstants["mMaxDepth"].get<uint32_t>()-1));
+	const Descriptors shadowRays = makeHashGrid.operator()<float4x4>("mShadowRays", mDefines.at("gDeferShadowRays") ? maxShadowRays : 1, mDefines.at("gDeferShadowRays") ? mHashGridCellCount : 1);
+
+	auto lightVertexBuffer = mResourcePool.getBuffer<array<float4,3>>(commandBuffer.mDevice, "mLightVertices", max(1u, mPushConstants["mLightSubpathCount"].get<uint32_t>()*(mPushConstants["mMaxDepth"].get<uint32_t>()-2)));
+	auto lightVertexCounterBuffer = mResourcePool.getBuffer<uint32_t>(commandBuffer.mDevice, "mLightVertexCounter", 1, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst);
+	descriptors[{ "gRenderParams.mLightVertices", 0 }]      = lightVertexBuffer;
+	descriptors[{ "gRenderParams.mLightVertexCounter", 0 }] = lightVertexCounterBuffer;
+
+
 	Defines defines {
 		{ "gHasMedia", to_string(hasMedia) }
 	};
@@ -374,30 +389,72 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 		if (enabled)
 			defines[define] = to_string(enabled);
 
+	if (mLightTrace) {
+		defines.erase("gUseVC");
+		defines.erase("gSampleDirectIllumination");
+	}
+	if (mDefines.at("gUseVC"))
+		defines.erase("gSampleDirectIllumination");
+	if (!mDefines.at("gDeferShadowRays"))
+		defines.erase("gSortShadowRays");
+
+	// create pipelines
 	const shared_ptr<ComputePipeline> renderPipeline = mPipelines.at("Render").get(commandBuffer.mDevice, defines);
+	shared_ptr<ComputePipeline> renderIterationPipeline, renderLightPipeline, renderLightIterationPipeline;
+	if (mDefines.at("gMultiDispatch"))
+		renderIterationPipeline = mPipelines.at("RenderIteration").get(commandBuffer.mDevice, defines, renderPipeline->descriptorSetLayouts());
+	if (mDefines.at("gUseVC") || mLightTrace) {
+		Defines tmp = defines;
+		tmp["gTraceFromLight"] = "true";
+		renderLightPipeline = mPipelines.at("Render").get(commandBuffer.mDevice, tmp);
+		if (mDefines.at("gMultiDispatch"))
+			renderLightIterationPipeline = mPipelines.at("RenderIteration").get(commandBuffer.mDevice, tmp, renderPipeline->descriptorSetLayouts());
+	}
 
 	// create descriptor sets
-	const Descriptors shadowRays = makeHashGrid.operator()<float4x4>("mShadowRays", mDefines.at("gDeferShadowRays") ? extent.width*extent.height*(mPushConstants["mMaxDepth"].get<uint32_t>()-1) : 1, mDefines.at("gDeferShadowRays") ? mHashGridCellCount : 1);
-
 	const shared_ptr<DescriptorSets> descriptorSets = mResourcePool.getDescriptorSets(*renderPipeline, "DescriptorSets", descriptors);
 
 	// render
 	{
-		ProfilerScope ps("Trace camera paths", &commandBuffer);
+		ProfilerScope ps("Trace paths", &commandBuffer);
 
-		if (mDefines.at("gDeferShadowRays")) {
+		if (mDefines.at("gDeferShadowRays"))
 			clearHashGrid(shadowRays);
+
+		// light paths
+		if (mDefines.at("gUseVC") || mLightTrace) {
+			atomicOutput.fill(commandBuffer, 0);
+			lightVertexCounterBuffer.fill(commandBuffer, 0);
+			Buffer::barriers(commandBuffer, { atomicOutput, lightVertexCounterBuffer },
+				vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
+				vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
+
+			const vk::Extent3D lightExtent = { extent.width, (mPushConstants["mLightSubpathCount"].get<uint32_t>() + extent.width-1)/extent.width, 1 };
+			renderLightPipeline->dispatchTiled(commandBuffer, lightExtent, descriptorSets, {}, mPushConstants);
+			if (mDefines.at("gMultiDispatch")) {
+				for (uint32_t i = 1; i < mPushConstants["mMaxDepth"].get<uint32_t>(); i++) {
+					pathStates.barrier(commandBuffer,
+						vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
+						vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
+					renderLightIterationPipeline->dispatchTiled(commandBuffer, lightExtent, descriptorSets, {}, mPushConstants);
+				}
+			}
+
+			lightVertexBuffer.barrier(commandBuffer,
+				vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
+				vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 		}
 
-		renderPipeline->dispatchTiled(commandBuffer, extent, descriptorSets, {}, mPushConstants);
-
-		if (mDefines.at("gMultiDispatch")) {
-			const shared_ptr<ComputePipeline> renderIterationPipeline = mPipelines.at("RenderIteration").get(commandBuffer.mDevice, defines, renderPipeline->descriptorSetLayouts());
-			for (uint32_t i = 1; i < mPushConstants["mMaxDepth"].get<uint32_t>(); i++) {
-				pathStates.barrier(commandBuffer,
-					vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
-					vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
-				renderIterationPipeline->dispatchTiled(commandBuffer, extent, descriptorSets, {}, mPushConstants);
+		// view paths
+		if (!mLightTrace) {
+			renderPipeline->dispatchTiled(commandBuffer, extent, descriptorSets, {}, mPushConstants);
+			if (mDefines.at("gMultiDispatch")) {
+				for (uint32_t i = 1; i < mPushConstants["mMaxDepth"].get<uint32_t>(); i++) {
+					pathStates.barrier(commandBuffer,
+						vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
+						vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
+					renderIterationPipeline->dispatchTiled(commandBuffer, extent, descriptorSets, {}, mPushConstants);
+				}
 			}
 		}
 
@@ -405,20 +462,24 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 			if (mDefines.at("gSortShadowRays"))
 				buildHashGrid(shadowRays, "float4x4", extent.width*extent.height*(mPushConstants["mMaxDepth"].get<uint32_t>()-1), mHashGridCellCount);
 
-			atomicOutput.fill(commandBuffer, 0);
-			Buffer::barriers(commandBuffer, { atomicOutput },
-				vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
-				vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
+			if (!mDefines.at("gUseVC") && !mLightTrace) {
+				atomicOutput.fill(commandBuffer, 0);
+				Buffer::barriers(commandBuffer, { atomicOutput },
+					vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
+					vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
+			}
 
 			const shared_ptr<ComputePipeline> processShadowRaysPipeline = mPipelines.at("ProcessShadowRays").get(commandBuffer.mDevice, defines, renderPipeline->descriptorSetLayouts());
-			processShadowRaysPipeline->dispatchTiled(commandBuffer, vk::Extent3D{extent.width,extent.height*(mPushConstants["mMaxDepth"].get<uint32_t>()-1),1}, descriptorSets, {}, mPushConstants);
+			processShadowRaysPipeline->dispatchTiled(commandBuffer, vk::Extent3D{extent.width, (maxShadowRays + extent.width-1) / extent.width, 1}, descriptorSets, {}, mPushConstants);
+		}
 
+		if (mDefines.at("gDeferShadowRays") || mDefines.at("gUseVC") || mLightTrace) {
 			Buffer::barriers(commandBuffer, { atomicOutput },
 				vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
-				vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
+				vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
 
-			const shared_ptr<ComputePipeline> processAtomicOutputPipeline = mPipelines.at("ProcessAtomicOutput").get(commandBuffer.mDevice, defines, renderPipeline->descriptorSetLayouts());
-			processAtomicOutputPipeline->dispatchTiled(commandBuffer, vk::Extent3D{extent.width,extent.height,1}, descriptorSets, {}, mPushConstants);
+			const shared_ptr<ComputePipeline> processAtomicOutputPipeline = mPipelines.at("ProcessAtomicOutput").get(commandBuffer.mDevice, Defines{ { "gClearImage", to_string(mLightTrace) }}, renderPipeline->descriptorSetLayouts());
+			processAtomicOutputPipeline->dispatchTiled(commandBuffer, extent, descriptorSets, {}, mPushConstants);
 		}
 	}
 

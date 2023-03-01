@@ -43,7 +43,6 @@ Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) :
 	// Logical device features
 
 	mFeatures.fillModeNonSolid = true;
-	mFeatures.sparseBinding = true;
 	mFeatures.samplerAnisotropy = true;
 	mFeatures.shaderImageGatherExtended = true;
 	mFeatures.shaderStorageImageExtendedFormats = true;

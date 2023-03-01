@@ -44,6 +44,7 @@ struct App {
 	vk::raii::Queue mPresentQueue;
 
 	vector<shared_ptr<CommandBuffer>> mCommandBuffers;
+	vector<shared_ptr<vk::raii::Semaphore>> mSemaphores;
 
 	shared_ptr<Swapchain> mSwapchain;
 	shared_ptr<Gui> mGui;
@@ -74,8 +75,12 @@ struct App {
 		mPresentQueue = vk::raii::Queue(**mDevice, mPresentQueueFamily, 0);
 
 		auto swapchainNode = deviceNode->addChild("Swapchain");
-		mSwapchain = swapchainNode->makeComponent<Swapchain>(*mDevice, "Swapchain", *mWindow, 2);
-
+		mSwapchain = swapchainNode->makeComponent<Swapchain>(*mDevice, "Swapchain", *mWindow, 3);
+		mSemaphores.resize(mSwapchain->imageCount());
+		for (auto& s : mSemaphores) {
+			s = make_shared<vk::raii::Semaphore>(**mDevice, vk::SemaphoreCreateInfo());
+			mDevice->setDebugName(**s, "CommandBuffer semaphore");
+		}
 		mCommandBuffers.resize(mSwapchain->imageCount());
 		for (auto& cb : mCommandBuffers) {
 			cb = make_shared<CommandBuffer>(*mDevice, "CommandBuffer", mPresentQueueFamily);
@@ -239,15 +244,15 @@ struct App {
 		// submit commands
 
 		pair<shared_ptr<vk::raii::Semaphore>, vk::PipelineStageFlags> waitSemaphore { mSwapchain->imageAvailableSemaphore(), vk::PipelineStageFlagBits::eComputeShader };
-		shared_ptr<vk::raii::Semaphore> signalSemaphore = make_shared<vk::raii::Semaphore>(**mDevice, vk::SemaphoreCreateInfo());
+		shared_ptr<vk::raii::Semaphore> signalSemaphore = mSemaphores[mDevice->frameIndex() % mSwapchain->imageCount()];
 		commandBuffer.trackVulkanResource(signalSemaphore);
+		commandBuffer.trackVulkanResource(mSwapchain->imageAvailableSemaphore());
+
 		mDevice->submit(mPresentQueue, commandBufferPtr, waitSemaphore, signalSemaphore);
 
 		// present
 
 		mSwapchain->present(mPresentQueue, signalSemaphore);
-
-		commandBuffer.trackVulkanResource(mSwapchain->imageAvailableSemaphore());
 
 		mDevice->incrementFrameIndex();
 	}
@@ -267,10 +272,18 @@ struct App {
 					continue;
 
 				// recreate swapchain-dependent resources
+
 				mCommandBuffers.clear();
 				mCommandBuffers.resize(mSwapchain->imageCount());
 				for (auto& cb : mCommandBuffers)
 					cb = make_shared<CommandBuffer>(*mDevice, "CommandBuffer", mPresentQueueFamily);
+
+				mSemaphores.clear();
+				mSemaphores.resize(mSwapchain->imageCount());
+				for (auto& s : mSemaphores) {
+					s = make_shared<vk::raii::Semaphore>(**mDevice, vk::SemaphoreCreateInfo());
+					mDevice->setDebugName(**s, "CommandBuffer semaphore");
+				}
 
 				mGui.reset();
 				mGui = make_shared<Gui>(*mSwapchain, mPresentQueue, mPresentQueueFamily, vk::ImageLayout::ePresentSrcKHR, false);

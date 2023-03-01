@@ -23,6 +23,7 @@ struct IlluminationSampleRecord {
 
     float mCosLight;
     bool isFinite;
+    bool isSingular;
 
     float3 getNormal() { return unpackNormal(mPackedNormal); }
 };
@@ -145,9 +146,10 @@ extension SceneParameters {
         return emission;
     }
 
-	// uniformly samples a light instance and primitive index, then uniformly samples the primitive's area
-    IlluminationSampleRecord SampleIllumination(const float3 referencePosition, const float4 rnd) {
+    // uniformly samples a light instance and primitive index, then uniformly samples the primitive's area
+    IlluminationSampleRecord SampleIllumination(const float4 rnd, const Optional<float3> referencePosition = none) {
         IlluminationSampleRecord r;
+        r.isSingular = false;
         if (gEnvironmentMaterialAddress != -1) {
             if (gLightCount == 0 || rnd.w < gEnvironmentSampleProbability) {
 				// sample environment light
@@ -203,30 +205,32 @@ extension SceneParameters {
 			return { 0 }; // volume lights are unsupported
 
 		r.mPdf /= shadingData.mShapeArea;
-
 		r.mPosition = shadingData.mPosition;
-        r.mPackedNormal = shadingData.mPackedShadingNormal;
+		r.mPackedNormal = shadingData.mPackedShadingNormal;
 
-		r.mDirectionToLight = r.mPosition - referencePosition;
-        r.mDistanceToLight  = length(r.mDirectionToLight);
-        r.mDirectionToLight /= r.mDistanceToLight;
-
-        r.mCosLight = -dot(r.getNormal(), r.mDirectionToLight);
-
-        r.mRadiance = r.mCosLight <= 0 ? 0 : LoadMaterial(shadingData).getEmission();
+        if (referencePosition.hasValue) {
+			r.mDirectionToLight = r.mPosition - referencePosition.value;
+			r.mDistanceToLight  = length(r.mDirectionToLight);
+			r.mDirectionToLight /= r.mDistanceToLight;
+			r.mCosLight = -dot(r.getNormal(), r.mDirectionToLight);
+        }
+        r.mRadiance = (referencePosition.hasValue && r.mCosLight <= 0) ? 0 : LoadMaterial(shadingData).getEmission();
 
         return r;
-	}
+    }
+}
 
-    float LightSamplePdfW(const float3 direction, const IntersectionResult isect) {
+extension IntersectionResult {
+    float LightSamplePdfA() {
         if (gLightCount == 0)
             return 0;
-
-		float pdfA = isect.mPrimitivePickPdf / (isect.mShadingData.mShapeArea * gLightCount);
+		float pdfA = mPrimitivePickPdf / (mShadingData.mShapeArea * gLightCount);
         if (gEnvironmentMaterialAddress != -1)
             pdfA *= 1 - gEnvironmentSampleProbability;
-
-		const float cosLight = isect.mShadingData.isMedium() ? 1 : abs(dot(direction, isect.mShadingData.getShadingNormal()));
-        return pdfAtoW(pdfA, cosLight/pow2(isect.mDistance));
+		return pdfA;
+	}
+    float LightSamplePdfW(const float3 direction) {
+        const float cosLight = mShadingData.isMedium() ? 1 : abs(dot(direction, mShadingData.getShadingNormal()));
+        return pdfAtoW(LightSamplePdfA(), cosLight/pow2(mDistance));
 	}
 };

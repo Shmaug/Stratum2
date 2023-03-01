@@ -113,7 +113,7 @@ void NonEuclidianRenderer::drawGui() {
 	ImGui::Checkbox("Alpha masks", &mAlphaMasks);
 	ImGui::SliderFloat("Lorentz sign", &mLorentzSign, -1, 1);
 	ImGui::SetNextItemWidth(40);
-		ImGui::DragFloat("Scale factor", &mScaleFactor, 0.05f);
+		ImGui::DragFloat("Scale factor", &mScaleFactor, 0.001f);
 
 	if (auto tonemapper = mNode.getComponent<Tonemapper>(); tonemapper)
 		ImGui::Checkbox("Enable tonemapper", &mTonemap);
@@ -214,28 +214,14 @@ void NonEuclidianRenderer::render(CommandBuffer& commandBuffer, const Image::Vie
 		vk::AttachmentLoadOp::eClear,
 		vk::AttachmentStoreOp::eDontCare,
 		vk::ClearValue{vk::ClearDepthStencilValue{0,0}});
-	commandBuffer->beginRendering(vk::RenderingInfo(
-		vk::RenderingFlags{},
-		vk::Rect2D(vk::Offset2D(0,0), vk::Extent2D(extent.width, extent.height)),
-		1, 0, colorAttachments, &depthAttachment, nullptr));
-
-	commandBuffer->setViewport(0, vk::Viewport(0, 0, extent.width, extent.height, 0, 1));
-	commandBuffer->setScissor(0, vk::Rect2D(vk::Offset2D(0,0), vk::Extent2D(extent.width, extent.height)));
-
-	commandBuffer->bindPipeline(vk::PipelineBindPoint::eGraphics, ***pipeline);
-	descriptorSets->bind(commandBuffer);
-	commandBuffer.trackResource(descriptorSets);
 
 	const auto& instances = scene->frameData().mInstances;
-
-	vector<uint3> alphaMasked;
-	alphaMasked.reserve(instances.size());
 
 	struct PushConstants {
 		uint32_t mViewIndex;
 		uint32_t mInstanceIndex;
 		uint32_t mMaterialAddress;
-    	uint32_t pad;
+    	uint32_t mRenderFlipped;
 		float mLorentzSign;
 		float mScale;
     	uint32_t pad1;
@@ -243,47 +229,88 @@ void NonEuclidianRenderer::render(CommandBuffer& commandBuffer, const Image::Vie
 	};
 	PushConstants pushConstants;
 	pushConstants.mViewIndex = 0;
+	pushConstants.mRenderFlipped = (mLorentzSign < 0) ? 1 : 0;
 	pushConstants.mLorentzSign = mLorentzSign;
 	pushConstants.mScale = mScaleFactor;
 
-	{
-		ProfilerScope ps("Render instances", &commandBuffer);
-		for (uint32_t instanceIndex = 0; instanceIndex < instances.size(); instanceIndex++) {
-			const auto&[instanceData, material, transform] = instances[instanceIndex];
-			if (instanceData.getType() != InstanceType::eMesh) continue;
-			const MeshInstanceData* instance = reinterpret_cast<const MeshInstanceData*>(&instanceData);
+	auto renderScene = [&]() {
+		vector<uint3> alphaMasked;
+		alphaMasked.reserve(instances.size());
 
-			if (mAlphaMasks && material->alphaTest()) {
-				alphaMasked.emplace_back(instance->getMaterialAddress(), instance->primitiveCount()*3, instanceIndex);
-				continue;
+		commandBuffer.trackResource(descriptorSets);
+
+		{
+			ProfilerScope ps("Render instances", &commandBuffer);
+
+			commandBuffer->bindPipeline(vk::PipelineBindPoint::eGraphics, ***pipeline);
+			descriptorSets->bind(commandBuffer);
+
+			for (uint32_t instanceIndex = 0; instanceIndex < instances.size(); instanceIndex++) {
+				const auto&[instanceData, material, transform] = instances[instanceIndex];
+				if (instanceData.getType() != InstanceType::eMesh) continue;
+				const MeshInstanceData* instance = reinterpret_cast<const MeshInstanceData*>(&instanceData);
+
+				if (mAlphaMasks && material->alphaTest()) {
+					alphaMasked.emplace_back(instance->getMaterialAddress(), instance->primitiveCount()*3, instanceIndex);
+					continue;
+				}
+
+				pushConstants.mInstanceIndex = instanceIndex;
+				pushConstants.mMaterialAddress = instance->getMaterialAddress();
+				commandBuffer->pushConstants<PushConstants>(**pipeline->layout(), vk::ShaderStageFlagBits::eVertex|vk::ShaderStageFlagBits::eFragment, 0, pushConstants);
+				commandBuffer->draw(instance->primitiveCount()*3, 1, 0, 0);
 			}
-			pushConstants.mInstanceIndex = instanceIndex;
-			pushConstants.mMaterialAddress = instance->getMaterialAddress();
-			commandBuffer->pushConstants<PushConstants>(**pipeline->layout(), vk::ShaderStageFlagBits::eVertex|vk::ShaderStageFlagBits::eFragment, 0, pushConstants);
-			commandBuffer->draw(instance->primitiveCount()*3, 1, 0, instanceIndex);
 		}
-	}
 
-	if (mAlphaMasks && !alphaMasked.empty()) {
-		auto alphaPipeline = mRasterPipeline.get(commandBuffer.mDevice, {
-			{ "NO_SCENE_ACCELERATION_STRUCTURE", "1" },
-			{ "gUseAlphaMask", "1" }},
-			pipeline->descriptorSetLayouts());
+		if (mAlphaMasks && !alphaMasked.empty()) {
+			ProfilerScope ps("Render alpha masked instances", &commandBuffer);
 
-		commandBuffer->bindPipeline(vk::PipelineBindPoint::eGraphics, ***alphaPipeline);
-		descriptorSets->bind(commandBuffer);
+			auto alphaPipeline = mRasterPipeline.get(commandBuffer.mDevice, {
+				{ "NO_SCENE_ACCELERATION_STRUCTURE", "1" },
+				{ "gUseAlphaMask", "1" }},
+				pipeline->descriptorSetLayouts());
 
-		ProfilerScope ps("Render alpha masked instances", &commandBuffer);
-		for (const auto& data : alphaMasked) {
-			pushConstants.mInstanceIndex = data[2];
-			pushConstants.mMaterialAddress = data[0];
-			commandBuffer->pushConstants<PushConstants>(**alphaPipeline->layout(), vk::ShaderStageFlagBits::eVertex|vk::ShaderStageFlagBits::eFragment, 0, pushConstants);
-			commandBuffer->draw(data[1], 1, 0, data[2]);
+			commandBuffer->bindPipeline(vk::PipelineBindPoint::eGraphics, ***alphaPipeline);
+			descriptorSets->bind(commandBuffer);
+
+			for (const auto& data : alphaMasked) {
+				pushConstants.mInstanceIndex = data[2];
+				pushConstants.mMaterialAddress = data[0];
+				commandBuffer->pushConstants<PushConstants>(**alphaPipeline->layout(), vk::ShaderStageFlagBits::eVertex|vk::ShaderStageFlagBits::eFragment, 0, pushConstants);
+				commandBuffer->draw(data[1], 1, 0, 0);
+			}
 		}
-	}
+	};
 
+	commandBuffer->beginRendering(vk::RenderingInfo(
+		vk::RenderingFlags{},
+		vk::Rect2D(vk::Offset2D(0,0), vk::Extent2D(extent.width, extent.height)),
+		1, 0, colorAttachments, &depthAttachment, nullptr));
+
+	commandBuffer->setViewport(0, vk::Viewport(0, 0, extent.width, extent.height, 0, 1));
+	commandBuffer->setScissor(0, vk::Rect2D(vk::Offset2D(0,0), vk::Extent2D(extent.width, extent.height)));
+	renderScene();
 
 	commandBuffer->endRendering();
+
+	if (mLorentzSign < 0) {
+		pushConstants.mRenderFlipped = 0;
+		colorAttachments[0].setLoadOp(vk::AttachmentLoadOp::eLoad);
+		colorAttachments[1].setLoadOp(vk::AttachmentLoadOp::eLoad);
+
+		commandBuffer->beginRendering(vk::RenderingInfo(
+			vk::RenderingFlags{},
+			vk::Rect2D(vk::Offset2D(0,0), vk::Extent2D(extent.width, extent.height)),
+			1, 0, colorAttachments, &depthAttachment, nullptr));
+
+		commandBuffer->setViewport(0, vk::Viewport(0, 0, extent.width, extent.height, 0, 1));
+		commandBuffer->setScissor(0, vk::Rect2D(vk::Offset2D(0,0), vk::Extent2D(extent.width, extent.height)));
+		renderScene();
+
+		commandBuffer->endRendering();
+
+	}
+
 
 	// copy VisibilityData for selected pixel for scene object picking
 	if (!ImGui::GetIO().WantCaptureMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsUsing()) {

@@ -21,18 +21,22 @@ public:
 	void render(CommandBuffer& commandBuffer, const Image::View& renderTarget);
 
 private:
+	shared_ptr<vk::raii::Sampler> mStaticSampler;
 	unordered_map<string, ComputePipelineCache> mPipelines;
 	PushConstants mPushConstants;
 
 	uint32_t mHashGridCellCount = 100000;
 	float mHashGridCellSize = 0.1f;
 	float mHashGridCellPixelRadius = 0;
+	float mLightSubpathCount = 1;
+	bool mLightTrace = false;
 
 	unordered_map<string, bool> mDefines {
 		{ "gAlphaTest", true },
 		{ "gNormalMaps", true },
 		{ "gShadingNormals", true },
 		{ "gSampleDirectIllumination", true },
+		{ "gUseVC", true },
 		{ "gMultiDispatch", false },
 		{ "gDeferShadowRays", false },
 		{ "gSortShadowRays", false },

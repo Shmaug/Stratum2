@@ -17,7 +17,7 @@ struct TransformData {
 
 	inline float3 transformPoint(float3 v) CONST_CPP {
 #ifdef __cplusplus
-		return (m.matrix() * v.matrix().homogeneous()).col(3).head<3>();
+		return (m.matrix() * v.matrix().homogeneous()).head<3>();
 #else
 		return mul(m, float4(v, 1));
 #endif
