@@ -103,16 +103,15 @@ struct Medium {
             const float3 sigma_t = density();
             if (sigma_t[channel] < 1e-6) return 0;
             const float t = -log(1 - rng.nextFloat().x) / sigma_t[channel];
-            if (t < tmax) {
+            if (t < tmax && Scattering) {
                 scattered = true;
-                beta   *= exp(-sigma_t * t) * (albedo() * sigma_t);
+                beta   *= exp(-sigma_t * t) * sigma_t * albedo();
                 dirPdf *= exp(-sigma_t[channel] * t) * sigma_t[channel];
                 return origin + direction*t;
-            } else {
-                beta   *= exp(-sigma_t * tmax);
-                dirPdf *= exp(-sigma_t[channel] * tmax);
-                return 0;
-			}
+            }
+			beta   *= exp(-sigma_t * tmax);
+			dirPdf *= exp(-sigma_t[channel] * tmax);
+			return 0;
 		}
 
 		pnanovdb_grid_handle_t gridHandle = { 0 };

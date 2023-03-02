@@ -206,7 +206,6 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 	descriptors[{ "gRenderParams.mOutputAtomic", 0 }] = atomicOutput;
 
 	bool changed = false;
-	bool hasMedia = false;
 
 	vector<ViewData> viewsBufferData;
 	vector<TransformData> viewTransformsBufferData;
@@ -272,15 +271,14 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 		// find if views are inside a volume
 		vector<uint32_t> viewMediumIndices(views.size());
 		ranges::fill(viewMediumIndices, INVALID_INSTANCE);
-
-		scene->mNode.forEachDescendant<Medium>([&](Node& node, const shared_ptr<Medium>& vol) {
-			hasMedia = true;
+		for (const auto& info : sceneData.mInstanceVolumeInfo) {
 			for (uint32_t i = 0; i < views.size(); i++) {
-				const float3 localViewPos = nodeToWorld(node).inverse().transformPoint( viewTransformsBufferData[i].transformPoint(float3::Zero()) );
-				if (vol->mDensityGrid->grid<float>()->worldBBox().isInside(nanovdb::Vec3R(localViewPos[0], localViewPos[1], localViewPos[2])))
-					viewMediumIndices[i] = sceneData.mInstanceTransformMap.at(vol.get()).second;
+				const float3 localViewPos = get<TransformData>(sceneData.mInstances[info.mInstanceIndex]).inverse().transformPoint( viewTransformsBufferData[i].transformPoint(float3::Zero()) );
+				if ((localViewPos >= info.mMin).all() && (localViewPos <= info.mMax).all()) {
+					viewMediumIndices[i] = info.mInstanceIndex;
+				}
 			}
-		});
+		}
 
 		descriptors[{ "gRenderParams.mViewMediumIndices", 0 }] = mResourcePool.uploadData<uint>(commandBuffer, "mViewMediumIndices", viewMediumIndices);
 
@@ -289,6 +287,7 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 		mPushConstants["mViewCount"] = (uint32_t)views.size();
 		mPushConstants["mEnvironmentMaterialAddress"] = sceneData.mEnvironmentMaterialAddress;
 		mPushConstants["mLightCount"] = sceneData.mLightCount;
+		mPushConstants["mVolumeInstanceCount"] = (uint32_t)sceneData.mInstanceVolumeInfo.size();
 		float4 sphere;
 		sphere.head<3>() = (sceneData.mAabbMax + sceneData.mAabbMin) / 2;
 		sphere[3] = length<float,3>(sceneData.mAabbMax - sphere.head<3>());
@@ -382,12 +381,12 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 	descriptors[{ "gRenderParams.mLightVertexCounter", 0 }] = lightVertexCounterBuffer;
 
 
-	Defines defines {
-		{ "gHasMedia", to_string(hasMedia) }
-	};
+	Defines defines;
 	for (const auto&[define,enabled] : mDefines)
 		if (enabled)
 			defines[define] = to_string(enabled);
+	if (mPushConstants["mVolumeInstanceCount"].get<uint32_t>() > 0)
+		defines.emplace("gHasMedia", "true");
 
 	if (mLightTrace) {
 		defines.erase("gUseVC");
@@ -504,10 +503,15 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 	}
 
 	// run tonemapper
-	if (mTonemap && tonemapper)
-		tonemapper->render(commandBuffer, processedOutput, renderTarget, (mDenoise && denoiser && denoiser->demodulateAlbedo() && processedOutput != outputImage) ? albedoImage : Image::View{});
-	else {
-		// just copy processedOutput to renderTarget
+	if (mTonemap && tonemapper) {
+		tonemapper->render(commandBuffer, processedOutput, outputImage, (mDenoise && denoiser && denoiser->demodulateAlbedo() && processedOutput != outputImage) ? albedoImage : Image::View{});
+		// copy outputImage to renderTarget
+		if (outputImage.image()->format() == renderTarget.image()->format())
+			Image::copy(commandBuffer, outputImage, renderTarget);
+		else
+			Image::blit(commandBuffer, outputImage, renderTarget);
+	} else {
+		// copy processedOutput to renderTarget
 		if (processedOutput.image()->format() == renderTarget.image()->format())
 			Image::copy(commandBuffer, processedOutput, renderTarget);
 		else

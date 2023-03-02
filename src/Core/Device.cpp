@@ -96,23 +96,21 @@ Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) :
 	// Load pipeline cache
 
 	vk::PipelineCacheCreateInfo cacheInfo = {};
+	vector<uint8_t> cacheData;
 	string tmp;
 	if (!mInstance.findArgument("noPipelineCache")) {
 		try {
-			ifstream cacheFile(filesystem::temp_directory_path() / "pcache", ios::binary | ios::ate);
-			if (cacheFile.is_open()) {
-				cacheInfo.initialDataSize = cacheFile.tellg();
-				cacheInfo.pInitialData = new char[cacheInfo.initialDataSize];
-				cacheFile.seekg(0, ios::beg);
-				cacheFile.read((char*)cacheInfo.pInitialData, cacheInfo.initialDataSize);
-				cout << "Read pipeline cache (" << fixed << showpoint << setprecision(2) << cacheInfo.initialDataSize/1024.f << "KiB)" << endl;
+			cacheData = readFile<vector<uint8_t>>(filesystem::temp_directory_path() / "stm2_pcache");
+			if (!cacheData.empty()) {
+				cacheInfo.pInitialData = cacheData.data();
+				cacheInfo.initialDataSize = cacheData.size();
+				cout << "Read pipeline cache (" << fixed << showpoint << setprecision(2) << cacheData.size()/1024.f << "KiB)" << endl;
 			}
 		} catch (exception& e) {
 			cerr << "Warning: Failed to read pipeline cache: " << e.what() << endl;
 		}
 	}
 	mPipelineCache = vk::raii::PipelineCache(mDevice, cacheInfo);
-	if (cacheInfo.pInitialData) delete[] cacheInfo.pInitialData;
 
 	// Create VMA allocator
 
@@ -129,6 +127,15 @@ Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) :
 	vmaCreateAllocator(&allocatorInfo, &mAllocator);
 }
 Device::~Device() {
+	if (!mInstance.findArgument("noPipelineCache")) {
+		try {
+			const vector<uint8_t> cacheData = mPipelineCache.getData();
+			if (!cacheData.empty())
+				writeFile(filesystem::temp_directory_path() / "stm2_pcache", cacheData);
+		} catch (exception& e) {
+			cerr << "Warning: Failed to write pipeline cache: " << e.what() << endl;
+		}
+	}
 	vmaDestroyAllocator(mAllocator);
 }
 

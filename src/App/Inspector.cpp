@@ -142,6 +142,7 @@ void Inspector::draw() {
 					for (const shared_ptr<Node>& c : mSelected->children())
 						p->addChild(c);
 				}
+				// detach from tree
 				mSelected->removeParent();
 				select(nullptr);
 				s->markDirty();

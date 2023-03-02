@@ -18,6 +18,7 @@ struct SceneParameters {
 
 	ByteAddressBuffer mMaterialData;
 	StructuredBuffer<MeshVertexInfo> mMeshVertexInfo;
+	StructuredBuffer<VolumeInfo> mInstanceVolumeInfo;
 
 	RWStructuredBuffer<uint> mRayCount;
 	SamplerState mStaticSampler;
@@ -27,6 +28,16 @@ struct SceneParameters {
     Texture2D<float2> mImage2s[gImageCount];
     Texture2D<float> mImage1s[gImageCount];
 	StructuredBuffer<uint> mVolumes[gVolumeCount];
+
+	uint GetMediumIndex(const float3 position, const uint volumeInfoCount) {
+		for (uint i = 0; i < volumeInfoCount; i++) {
+			const VolumeInfo info = mInstanceVolumeInfo[i];
+			const float3 localPos = mInstanceInverseTransforms[info.mInstanceIndex].transformPoint(position);
+			if (all(localPos >= info.mMin) && all(localPos <= info.mMax))
+				return info.mInstanceIndex;
+		}
+		return INVALID_INSTANCE;
+	}
 };
 
 uint3 LoadTriangleIndices(const ByteAddressBuffer indices, const uint offset, const uint indexStride, const uint primitiveIndex) {

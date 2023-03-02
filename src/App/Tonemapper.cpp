@@ -65,11 +65,14 @@ void Tonemapper::render(CommandBuffer& commandBuffer, const Image::View& input, 
 		commandBuffer->fillBuffer(**maxBuf.buffer(), maxBuf.offset(), maxBuf.sizeBytes(), 0);
 		maxBuf.barrier(commandBuffer, vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 
-		mMaxReducePipeline.get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, extent, {
+		Descriptors descriptors{
 			{ {"gInput", 0} , ImageDescriptor{ input, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}} },
-			{ {"gAlbedo", 0}, ImageDescriptor{ albedo.image()?albedo:input, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}} },
 			{ {"gMax", 0}, maxBuf }
-			}, {}, {});
+		};
+		if (albedo)
+			descriptors[{ "gAlbedo", 0 }] = ImageDescriptor{ albedo.image(), vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+
+		mMaxReducePipeline.get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, extent, descriptors, {}, {});
 	}
 
 	maxBuf.barrier(commandBuffer, vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite,  vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
@@ -77,12 +80,19 @@ void Tonemapper::render(CommandBuffer& commandBuffer, const Image::View& input, 
 	// tonemap
 	{
 		ProfilerScope ps("Tonemap", &commandBuffer);
-		mPipeline.get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, extent, {
-			{ { "gInput", 0 }, ImageDescriptor{ input, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} } },
-			{ { "gOutput", 0 }, ImageDescriptor{ output, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} } },
-			{ { "gAlbedo", 0 }, ImageDescriptor{ albedo.image()?albedo:input, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} } },
+		Descriptors descriptors{
+			{ { "gOutput", 0 }, ImageDescriptor{ output, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, {} } },
 			{ { "gMax", 0 }, maxBuf },
-			}, {}, mPushConstants);
+		};
+		if (albedo)
+			descriptors[{ "gAlbedo", 0 }] = ImageDescriptor{ albedo.image(), vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		if (input != output) {
+			descriptors[{ "gOutput", 0 }] = ImageDescriptor{ output, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+			descriptors[{ "gInput" , 0 }] = ImageDescriptor{ input , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		} else
+			defines.emplace("gSingleBuffer", "1");
+		output.barrier(commandBuffer, vk::ImageLayout::eGeneral, vk::PipelineStageFlagBits::eComputeShader, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
+		mPipeline.get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, extent, descriptors, {}, mPushConstants);
 	}
 }
 

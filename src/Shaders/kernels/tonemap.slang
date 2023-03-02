@@ -4,16 +4,19 @@
 #ifndef gMode
 #define gMode 0
 #endif
-#ifndef gModulateAlbedo
-#define gModulateAlbedo false
-#endif
 #ifndef gGammaCorrection
 #define gGammaCorrection false
 #endif
 
-Texture2D<float4> gInput;
 RWTexture2D<float4> gOutput;
+#ifdef gSingleBuffer
+#define gInput gOutput
+#else
+Texture2D<float4> gInput;
+#endif
+#ifdef gModulateAlbedo
 Texture2D<float4> gAlbedo;
+#endif
 RWByteAddressBuffer gMax;
 
 struct PushConstants {
@@ -112,7 +115,9 @@ void maxReduce(uint3 index : SV_DispatchThreadID, uint group_index : SV_GroupInd
     if (any(index.xy >= resolution)) return;
 
 	float4 v = float4(gInput[index.xy].rgb, 0);
-	if (gModulateAlbedo) v.rgb *= gAlbedo[index.xy].rgb;
+	#ifdef gModulateAlbedo
+	v.rgb *= gAlbedo[index.xy].rgb;
+	#endif
 	v.w = luminance(v.rgb);
 
 	if (any(v != v) || v.w <= 0) return;
@@ -139,8 +144,9 @@ void main(uint3 index : SV_DispatchThreadID) {
 
 	float3 radiance = gInput[index.xy].rgb;
 
-    if (gModulateAlbedo)
+    #ifdef gModulateAlbedo
         radiance *= (1e-2 + gAlbedo[index.xy].rgb);
+	#endif
 
 	radiance *= pow(2, gPushConstants.mExposure);
 

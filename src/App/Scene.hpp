@@ -70,6 +70,8 @@ public:
 		vector<shared_ptr<Buffer>> mVertexBuffers;
 		vector<MeshVertexInfo> mMeshVertexInfo;
 
+		vector<VolumeInfo> mInstanceVolumeInfo;
+
 		unordered_map<const void* /* address of component */, pair<TransformData, uint32_t /* instance index */ >> mInstanceTransformMap;
 		vector<weak_ptr<Node>> mInstanceNodes;
 		uint32_t mLightCount;
@@ -87,6 +89,9 @@ public:
 		Buffer::View<byte> mAccelerationStructureBuffer;
 
 		inline void clear() {
+			mInstances.clear();
+			mInstanceVolumeInfo.clear();
+
 			mInstanceTransformMap.clear();
 			mInstanceNodes.clear();
 			mLightCount = 0;
@@ -103,6 +108,8 @@ public:
 
 			mDescriptors.clear();
 			mAccelerationStructureBuffer.reset();
+
+			mResourcePool.clean();
 		}
 	};
 

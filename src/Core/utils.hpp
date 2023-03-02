@@ -47,7 +47,7 @@ inline R readFile(const filesystem::path& filename, R& dst) {
 template<ranges::contiguous_range R>
 inline void writeFile(const filesystem::path& filename, const R& r) {
 	ofstream file(filename, ios::ate | ios::binary);
-	file.write(reinterpret_cast<char*>(r.data()), r.size()*sizeof(ranges::range_value_t<R>));
+	file.write(reinterpret_cast<const char*>(r.data()), r.size()*sizeof(ranges::range_value_t<R>));
 }
 
 inline tuple<size_t, const char*> formatBytes(size_t bytes) {

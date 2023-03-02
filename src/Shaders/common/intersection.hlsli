@@ -85,19 +85,31 @@ extension SceneParameters {
 						}
 
 						case InstanceType::eVolume: {
-							pnanovdb_buf_t volumeBuffer = mVolumes[NonUniformResourceIndex(reinterpret<VolumeInstanceData>(instance).volumeIndex())];
-							pnanovdb_grid_handle_t gridHandle = {0};
-							pnanovdb_root_handle_t root = pnanovdb_tree_get_root(volumeBuffer, pnanovdb_grid_get_tree(volumeBuffer, gridHandle));
-							const float3 origin    = pnanovdb_grid_world_to_indexf(volumeBuffer, gridHandle, rayQuery.CandidateObjectRayOrigin());
-							const float3 direction = pnanovdb_grid_world_to_index_dirf(volumeBuffer, gridHandle, rayQuery.CandidateObjectRayDirection());
-							const pnanovdb_coord_t bbox_min = pnanovdb_root_get_bbox_min(volumeBuffer, root);
-							const pnanovdb_coord_t bbox_max = pnanovdb_root_get_bbox_max(volumeBuffer, root) + 1;
+							float3 origin,direction, bbox_min, bbox_max;
+							const uint volumeIndex = reinterpret<VolumeInstanceData>(instance).volumeIndex();
+							if (volumeIndex == -1) {
+								origin = rayQuery.CandidateObjectRayOrigin();
+								direction = rayQuery.CandidateObjectRayDirection();
+								bbox_min = -1;
+								bbox_max = 1;
+							} else {
+								pnanovdb_buf_t volumeBuffer = mVolumes[NonUniformResourceIndex(volumeIndex)];
+								pnanovdb_grid_handle_t gridHandle = {0};
+								pnanovdb_root_handle_t root = pnanovdb_tree_get_root(volumeBuffer, pnanovdb_grid_get_tree(volumeBuffer, gridHandle));
+								origin    = pnanovdb_grid_world_to_indexf    (volumeBuffer, gridHandle, rayQuery.CandidateObjectRayOrigin());
+								direction = pnanovdb_grid_world_to_index_dirf(volumeBuffer, gridHandle, rayQuery.CandidateObjectRayDirection());
+								bbox_min = pnanovdb_root_get_bbox_min(volumeBuffer, root);
+								bbox_max = pnanovdb_root_get_bbox_max(volumeBuffer, root) + 1;
+							}
 							const float3 t0 = (bbox_min - origin) / direction;
 							const float3 t1 = (bbox_max - origin) / direction;
 							const float2 st = float2(max3(min(t0, t1)), min3(max(t0, t1)));
 							const float t = st.x > rayQuery.RayTMin() ? st.x : st.y;
 							if (t < rayQuery.CommittedRayT() && t > rayQuery.RayTMin()) {
-								const float3 normal = normalize(mInstanceTransforms[mInstanceIndex].transformVector(pnanovdb_grid_index_to_world_dirf(volumeBuffer, gridHandle, float3(t1 == t) - float3(t0 == t))));
+								float3 localNormal = float3(t1 == t) - float3(t0 == t);
+								if (volumeIndex != -1)
+									localNormal = pnanovdb_grid_index_to_world_dirf(mVolumes[NonUniformResourceIndex(volumeIndex)], {0}, localNormal);
+								const float3 normal = normalize(mInstanceTransforms[mInstanceIndex].transformVector(localNormal));
 								isect.mShadingData.mPackedGeometryNormal = isect.mShadingData.mPackedShadingNormal = packNormal(normal);
 								rayQuery.CommitProceduralPrimitiveHit(t);
 							}

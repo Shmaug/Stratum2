@@ -79,6 +79,13 @@ struct VolumeInstanceData : InstanceData {
 #endif
 };
 
+struct VolumeInfo {
+	float3 mMin;
+	uint mInstanceIndex;
+	float3 mMax;
+	uint pad;
+};
+
 struct MeshVertexInfo {
 	uint2 mPackedBufferIndices;
 	uint mPackedStrides;

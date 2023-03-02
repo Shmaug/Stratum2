@@ -378,15 +378,14 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 
 	auto prevInstanceTransforms = move(mFrameData.mInstanceTransformMap);
 	mFrameData.clear();
-	mFrameData.mResourcePool.clean();
 
 	// Construct resources used by renderers (mesh/material data buffers, image arrays, etc.)
 
-	vector<pair<MeshPrimitive*, uint32_t>> meshInstanceIndices;
 	vector<InstanceData> instanceDatas;
 	vector<TransformData> instanceTransforms;
 	vector<TransformData> instanceInverseTransforms;
 	vector<TransformData> instanceMotionTransforms;
+	vector<VolumeInfo> volumeInfos;
 	vector<uint32_t> lightInstanceMap; // light index -> instance index
 	vector<uint32_t> instanceLightMap; // instance index -> light index
 	vector<uint32_t> instanceIndexMap; // current frame instance index -> previous frame instance index
@@ -395,10 +394,6 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 	unordered_map<Buffer*, uint32_t> vertexBufferMap;
 
 	unordered_map<const void*, uint32_t> materialMap;
-
-	mFrameData.mAabbMin = float3::Constant(numeric_limits<float>::infinity());
-	mFrameData.mAabbMax = float3::Constant(-numeric_limits<float>::infinity());
-	mFrameData.mInstances.clear();
 
 	const bool useAccelerationStructure = commandBuffer.mDevice.accelerationStructureFeatures().accelerationStructure;
 	vector<vk::AccelerationStructureInstanceKHR> instancesAS;
@@ -582,8 +577,6 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 				mFrameData.mAabbMin = min(mFrameData.mAabbMin, corner);
 				mFrameData.mAabbMax = max(mFrameData.mAabbMax, corner);
 			}
-
-			meshInstanceIndices.emplace_back(prim.get(), (uint32_t)instance.instanceCustomIndex);
 		});
 	}
 
@@ -625,44 +618,20 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 		mNode.forEachDescendant<Medium>([&](Node& primNode, const shared_ptr<Medium>& vol) {
 			if (!vol) return;
 
-			auto densityGrid = vol->mDensityGrid->grid<float>();
+			float3 mn = { -1, -1, -1 };
+			float3 mx = {  1,  1,  1 };
+			if (vol->mDensityGrid) {
+				auto densityGrid = vol->mDensityGrid->grid<float>();
+				nanovdb::Vec3R mnd = densityGrid->worldBBox().min();
+				nanovdb::Vec3R mxd = densityGrid->worldBBox().max();
+				mn = double3::Map(&mnd[0]).cast<float>();
+				mx = double3::Map(&mxd[0]).cast<float>();
+			}
 
-			const nanovdb::Vec3R& mn = densityGrid->worldBBox().min();
-			const nanovdb::Vec3R& mx = densityGrid->worldBBox().max();
-
-			// get/build BLAS
 			vk::DeviceAddress accelerationStructureAddress;
 			if (useAccelerationStructure) {
-				const size_t key = hashArgs((float)mn[0], (float)mn[1], (float)mn[2], (float)mx[0], (float)mx[1], (float)mx[2]);
-				auto aabb_it = mAABBs.find(key);
-				if (aabb_it == mAABBs.end()) {
-					Buffer::View<vk::AabbPositionsKHR> aabb = make_shared<Buffer>(
-						commandBuffer.mDevice,
-						"aabb data",
-						sizeof(vk::AabbPositionsKHR),
-						vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress,
-						vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-					aabb[0].minX = (float)mn[0];
-					aabb[0].minY = (float)mn[1];
-					aabb[0].minZ = (float)mn[2];
-					aabb[0].maxX = (float)mx[0];
-					aabb[0].maxY = (float)mx[1];
-					aabb[0].maxZ = (float)mx[2];
-					vk::AccelerationStructureGeometryAabbsDataKHR aabbs(aabb.deviceAddress(), sizeof(vk::AabbPositionsKHR));
-					vk::AccelerationStructureGeometryKHR aabbGeometry(vk::GeometryTypeKHR::eAabbs, aabbs, vk::GeometryFlagBitsKHR::eOpaque);
-					vk::AccelerationStructureBuildRangeInfoKHR range(1);
-					commandBuffer.trackResource(aabb.buffer());
-
-					auto [as, asbuf] = buildAccelerationStructure(commandBuffer, "aabb BLAS", vk::AccelerationStructureTypeKHR::eBottomLevel, aabbGeometry, range);
-
-					blasBarriers.emplace_back(
-						vk::AccessFlagBits::eAccelerationStructureWriteKHR, vk::AccessFlagBits::eAccelerationStructureReadKHR,
-						VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-						**asbuf.buffer(), asbuf.offset(), asbuf.sizeBytes());
-
-					aabb_it = mAABBs.emplace(key, make_pair(as, asbuf)).first;
-				}
-				accelerationStructureAddress = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**aabb_it->second.first);
+				const auto& [as, asbuf] = getAabbBlas(mn, mx, true);
+				accelerationStructureAddress = commandBuffer.mDevice->getAccelerationStructureAddressKHR(**as);
 			}
 
 			const uint32_t materialAddress = appendMaterialData(vol.get());
@@ -671,9 +640,11 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 			const TransformData transform = nodeToWorld(primNode);
 			vk::AccelerationStructureInstanceKHR& instance = instancesAS.emplace_back();
 			float3x4::Map(&instance.transform.matrix[0][0]) = transform.to_float3x4();
-			instance.instanceCustomIndex = appendInstanceData(primNode, vol.get(), VolumeInstanceData(materialAddress, mFrameData.mMaterialResources.mVolumeDataMap.at({ vol->mDensityBuffer.buffer(),vol->mDensityBuffer.offset() })), transform, 0, {});
+			instance.instanceCustomIndex = appendInstanceData(primNode, vol.get(), VolumeInstanceData(materialAddress, vol->mDensityBuffer ? mFrameData.mMaterialResources.mVolumeDataMap.at({ vol->mDensityBuffer.buffer(),vol->mDensityBuffer.offset() }) : -1), transform, 0, {});
 			instance.mask = BVH_FLAG_VOLUME;
 			instance.accelerationStructureReference = accelerationStructureAddress;
+
+			mFrameData.mInstanceVolumeInfo.emplace_back(VolumeInfo{mn, instance.instanceCustomIndex, mx, 0u});
 
 			for (uint32_t i = 0; i < 8; i++) {
 				const int3 idx(i % 2, (i % 4) / 2, i / 4);
@@ -681,9 +652,11 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 					idx[1] == 0 ? mn[1] : mx[1],
 					idx[2] == 0 ? mn[2] : mx[2]);
 				corner = transform.transformPoint(corner);
-				mFrameData.mAabbMin = min(mFrameData.mAabbMin, corner);
-				mFrameData.mAabbMax = max(mFrameData.mAabbMax, corner);
+				mn = min(mn, corner);
+				mx = max(mx, corner);
 			}
+			mFrameData.mAabbMin = min(mFrameData.mAabbMin, mn);
+			mFrameData.mAabbMax = max(mFrameData.mAabbMax, mx);
 		});
 	}
 
@@ -748,6 +721,7 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 		mFrameData.mDescriptors[{ "mInstanceLightMap", 0u }]          = uploadOrEmpty.operator()<uint32_t>      ("mInstanceLightMap", instanceLightMap);
 		mFrameData.mDescriptors[{ "mMaterialData", 0u }]              = uploadOrEmpty.operator()<uint32_t>      ("mMaterialData", mFrameData.mMaterialResources.mMaterialData);
 		mFrameData.mDescriptors[{ "mMeshVertexInfo", 0u }]            = uploadOrEmpty.operator()<MeshVertexInfo>("mMeshVertexInfo", meshVertexInfos);
+		mFrameData.mDescriptors[{ "mInstanceVolumeInfo", 0u }]        = uploadOrEmpty.operator()<VolumeInfo>    ("mInstanceVolumeInfo", mFrameData.mInstanceVolumeInfo);
 		if (!instanceIndexMap.empty())
 			mFrameData.mResourcePool.uploadData<uint32_t>(commandBuffer, "mInstanceIndexMap", instanceIndexMap);
 	}

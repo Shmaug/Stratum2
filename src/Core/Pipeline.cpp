@@ -104,6 +104,7 @@ void DescriptorSets::write(const Descriptors& descriptors) {
 			info.accelerationStructure = vk::WriteDescriptorSetAccelerationStructureKHR(**v);
 			w.descriptorCount = info.accelerationStructure.accelerationStructureCount;
 			w.pNext = &info;
+			break;
 		}
 		}
 	}
