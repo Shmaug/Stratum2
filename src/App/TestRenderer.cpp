@@ -77,12 +77,13 @@ void TestRenderer::drawGui() {
 		changed = true;
 	}
 
+	if (ImGui::Checkbox("Light tracing", &mLightTrace)) changed = true;
+
 	if (ImGui::CollapsingHeader("Defines")) {
 		for (auto&[define, enabled] : mDefines) {
 			if (ImGui::Checkbox(define.c_str(), &enabled)) changed = true;
 		}
 	}
-	if (ImGui::Checkbox("Light tracing", &mLightTrace)) changed = true;
 
 	if (ImGui::CollapsingHeader("Configuration")) {
 		if (mDefines.at("gDebugPaths")) {

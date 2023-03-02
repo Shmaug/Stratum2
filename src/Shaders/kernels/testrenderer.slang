@@ -64,7 +64,7 @@ struct PackedLightVertex {
     uint mPackedLocalDirIn;
     float dVC;
     float dVCM;
-    float pad0;
+    uint mPathLength;
     float pad1;
 
     uint getInstanceIndex()  { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
@@ -226,6 +226,7 @@ struct LightSubpathSampleRecord {
     float dVC;
     float mFwdPdfW;
     float mRevPdfW;
+	uint mSubpathLength;
     bool isMedium;
 };
 LightSubpathSampleRecord SampleLightSubpath(const float3 referencePosition, const uint rnd) {
@@ -240,6 +241,7 @@ LightSubpathSampleRecord SampleLightSubpath(const float3 referencePosition, cons
     r.dVCM = v.dVCM;
     r.dVC = v.dVC;
     r.isMedium = gHasMedia && shadingData.isMedium();
+	r.mSubpathLength = v.mPathLength;
 
     r.mRadiance = v.mThroughput;
 
@@ -299,13 +301,13 @@ float mis(const float a, const float b) {
 
 static PathState sPathState;
 
-void TraceConnectionRay(const float3 rayOrigin, const float3 rayDirection, const float rayDistance, float3 contrib, const float weight, const uint lightVertices) {
+void TraceConnectionRay(const float3 rayOrigin, const float3 rayDirection, const float rayDistance, float3 contrib, const float weight, const uint viewVertices, const uint lightVertices) {
     if (gDeferShadowRays) {
         ShadowRay ray;
         ray.mContribution = sPathState.mThroughput * contrib;
         ray.mWeight = weight;
         ray.mRayOrigin = rayOrigin;
-        ray.mViewVertices = (int)sPathState.mPathLength + 1 + (int(lightVertices) - 1);
+        ray.mViewVertices = viewVertices;
         ray.mRayDirection = rayDirection;
         ray.mDistance = rayDistance;
         ray.mPixelIndex = sPathState.mPixelIndex;
@@ -328,7 +330,7 @@ void TraceConnectionRay(const float3 rayOrigin, const float3 rayDirection, const
 
         contrib /= transNeePdf;
 
-        gRenderParams.AddRadiance(sPathState.getPixelCoord(), sPathState.mThroughput * contrib, weight, sPathState.mPathLength + 1 + (lightVertices-1), lightVertices);
+        gRenderParams.AddRadiance(sPathState.getPixelCoord(), sPathState.mThroughput * contrib, weight, viewVertices, lightVertices);
     }
 }
 
@@ -399,7 +401,7 @@ void ConnectToLight(const Interaction bsdf, const ShadingData shadingData, const
 		shadingData.mPosition :
 		rayOffset(shadingData.mPosition, shadingData.getGeometryNormal(), r.mDirectionToLight);
 
-    TraceConnectionRay(rayOrigin, r.mDirectionToLight, r.mDistanceToLight * 0.99, contrib, misWeight, 1);
+    TraceConnectionRay(rayOrigin, r.mDirectionToLight, r.mDistanceToLight * 0.99, contrib, misWeight, sPathState.mPathLength+1, 1);
 }
 
 void ConnectToLightSubpath(const Interaction bsdf, const ShadingData shadingData, const float3 localDirIn) {
@@ -440,7 +442,7 @@ void ConnectToLightSubpath(const Interaction bsdf, const ShadingData shadingData
 		shadingData.mPosition :
 		rayOffset(shadingData.mPosition, shadingData.getGeometryNormal(), r.mDirectionToLight);
 
-    TraceConnectionRay(rayOrigin, r.mDirectionToLight, r.mDistanceToLight * 0.99, contrib, misWeight, 1);
+    TraceConnectionRay(rayOrigin, r.mDirectionToLight, r.mDistanceToLight * 0.99, contrib, misWeight, sPathState.mPathLength+1, r.mSubpathLength+1);
 }
 
 void ConnectToCamera(const Interaction bsdf, const ShadingData shadingData, const float3 localDirIn) {
@@ -535,6 +537,7 @@ void StoreLightVertex(const IntersectionResult isect, const float3 localDirIn) {
 	v.mPackedLocalDirIn = packNormal(localDirIn);
 	v.dVC = sPathState.dVC;
     v.dVCM = sPathState.dVCM;
+	v.mPathLength = sPathState.mPathLength;
     uint idx;
     InterlockedAdd(gRenderParams.mLightVertexCounter[0], 1, idx);
     gRenderParams.mLightVertices[idx] = v;
