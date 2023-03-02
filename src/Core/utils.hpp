@@ -8,6 +8,7 @@
 #include <stack>
 #include <list>
 #include <memory>
+#include <optional>
 
 #include <vulkan/vulkan_raii.hpp>
 

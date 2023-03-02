@@ -70,17 +70,17 @@ void Mesh::bind(CommandBuffer& commandBuffer) const {
 }
 
 void Mesh::drawGui() {
-	ImGui::LabelText("Topology", to_string(mTopology).c_str());
+	ImGui::LabelText("Topology", "%s", to_string(mTopology).c_str());
 	if (mIndices)
-		ImGui::LabelText("Index stride", to_string(mIndices.stride()).c_str());
+		ImGui::LabelText("Index stride", "%s", to_string(mIndices.stride()).c_str());
 	for (const auto& [type, verts] : mVertices)
 		for (uint32_t i = 0; i < verts.size(); i++) {
 			const auto&[buf, desc] = verts[i];
 			if (buf && ImGui::CollapsingHeader((to_string(type) + "_" + to_string(i)).c_str())) {
-				ImGui::LabelText("Format", to_string(desc.mFormat).c_str());
-				ImGui::LabelText("Stride", to_string(desc.mStride).c_str());
-				ImGui::LabelText("Offset", to_string(desc.mOffset).c_str());
-				ImGui::LabelText("Input rate", to_string(desc.mInputRate).c_str());
+				ImGui::LabelText("Format", "%s", to_string(desc.mFormat).c_str());
+				ImGui::LabelText("Stride", "%u", desc.mStride);
+				ImGui::LabelText("Offset", "%u", desc.mOffset);
+				ImGui::LabelText("Input rate", "%s", to_string(desc.mInputRate).c_str());
 			}
 		}
 }

@@ -30,8 +30,6 @@ public:
 				: Device::Resource(device, name), mResource(r) {}
 			ResourceWrapper(ResourceWrapper&&) = default;
 			ResourceWrapper(const ResourceWrapper&) = default;
-			ResourceWrapper& operator=(ResourceWrapper&&) = default;
-			ResourceWrapper& operator=(const ResourceWrapper&) = default;
 		};
 
 		trackResource(make_shared<ResourceWrapper>(mDevice, resourceName() + "/ResourceWrapper", r));

@@ -118,7 +118,7 @@ void Swapchain::drawGui() {
 	ImGui::SetNextItemWidth(40);
 	if (ImGui::DragScalar("Min image count", ImGuiDataType_U32, &mMinImageCount, 1, &capabilities.minImageCount, &capabilities.maxImageCount))
 		mDirty = true;
-	ImGui::LabelText("Image count", to_string(imageCount()).c_str());
+	ImGui::LabelText("Image count", "%u", imageCount());
 
 	if (ImGui::BeginCombo("Present mode", to_string(mPresentMode).c_str())) {
 		for (auto mode : mDevice.physical().getSurfacePresentModesKHR(*mWindow.surface()))

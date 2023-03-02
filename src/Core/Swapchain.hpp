@@ -10,7 +10,7 @@ public:
 
 	Swapchain(Device& device, const string& name, Window& window,
 		const uint32_t minImages = 2,
-		const vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferDst,
+		const vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst,
 		const vk::SurfaceFormatKHR preferredSurfaceFormat = vk::SurfaceFormatKHR(vk::Format::eR8G8B8A8Unorm, vk::ColorSpaceKHR::eSrgbNonlinear),
 		const vk::PresentModeKHR presentMode = vk::PresentModeKHR::eImmediate);
 

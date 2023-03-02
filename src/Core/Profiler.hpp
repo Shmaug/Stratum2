@@ -7,6 +7,7 @@
 #include <stack>
 #include <string>
 #include <chrono>
+#include <optional>
 
 #include "fwd.hpp"
 #include "math.hpp"

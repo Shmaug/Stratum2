@@ -23,7 +23,7 @@ inline optional<pair<ImVec2,ImVec2>> draw_sample_timeline(const Profiler::Profil
 	if (hovered) {
 		ImGui::BeginTooltip();
 		const string label = s.mLabel + " (" + to_string(chrono::duration_cast<chrono::duration<float, milli>>(s.mDuration).count()) + "ms)";
-		ImGui::Text(label.c_str());
+		ImGui::Text("%s", label.c_str());
 		ImGui::EndTooltip();
 	}
 

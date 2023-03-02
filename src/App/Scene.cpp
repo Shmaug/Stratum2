@@ -80,14 +80,14 @@ Scene::Scene(Node& node): mNode(node) {
 		inspector->setInspectCallback<Medium>();
 		inspector->setInspectCallback<EnvironmentMap>();
 		inspector->setInspectCallback<nanovdb::GridMetaData>([](Node& n) {
-			auto metadata = n.getComponent<nanovdb::GridMetaData>();
-		ImGui::LabelText("Grid name", metadata->shortGridName());
-		ImGui::LabelText("Grid count", "%u", metadata->gridCount());
-		ImGui::LabelText("Grid type", nanovdb::toStr(metadata->gridType()));
-		ImGui::LabelText("Grid class", nanovdb::toStr(metadata->gridClass()));
-		ImGui::LabelText("Bounding box min", "%.02f %.02f %.02f", metadata->worldBBox().min()[0], metadata->worldBBox().min()[1], metadata->worldBBox().min()[2]);
-		ImGui::LabelText("Bounding box max", "%.02f %.02f %.02f", metadata->worldBBox().max()[0], metadata->worldBBox().max()[1], metadata->worldBBox().max()[2]);
-			});
+		auto metadata = n.getComponent<nanovdb::GridMetaData>();
+			ImGui::LabelText("Grid name", "%s", metadata->shortGridName());
+			ImGui::LabelText("Grid count", "%u", metadata->gridCount());
+			ImGui::LabelText("Grid type", "%s", nanovdb::toStr(metadata->gridType()));
+			ImGui::LabelText("Grid class", "%s", nanovdb::toStr(metadata->gridClass()));
+			ImGui::LabelText("Bounding box min", "%.02f %.02f %.02f", metadata->worldBBox().min()[0], metadata->worldBBox().min()[1], metadata->worldBBox().min()[2]);
+			ImGui::LabelText("Bounding box max", "%.02f %.02f %.02f", metadata->worldBBox().max()[0], metadata->worldBBox().max()[1], metadata->worldBBox().max()[2]);
+		});
 	}
 
 	ComputePipeline::Metadata md;
@@ -1129,15 +1129,15 @@ void Material::drawGui(Node& node) {
 	const float w = ImGui::CalcItemWidth() - 4;
 	for (const Image::View& image : mImages)
 		if (image) {
-			ImGui::Text(image.image()->resourceName().c_str());
+			ImGui::Text("%s", image.image()->resourceName().c_str());
 			ImGui::Image(Gui::getTextureID(image), ImVec2(w, w * image.extent().height / (float)image.extent().width));
 		}
 	if (mAlphaMask) {
-		ImGui::Text(mAlphaMask.image()->resourceName().c_str());
+		ImGui::Text("%s", mAlphaMask.image()->resourceName().c_str());
 		ImGui::Image(Gui::getTextureID(mAlphaMask), ImVec2(w, w * mAlphaMask.extent().height / (float)mAlphaMask.extent().width));
 	}
 	if (mBumpImage) {
-		ImGui::Text(mBumpImage.image()->resourceName().c_str());
+		ImGui::Text("%s", mBumpImage.image()->resourceName().c_str());
 		ImGui::Image(Gui::getTextureID(mBumpImage), ImVec2(w, w * mBumpImage.extent().height / (float)mBumpImage.extent().width));
 	}
 

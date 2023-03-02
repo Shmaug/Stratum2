@@ -36,7 +36,7 @@ bool Inspector::drawNodeGui(Node& n) {
 	if (ImGui::BeginDragDropSource()) {
 		const Node* payload = &n;
 		ImGui::SetDragDropPayload("SceneNode", &payload, sizeof(Node*));
-		ImGui::Text(n.name().c_str());
+		ImGui::Text("%s", n.name().c_str());
 		ImGui::EndDragDropSource();
 	}
 	if (ImGui::BeginDragDropTarget()) {
@@ -149,7 +149,7 @@ void Inspector::draw() {
 				// inspect selected node
 
 				ImGui::SameLine();
-				ImGui::Text(mSelected->name().c_str());
+				ImGui::Text("%s", mSelected->name().c_str());
 				ImGui::SetNextItemWidth(40);
 
 				// list components in selected node
@@ -180,7 +180,7 @@ void Inspector::draw() {
 			}
 			ImGui::PopID();
 		} else
-			ImGui::Text("Select a node to inspect");
+			ImGui::Text("%s", "Select a node to inspect");
 	}
 	ImGui::End();
 

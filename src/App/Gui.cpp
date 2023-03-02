@@ -64,15 +64,22 @@ Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily
 	//init_info.CheckVkResultFn = check_vk_result;
 	ImGui_ImplVulkan_Init(&init_info, *mRenderPass);
 
+	float scale = 1;
+	if (auto arg = swapchain.mDevice.mInstance.findArgument("guiScale"); arg) {
+		scale = stof(*arg);
+		ImGui::GetStyle().ScaleAllSizes(scale);
+		ImGui::GetStyle().IndentSpacing /= scale;
+	}
+
 	// Upload Fonts
 
 	for (auto fontstr : swapchain.mDevice.mInstance.findArguments("font")) {
 		const size_t delim = fontstr.find(',');
 		if (delim == string::npos)
-			ImGui::GetIO().Fonts->AddFontFromFileTTF(fontstr.c_str(), 16.f);
+			ImGui::GetIO().Fonts->AddFontFromFileTTF(fontstr.c_str(), scale*16.f);
 		else {
 			string font = fontstr.substr(0, delim);
-			ImGui::GetIO().Fonts->AddFontFromFileTTF(font.c_str(), (float)atof(fontstr.c_str() + delim + 1));
+			ImGui::GetIO().Fonts->AddFontFromFileTTF(font.c_str(), scale*(float)atof(fontstr.c_str() + delim + 1));
 		}
 	}
 

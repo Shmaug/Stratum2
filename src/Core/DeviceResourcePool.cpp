@@ -9,7 +9,7 @@ void DeviceResourcePool::drawGui() {
 	for (const auto&[name, sets] : mDescriptorSets) {
 		if (ImGui::CollapsingHeader(name.c_str())) {
 			for (const auto& descriptorSet : sets) {
-				ImGui::Text("%llu descriptors (%u frames ago)",
+				ImGui::Text("%llu descriptors (%llu frames ago)",
 					descriptorSet->descriptors().size(),
 					descriptorSet->mDevice.frameIndex() - descriptorSet->lastFrameUsed());
 			}
@@ -19,7 +19,7 @@ void DeviceResourcePool::drawGui() {
 	for (const auto&[name, images] : mImages) {
 		if (ImGui::CollapsingHeader(name.c_str())) {
 			for (const auto& image : images) {
-				ImGui::Text("%ux%ux%u (%u frames ago)",
+				ImGui::Text("%ux%ux%u (%llu frames ago)",
 					image.extent().width, image.extent().height, image.extent().depth,
 					image.image()->mDevice.frameIndex() - image.image()->lastFrameUsed());
 				ImGui::Indent();
@@ -33,7 +33,7 @@ void DeviceResourcePool::drawGui() {
 		if (ImGui::CollapsingHeader(name.c_str())) {
 			for (const auto& buffer : buffers) {
 				const auto[size, sizeUnit] = formatBytes(buffer.sizeBytes());
-				ImGui::Text("%llu %s %s (%u frames ago)",
+				ImGui::Text("%llu %s %s (%llu frames ago)",
 					size, sizeUnit,
 					(buffer.buffer()->memoryUsage() & vk::MemoryPropertyFlagBits::eDeviceLocal) ? "Device" : "Host",
 					buffer.buffer()->mDevice.frameIndex() - buffer.buffer()->lastFrameUsed());
