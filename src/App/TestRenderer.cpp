@@ -207,6 +207,7 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 	descriptors[{ "gRenderParams.mOutputAtomic", 0 }] = atomicOutput;
 
 	bool changed = false;
+	bool hasHeterogeneousMedia = false;
 
 	vector<ViewData> viewsBufferData;
 	vector<TransformData> viewTransformsBufferData;
@@ -274,7 +275,10 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 		ranges::fill(viewMediumIndices, INVALID_INSTANCE);
 		for (const auto& info : sceneData.mInstanceVolumeInfo) {
 			for (uint32_t i = 0; i < views.size(); i++) {
-				const float3 localViewPos = get<TransformData>(sceneData.mInstances[info.mInstanceIndex]).inverse().transformPoint( viewTransformsBufferData[i].transformPoint(float3::Zero()) );
+				const auto&[instance, material, transform] = sceneData.mInstances[info.mInstanceIndex];
+				if (reinterpret_cast<const VolumeInstanceData*>(&instance)->volumeIndex() != -1)
+					hasHeterogeneousMedia = true;
+				const float3 localViewPos = transform.inverse().transformPoint( viewTransformsBufferData[i].transformPoint(float3::Zero()) );
 				if ((localViewPos >= info.mMin).all() && (localViewPos <= info.mMax).all()) {
 					viewMediumIndices[i] = info.mInstanceIndex;
 				}
@@ -388,6 +392,8 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 			defines[define] = to_string(enabled);
 	if (mPushConstants["mVolumeInstanceCount"].get<uint32_t>() > 0)
 		defines.emplace("gHasMedia", "true");
+	if (hasHeterogeneousMedia)
+		defines.emplace("gHasHeterogeneousMedia", "true");
 
 	if (mLightTrace) {
 		defines.erase("gUseVC");

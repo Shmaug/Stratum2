@@ -1,6 +1,9 @@
 #ifndef MEDIUM_H
 #define MEDIUM_H
 
+#ifndef gHasHeterogeneousMedia
+#define gHasHeterogeneousMedia false
+#endif
 #ifndef gMaxNullCollisions
 #define gMaxNullCollisions 2048
 #endif
@@ -97,7 +100,7 @@ struct Medium {
 
 		const uint channel = rng.next().x % 3;
 
-        if (mDensityVolumeIndex == -1) {
+        if (!gHasHeterogeneousMedia || mDensityVolumeIndex == -1) {
 			// homogeneous volume
 
             const float3 sigma_t = density();
@@ -114,22 +117,24 @@ struct Medium {
 			return 0;
 		}
 
-		pnanovdb_grid_handle_t gridHandle = { 0 };
+		// heterogeneous volume
 
 		pnanovdb_readaccessor_t density_accessor, albedo_accessor;
-		pnanovdb_readaccessor_init(density_accessor, pnanovdb_tree_get_root(getDensityVolume(), pnanovdb_grid_get_tree(getDensityVolume(), gridHandle)));
+		pnanovdb_readaccessor_init(density_accessor, pnanovdb_tree_get_root(getDensityVolume(), pnanovdb_grid_get_tree(getDensityVolume(), { 0 })));
         if (mAlbedoVolumeIndex != -1)
-            pnanovdb_readaccessor_init(albedo_accessor, pnanovdb_tree_get_root(getAlbedoVolume(), pnanovdb_grid_get_tree(getAlbedoVolume(), gridHandle)));
+            pnanovdb_readaccessor_init(albedo_accessor, pnanovdb_tree_get_root(getAlbedoVolume(), pnanovdb_grid_get_tree(getAlbedoVolume(), { 0 })));
 
 
         float3 majorant = density() * pnanovdb_read_float(getDensityVolume(), pnanovdb_root_get_max_address(PNANOVDB_GRID_TYPE_FLOAT, getDensityVolume(), density_accessor.root));
         if (majorant[channel] < 1e-6) return 0;
 
-		origin    = pnanovdb_grid_world_to_indexf    (getDensityVolume(), gridHandle, origin);
-		direction = pnanovdb_grid_world_to_index_dirf(getDensityVolume(), gridHandle, direction);
+		origin    = pnanovdb_grid_world_to_indexf    (getDensityVolume(), { 0 }, origin);
+		direction = pnanovdb_grid_world_to_index_dirf(getDensityVolume(), { 0 }, direction);
 
         const float invMajorantChannel = 1 / majorant[channel];
         const float invMajorantMax = 1 / max3(majorant);
+
+		pnanovdb_buf_t densityVolume = getDensityVolume();
 
         for (uint iteration = 0; iteration < gMaxNullCollisions && any(beta > 0); iteration++) {
             const float t = -log(1 - rng.nextFloat().x) * invMajorantChannel;
@@ -156,7 +161,7 @@ struct Medium {
                 beta   *= tr * sigma_t * sigma_s; // note: multiplication by localSigmaS is really part of BSDF computation
                 dirPdf *= tr * sigma_t;
                 scattered = true;
-				return pnanovdb_grid_index_to_worldf(getDensityVolume(), gridHandle, origin);
+                return pnanovdb_grid_index_to_worldf(densityVolume, { 0 }, origin);
 			} else {
 				// fake particle
 				beta   *= tr * (majorant - sigma_t);
