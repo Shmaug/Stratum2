@@ -31,18 +31,7 @@ private:
 	float mLightSubpathCount = 1;
 	bool mLightTrace = false;
 
-	unordered_map<string, bool> mDefines {
-		{ "gAlphaTest", true },
-		{ "gNormalMaps", true },
-		{ "gShadingNormals", true },
-		{ "gSampleDirectIllumination", true },
-		{ "gUseVC", true },
-		{ "gMultiDispatch", false },
-		{ "gDeferShadowRays", false },
-		{ "gSortShadowRays", false },
-		{ "gDebugPaths", false },
-		{ "gLambertian", false },
-	};
+	unordered_map<string, bool> mDefines;
 
 
 	bool mRandomPerFrame = true;

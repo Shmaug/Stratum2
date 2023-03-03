@@ -16,6 +16,19 @@ TestRenderer::TestRenderer(Node& node) : mNode(node) {
 	if (shared_ptr<Inspector> inspector = mNode.root()->findDescendant<Inspector>())
 		inspector->setInspectCallback<TestRenderer>();
 
+	mDefines = {
+		{ "gAlphaTest", true },
+		{ "gNormalMaps", true },
+		{ "gShadingNormals", true },
+		{ "gSampleDirectIllumination", true },
+		{ "gUseVC", true },
+		{ "gMultiDispatch", false },
+		{ "gDeferShadowRays", false },
+		{ "gDebugPaths", false },
+		{ "gDebugPathWeights", false },
+		{ "gLambertian", false },
+	};
+
 	mPushConstants["mMaxDepth"] = 5u;
 	mPushConstants["mMaxNullCollisions"] = 1000;
 	mPushConstants["mDebugPathLengths"] = 3 | (1<<16);
@@ -91,7 +104,8 @@ void TestRenderer::drawGui() {
 		}
 		if (ImGui::Checkbox("Random frame seed", &mRandomPerFrame)) changed = true;
 		ImGui::PushItemWidth(40);
-		if (ImGui::DragScalar("Max depth", ImGuiDataType_U32, &mPushConstants["mMaxDepth"].get<uint32_t>(), .2f)) changed = true;
+		uint32_t one = 1;
+		if (ImGui::DragScalar("Max depth", ImGuiDataType_U32, &mPushConstants["mMaxDepth"].get<uint32_t>(), .2f, &one)) changed = true;
 		if (ImGui::DragScalar("Max null collisions", ImGuiDataType_U32, &mPushConstants["mMaxNullCollisions"].get<uint32_t>())) changed = true;
 		if (ImGui::SliderFloat("Environment sample p", &mPushConstants["mEnvironmentSampleProbability"].get<float>(), 0, 1)) changed = true;
 
@@ -195,7 +209,7 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 
 	Descriptors descriptors;
 
-	auto pathStates   = mResourcePool.getBuffer<byte> (commandBuffer.mDevice,  "mPathStates", mDefines.at("gMultiDispatch") ? extent.width*extent.height*64 : 64);
+	auto pathStates   = mResourcePool.getBuffer<float4x4>(commandBuffer.mDevice, "mPathStates", mDefines.at("gMultiDispatch") ? extent.width*extent.height : 1);
 	auto atomicOutput = mResourcePool.getBuffer<uint4>(commandBuffer.mDevice, "mOutputAtomic", (mDefines.at("gDeferShadowRays")||mDefines.at("gUseVC")||mLightTrace) ? extent.width*extent.height : 1, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst);
 
 	descriptors[{ "gRenderParams.mOutput", 0 }]     = ImageDescriptor{ outputImage    , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
@@ -299,6 +313,8 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 		mPushConstants["mSceneSphere"] = sphere;
 		if (mRandomPerFrame)
 			mPushConstants["mRandomSeed"] = (uint32_t)rand();
+		else
+			mPushConstants["mRandomSeed"] = 0u;
 	}
 
 	auto makeHashGrid = [&]<typename T>(const string& name, const uint32_t size, const uint cellCount) {
@@ -377,13 +393,13 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 	};
 
 
-	const uint32_t maxShadowRays = max(1u, (2*extent.width*extent.height + mPushConstants["mLightSubpathCount"].get<uint32_t>())*(mPushConstants["mMaxDepth"].get<uint32_t>()-1));
-	const Descriptors shadowRays = makeHashGrid.operator()<float4x4>("mShadowRays", mDefines.at("gDeferShadowRays") ? maxShadowRays : 1, mDefines.at("gDeferShadowRays") ? mHashGridCellCount : 1);
+	const uint32_t maxShadowRays = mDefines.at("gDeferShadowRays") ? max(1u, (2*extent.width*extent.height + mPushConstants["mLightSubpathCount"].get<uint32_t>())*(mPushConstants["mMaxDepth"].get<uint32_t>()-1)) : 1;
 
-	auto lightVertexBuffer = mResourcePool.getBuffer<array<float4,3>>(commandBuffer.mDevice, "mLightVertices", max(1u, mPushConstants["mLightSubpathCount"].get<uint32_t>()*(mPushConstants["mMaxDepth"].get<uint32_t>()-2)));
-	auto lightVertexCounterBuffer = mResourcePool.getBuffer<uint32_t>(commandBuffer.mDevice, "mLightVertexCounter", 1, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst);
-	descriptors[{ "gRenderParams.mLightVertices", 0 }]      = lightVertexBuffer;
-	descriptors[{ "gRenderParams.mLightVertexCounter", 0 }] = lightVertexCounterBuffer;
+	auto lightVertexBuffer = mResourcePool.getBuffer<array<float4,3>>(commandBuffer.mDevice, "mLightVertices", mDefines.at("gUseVC") ? max(1u, mPushConstants["mLightSubpathCount"].get<uint32_t>()*(mPushConstants["mMaxDepth"].get<uint32_t>()-1)) : 1);
+	auto counterBuffer = mResourcePool.getBuffer<uint32_t>(commandBuffer.mDevice, "mCounters", 2, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst);
+	descriptors[{ "gRenderParams.mLightVertices", 0 }] = lightVertexBuffer;
+	descriptors[{ "gRenderParams.mCounters", 0 }] = counterBuffer;
+	descriptors[{ "gRenderParams.mShadowRays", 0 }] = mResourcePool.getBuffer<array<float4,4>>(commandBuffer.mDevice, "mShadowRays", max(1u, maxShadowRays));
 
 
 	Defines defines;
@@ -394,6 +410,8 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 		defines.emplace("gHasMedia", "true");
 	if (hasHeterogeneousMedia)
 		defines.emplace("gHasHeterogeneousMedia", "true");
+	if (mDefines.at("gDebugPathWeights") && !mDefines.at("gDebugPaths"))
+		defines.emplace("gDebugPaths", "true");
 
 	if (mLightTrace) {
 		defines.erase("gUseVC");
@@ -401,8 +419,6 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 	}
 	if (mDefines.at("gUseVC"))
 		defines.erase("gSampleDirectIllumination");
-	if (!mDefines.at("gDeferShadowRays"))
-		defines.erase("gSortShadowRays");
 
 	// create pipelines
 	const shared_ptr<ComputePipeline> renderPipeline = mPipelines.at("Render").get(commandBuffer.mDevice, defines);
@@ -422,16 +438,19 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 
 	// render
 	{
-		ProfilerScope ps("Trace paths", &commandBuffer);
-
-		if (mDefines.at("gDeferShadowRays"))
-			clearHashGrid(shadowRays);
+		if (mDefines.at("gDeferShadowRays") || mDefines.at("gUseVC")) {
+			counterBuffer.fill(commandBuffer, 0);
+			counterBuffer.barrier(commandBuffer,
+				vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
+				vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
+		}
 
 		// light paths
 		if (mDefines.at("gUseVC") || mLightTrace) {
+			ProfilerScope ps("Light paths", &commandBuffer);
+
 			atomicOutput.fill(commandBuffer, 0);
-			lightVertexCounterBuffer.fill(commandBuffer, 0);
-			Buffer::barriers(commandBuffer, { atomicOutput, lightVertexCounterBuffer },
+			atomicOutput.barrier(commandBuffer,
 				vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
 				vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 
@@ -453,6 +472,8 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 
 		// view paths
 		if (!mLightTrace) {
+			ProfilerScope ps("View paths", &commandBuffer);
+
 			renderPipeline->dispatchTiled(commandBuffer, extent, descriptorSets, {}, mPushConstants);
 			if (mDefines.at("gMultiDispatch")) {
 				for (uint32_t i = 1; i < mPushConstants["mMaxDepth"].get<uint32_t>(); i++) {
@@ -465,8 +486,7 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 		}
 
 		if (mDefines.at("gDeferShadowRays")) {
-			if (mDefines.at("gSortShadowRays"))
-				buildHashGrid(shadowRays, "float4x4", extent.width*extent.height*(mPushConstants["mMaxDepth"].get<uint32_t>()-1), mHashGridCellCount);
+			ProfilerScope ps("Shadow rays", &commandBuffer);
 
 			if (!mDefines.at("gUseVC") && !mLightTrace) {
 				atomicOutput.fill(commandBuffer, 0);

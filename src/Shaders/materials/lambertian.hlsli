@@ -1,5 +1,7 @@
 #include "common/material.hlsli"
 
+#define gCosEpsilon 1e-5
+
 extension PackedMaterialData {
     float3 emission() { return getEmission(); }
     float emissionPdf() { return any(getEmission() > 0) ? 1 : 0; }
@@ -16,8 +18,8 @@ extension PackedMaterialData {
 			return r;
 		}
 		r.mReflectance = getBaseColor() * abs(dirOut.z) / M_PI;
-		r.mFwdPdfW = cosHemispherePdfW(abs(dirOut.z));
-		r.mRevPdfW = cosHemispherePdfW(abs(dirIn.z));
+		r.mFwdPdfW = cosHemispherePdfW(max(gCosEpsilon, abs(dirOut.z)));
+		r.mRevPdfW = cosHemispherePdfW(max(gCosEpsilon, abs(dirIn.z)));
 		return r;
 	}
 
@@ -26,8 +28,8 @@ extension PackedMaterialData {
         r.mDirection = sampleCosHemisphere(rnd.x, rnd.y);
 		if (dirIn.z < 0) r.mDirection = -r.mDirection;
         r.mReflectance = getBaseColor() * abs(r.mDirection.z) / M_PI;
-		r.mFwdPdfW = cosHemispherePdfW(abs(r.mDirection.z));
-		r.mRevPdfW = cosHemispherePdfW(abs(dirIn.z));
+		r.mFwdPdfW = cosHemispherePdfW(max(gCosEpsilon, abs(r.mDirection.z)));
+		r.mRevPdfW = cosHemispherePdfW(max(gCosEpsilon, abs(dirIn.z)));
 		r.mRoughness = 1;
 		r.mEta = 0;
 		return r;

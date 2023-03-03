@@ -13,11 +13,11 @@
 #ifndef gDeferShadowRays
 #define gDeferShadowRays false
 #endif
-#ifndef gSortShadowRays
-#define gSortShadowRays false
-#endif
 #ifndef gDebugPaths
 #define gDebugPaths false
+#endif
+#ifndef gDebugPathWeights
+#define gDebugPathWeights false
 #endif
 
 struct PushConstants {
@@ -65,13 +65,15 @@ struct PackedLightVertex {
     float dVC;
     float dVCM;
     uint mPathLength;
-    float pad1;
+    float mPathPdfW;
 
     uint getInstanceIndex()  { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
     uint getPrimitiveIndex() { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
     float3 getLocalDirIn() { return unpackNormal(mPackedLocalDirIn); }
     ShadingData getShadingData() {
-        return gScene.makeShadingData(gScene.mInstances[getInstanceIndex()], gScene.mInstanceTransforms[getInstanceIndex()], mLocalPosition, getPrimitiveIndex());
+        ShadingData sd = gScene.makeShadingData(gScene.mInstances[getInstanceIndex()], gScene.mInstanceTransforms[getInstanceIndex()], mLocalPosition, getPrimitiveIndex());
+        sd.mTexcoordScreenSize = 0;
+        return sd;
 	}
 };
 
@@ -79,31 +81,30 @@ struct PathState {
     float3 mRayOrigin;
     uint mPackedCurrentMedium;
     float3 mThroughput;
-    uint mPackedRayDirection;
+    float mPathPdfW;
     RandomSampler mRng;
+    float2 mPackedRayDirection;
     uint2 mPackedMis;
-    uint mPixelIndex;
-    uint pad;
 
-    property float mDirPdfW {
+    property float dVCM {
 		get { return f16tof32(BF_GET(mPackedMis[0], 0, 16)); }
 		set { BF_SET(mPackedMis[0], f32tof16(newValue), 0, 16); }
 	}
-    property float dVCM {
-		get { return f16tof32(BF_GET(mPackedMis[0], 16, 16)); }
-		set { BF_SET(mPackedMis[0], f32tof16(newValue), 16, 16); }
-	}
     property float dVC {
+		get { return f16tof32(BF_GET(mPackedMis[0], 16, 16)); }
+        set { BF_SET(mPackedMis[0], f32tof16(newValue), 16, 16); }
+    }
+    property float mDirPdfW {
 		get { return f16tof32(BF_GET(mPackedMis[1], 0, 16)); }
-        set { BF_SET(mPackedMis[1], f32tof16(newValue), 0, 16); }
+		set { BF_SET(mPackedMis[1], f32tof16(newValue), 0, 16); }
     }
-    property uint isFinite {
-        get { return BF_GET(mPackedMis[1], 1, 31); }
-        set { BF_SET(mPackedMis[1], newValue, 1, 31); }
+    property bool isFinite {
+        get { return bool(BF_GET(mPackedMis[1], 31, 1)); }
+        set { BF_SET(mPackedMis[1], (newValue ? 1 : 0), 31, 1); }
     }
-    property uint isSpecular {
-        get { return BF_GET(mPackedMis[1], 1, 31); }
-        set { BF_SET(mPackedMis[1], newValue, 1, 31); }
+    property bool isSpecular {
+        get { return bool(BF_GET(mPackedMis[1], 31, 1)); }
+        set { BF_SET(mPackedMis[1], (newValue ? 1 : 0), 31, 1); }
     }
 
     property uint mCurrentMedium {
@@ -116,11 +117,7 @@ struct PathState {
 	}
 
     float3 getRayDirection() {
-		return unpackNormal(mPackedRayDirection);
-	}
-
-    uint2 getPixelCoord() {
-        return uint2(mPixelIndex % gPushConstants.mOutputExtent.x, mPixelIndex / gPushConstants.mOutputExtent.x);
+		return unpackNormal2(mPackedRayDirection);
 	}
 };
 
@@ -140,7 +137,9 @@ struct ShadowRay {
         return uint2(mPixelIndex % gPushConstants.mOutputExtent.x, mPixelIndex / gPushConstants.mOutputExtent.x);
     }
 };
+
 #define gQuantizationFactor 16384
+
 
 struct RenderParams {
     StructuredBuffer<ViewData> mViews;
@@ -156,9 +155,9 @@ struct RenderParams {
 
     RWStructuredBuffer<PathState> mPathStates;
     RWStructuredBuffer<PackedLightVertex> mLightVertices;
-    RWStructuredBuffer<uint> mLightVertexCounter;
+    RWStructuredBuffer<ShadowRay> mShadowRays;
+    RWStructuredBuffer<uint> mCounters; // 0 -> light vertices, 1 -> shadow rays
 
-    HashGrid<ShadowRay> mShadowRays;
     RWStructuredBuffer<uint4> mOutputAtomic;
 
 	void StoreAuxillaryData(const uint2 index, const IntersectionResult isect, const float3 albedo) {
@@ -187,13 +186,20 @@ struct RenderParams {
     }
 
     void AddRadiance(const uint2 index, const float3 radiance, const float weight, const uint viewVertices, const uint lightVertices) {
+		if (weight <= 0 || all(radiance <= 0))
+			return;
+
         if (gDebugPaths) {
-            if (BF_GET(gPushConstants.mDebugPathLengths, 0, 16) == viewVertices + lightVertices && BF_GET(gPushConstants.mDebugPathLengths, 16, 16) == lightVertices)
-                mOutput[index].rgb += radiance;
+            if (BF_GET(gPushConstants.mDebugPathLengths, 0, 16) == viewVertices + lightVertices && BF_GET(gPushConstants.mDebugPathLengths, 16, 16) == lightVertices) {
+				if (gDebugPathWeights)
+					mOutput[index].rgb += radiance * weight;
+				else
+                	mOutput[index].rgb += radiance;
+			}
             return;
         }
-        if (any(radiance > 0) && weight > 0)
-            mOutput[index].rgb += radiance * weight;
+
+		mOutput[index].rgb += radiance * weight;
     }
 
     void AddRadianceInterlocked(const uint2 index, const float3 radiance) {
@@ -206,73 +212,23 @@ struct RenderParams {
 	}
 
     void AddRadianceInterlocked(const uint2 index, const float3 radiance, const float weight, const uint viewVertices, const uint lightVertices) {
+		if (weight <= 0 || all(radiance <= 0))
+			return;
+
         if (gDebugPaths) {
-            if (BF_GET(gPushConstants.mDebugPathLengths, 0, 16) == viewVertices + lightVertices && BF_GET(gPushConstants.mDebugPathLengths, 16, 16) == lightVertices)
-                AddRadianceInterlocked(index, radiance);
+            if (BF_GET(gPushConstants.mDebugPathLengths, 0, 16) == viewVertices + lightVertices && BF_GET(gPushConstants.mDebugPathLengths, 16, 16) == lightVertices) {
+				if (gDebugPathWeights)
+					AddRadianceInterlocked(index, radiance * weight);
+				else
+                	AddRadianceInterlocked(index, radiance);
+			}
             return;
         }
-        if (any(radiance > 0) && weight > 0)
-            AddRadianceInterlocked(index, radiance * weight);
+
+		AddRadianceInterlocked(index, radiance * weight);
     }
 };
 ParameterBlock<RenderParams> gRenderParams;
-
-struct LightSubpathSampleRecord {
-    float3 mRadiance;
-    float mDistanceToLight;
-    float3 mDirectionToLight;
-    float mCosLight;
-    float dVCM;
-    float dVC;
-    float mFwdPdfW;
-    float mRevPdfW;
-	uint mSubpathLength;
-    bool isMedium;
-};
-LightSubpathSampleRecord SampleLightSubpath(const float3 referencePosition, const uint rnd) {
-    const PackedLightVertex v = gRenderParams.mLightVertices[rnd%gRenderParams.mLightVertexCounter[0]];
-
-    ShadingData shadingData = v.getShadingData();
-
-    LightSubpathSampleRecord r;
-    r.mDirectionToLight = shadingData.mPosition - referencePosition;
-    r.mDistanceToLight = length(r.mDirectionToLight);
-    r.mDirectionToLight /= r.mDistanceToLight;
-    r.dVCM = v.dVCM;
-    r.dVC = v.dVC;
-    r.isMedium = gHasMedia && shadingData.isMedium();
-	r.mSubpathLength = v.mPathLength;
-
-    r.mRadiance = v.mThroughput;
-
-    // the LVC paper connects to lightVertexCount/lightPathCount light vertices
-    // we only connect to one light vertex, therefore we weight its contribution by lightVertexCount/lightPathCount
-    r.mRadiance *= gRenderParams.mLightVertexCounter[0] / (float)gPushConstants.mLightSubpathCount;
-
-	ReflectanceEvalRecord f;
-	float contProb;
-
-    if (r.isMedium) {
-		r.mCosLight = 1;
-        Medium lightBsdf = Medium(shadingData.getMaterialAddress());
-		f = lightBsdf.evaluateReflectance<true>(v.getLocalDirIn(), r.mDirectionToLight);
-		contProb = lightBsdf.continuationProb();
-	} else {
-		gScene.ApplyNormalMap(shadingData);
-		const float3 localDirOut = shadingData.toLocal(r.mDirectionToLight);
-		r.mCosLight = localDirOut.z;
-		PackedMaterialData lightBsdf = gScene.LoadMaterial(shadingData);
-		f = lightBsdf.evaluateReflectance<true>(v.getLocalDirIn(), localDirOut);
-		f.mReflectance *= shadingData.shadingNormalCorrection<true>(v.getLocalDirIn(), localDirOut);
-		contProb = lightBsdf.continuationProb();
-	}
-
-	r.mRadiance *= f.mReflectance;
-	r.mFwdPdfW = f.mFwdPdfW * contProb;
-	r.mRevPdfW = f.mRevPdfW * contProb;
-
-    return r;
-}
 
 
 interface Interaction {
@@ -291,6 +247,7 @@ interface Interaction {
 extension PackedMaterialData : Interaction {};
 extension Medium : Interaction {};
 
+
 float mis(const float a) {
     return a * a;
 }
@@ -300,25 +257,22 @@ float mis(const float a, const float b) {
 }
 
 static PathState sPathState;
+static uint2 sPixelIndex;
 
 void TraceConnectionRay(const float3 rayOrigin, const float3 rayDirection, const float rayDistance, float3 contrib, const float weight, const uint viewVertices, const uint lightVertices) {
     if (gDeferShadowRays) {
         ShadowRay ray;
-        ray.mContribution = sPathState.mThroughput * contrib;
+        ray.mContribution = contrib;
         ray.mWeight = weight;
         ray.mRayOrigin = rayOrigin;
         ray.mViewVertices = viewVertices;
         ray.mRayDirection = rayDirection;
         ray.mDistance = rayDistance;
-        ray.mPixelIndex = sPathState.mPixelIndex;
+        ray.mPixelIndex = sPixelIndex.y * gPushConstants.mOutputExtent.x + sPixelIndex.x;
         ray.mLightVertices = lightVertices;
-        if (gSortShadowRays)
-            gRenderParams.mShadowRays.Append(ray.mRayOrigin, ray);
-        else {
-            uint appendIndex;
-            InterlockedAdd(gRenderParams.mShadowRays.mCounters[gRenderParams.mShadowRays.mConstants.mCellCount], 1, appendIndex);
-            gRenderParams.mShadowRays.mData[appendIndex] = ray;
-        }
+		uint appendIndex;
+		InterlockedAdd(gRenderParams.mCounters[1], 1, appendIndex);
+		gRenderParams.mShadowRays[appendIndex] = ray;
     } else {
         float transDirPdf, transNeePdf;
         gScene.traceVisibilityRay(
@@ -330,8 +284,12 @@ void TraceConnectionRay(const float3 rayOrigin, const float3 rayDirection, const
 
         contrib /= transNeePdf;
 
-        gRenderParams.AddRadiance(sPathState.getPixelCoord(), sPathState.mThroughput * contrib, weight, viewVertices, lightVertices);
+        gRenderParams.AddRadiance(sPixelIndex, contrib, weight, viewVertices, lightVertices);
     }
+}
+
+float AdjustIntersectionDistance(const float d) {
+    return max(d * 0.99, d - 1e-2);
 }
 
 void ConnectToLight(const Interaction bsdf, const ShadingData shadingData, const float3 localDirIn) {
@@ -346,25 +304,23 @@ void ConnectToLight(const Interaction bsdf, const ShadingData shadingData, const
         AtoW = pow2(r.mDistanceToLight) / r.mCosLight;
     const float directPdfW = r.mPdf * AtoW;
 
-    float3 contrib = r.mRadiance / directPdfW;
-
     const float3 localDirOut = isMedium ? r.mDirectionToLight : shadingData.toLocal(r.mDirectionToLight);
 
     ReflectanceEvalRecord f = bsdf.evaluateReflectance<false>(localDirIn, localDirOut);
+    if (!isMedium)
+        f.mReflectance *= shadingData.shadingNormalCorrection<false>(localDirIn, localDirOut);
 	const float contProb = bsdf.continuationProb();
 	f.mFwdPdfW *= contProb;
 	f.mRevPdfW *= contProb;
 
-    contrib *= f.mReflectance;
-    if (!isMedium)
-        contrib *= shadingData.shadingNormalCorrection<false>(localDirIn, localDirOut);
+    const float3 contrib = (sPathState.mThroughput * r.mRadiance * f.mReflectance) / directPdfW;
 
 
 	// compute mis weight
 
     float misWeight;
     if (gUseVC) {
-		const float emissionPdfW = r.mPdf * cosHemispherePdfW(r.mCosLight);
+		const float emissionPdfW = r.mPdf * (r.isFinite ? cosHemispherePdfW(r.mCosLight) : (concentricDiscPdfA() / pow2(gPushConstants.mSceneSphere.w)));
 
 		// Partial light sub-path MIS weight [tech. rep. (44)].
 		// Note that wLight is a ratio of area pdfs. But since both are on the
@@ -393,7 +349,7 @@ void ConnectToLight(const Interaction bsdf, const ShadingData shadingData, const
 		// Full path MIS weight [tech. rep. (37)]
 		misWeight = 1.f / (wLight + 1.f + wCamera);
     } else
-        misWeight = mis(directPdfW, f.mFwdPdfW);
+        misWeight = mis(r.mPdf, f.mFwdPdfW / AtoW);
 
 	// evaluate transmittance along shadow ray
 
@@ -401,33 +357,93 @@ void ConnectToLight(const Interaction bsdf, const ShadingData shadingData, const
 		shadingData.mPosition :
 		rayOffset(shadingData.mPosition, shadingData.getGeometryNormal(), r.mDirectionToLight);
 
-    TraceConnectionRay(rayOrigin, r.mDirectionToLight, r.mDistanceToLight * 0.99, contrib, misWeight, sPathState.mPathLength+1, 1);
+    TraceConnectionRay(rayOrigin, r.mDirectionToLight, AdjustIntersectionDistance(r.mDistanceToLight), contrib, misWeight, sPathState.mPathLength+1, 1);
 }
 
+struct LightSubpathSampleRecord {
+    float3 mThroughput;
+    float mFwdPdfW;
+    float3 mReflectance;
+    float mRevPdfW;
+    float3 mDirectionToLight;
+    float mDistanceToLight;
+    float mCosLight;
+    float mLightSubpathPdfW;
+    float dVCM;
+    float dVC;
+	uint mSubpathLength;
+};
+LightSubpathSampleRecord SampleLightSubpath(const float3 referencePosition, const uint rnd) {
+    if (gRenderParams.mCounters[0] == 0)
+        return { 0 };
+
+    const PackedLightVertex v = gRenderParams.mLightVertices[rnd % gRenderParams.mCounters[0]];
+
+	if (sPathState.mPathLength + 1 + v.mPathLength > gPushConstants.mMaxDepth)
+		return { 0 };
+
+    ShadingData shadingData = v.getShadingData();
+
+    LightSubpathSampleRecord r;
+	r.mThroughput = v.mThroughput;
+    r.mDirectionToLight = shadingData.mPosition - referencePosition;
+    r.mDistanceToLight = length(r.mDirectionToLight);
+    r.mDirectionToLight /= r.mDistanceToLight;
+    r.dVCM = v.dVCM;
+    r.dVC  = v.dVC;
+	r.mSubpathLength = v.mPathLength;
+
+    r.mLightSubpathPdfW = v.mPathPdfW;
+
+    // the LVC paper connects to lightVertexCount/lightPathCount light vertices
+    // we only connect to one light vertex, therefore we weight its contribution by lightVertexCount/lightPathCount
+    r.mThroughput *= gRenderParams.mCounters[0] / (float)gPushConstants.mLightSubpathCount;
+
+	ReflectanceEvalRecord f;
+	float contProb;
+
+    if (gHasMedia && shadingData.isMedium()) {
+		r.mCosLight = 1;
+        const Medium lightBsdf = Medium(shadingData.getMaterialAddress());
+		f = lightBsdf.evaluateReflectance<true>(v.getLocalDirIn(), -r.mDirectionToLight);
+		contProb = lightBsdf.continuationProb();
+	} else {
+		gScene.ApplyNormalMap(shadingData);
+		const float3 localDirOut = shadingData.toLocal(-r.mDirectionToLight);
+		r.mCosLight = abs(localDirOut.z);
+		const PackedMaterialData lightBsdf = gScene.LoadMaterial(shadingData);
+		f = lightBsdf.evaluateReflectance<true>(v.getLocalDirIn(), localDirOut);
+		f.mReflectance *= shadingData.shadingNormalCorrection<true>(v.getLocalDirIn(), localDirOut);
+		contProb = lightBsdf.continuationProb();
+	}
+
+	r.mReflectance = f.mReflectance;
+	r.mFwdPdfW = f.mFwdPdfW * contProb;
+	r.mRevPdfW = f.mRevPdfW * contProb;
+
+    return r;
+}
 void ConnectToLightSubpath(const Interaction bsdf, const ShadingData shadingData, const float3 localDirIn) {
     const LightSubpathSampleRecord r = SampleLightSubpath(shadingData.mPosition, sPathState.mRng.next().x);
-    if (all(r.mRadiance <= 0))
+    if (all(r.mThroughput <= 0) || all(r.mReflectance <= 0))
         return;
 
     const bool isMedium = gHasMedia && shadingData.isMedium();
-
-    const float AtoW = pow2(r.mDistanceToLight) / (r.isMedium ? 1 : r.mCosLight);
-    float3 contrib = r.mRadiance;
-
     const float3 localDirOut = isMedium ? r.mDirectionToLight : shadingData.toLocal(r.mDirectionToLight);
 
     ReflectanceEvalRecord f = bsdf.evaluateReflectance<false>(localDirIn, localDirOut);
+    if (!isMedium)
+        f.mReflectance *= shadingData.shadingNormalCorrection<false>(localDirIn, localDirOut);
     const float contProb = bsdf.continuationProb();
     f.mFwdPdfW *= contProb;
     f.mRevPdfW *= contProb;
 
-    contrib *= f.mReflectance;
-    if (!isMedium)
-        contrib *= shadingData.shadingNormalCorrection<false>(localDirIn, localDirOut);
+    const float invDist2 = 1 / pow2(r.mDistanceToLight);
+    const float3 contrib = (sPathState.mThroughput * r.mThroughput) * (f.mReflectance * r.mReflectance) * invDist2;
 
 	// Convert pdfs to area pdf
-	const float cameraBsdfDirPdfA = f.mFwdPdfW * pow2(r.mDistanceToLight) / abs(r.isMedium ? 1 : r.mCosLight);
-	const float lightBsdfDirPdfA  = r.mFwdPdfW * pow2(r.mDistanceToLight) / abs(isMedium   ? 1 : localDirOut.z);
+	const float cameraBsdfDirPdfA = f.mFwdPdfW * r.mCosLight * invDist2;
+	const float lightBsdfDirPdfA  = r.mFwdPdfW * abs(isMedium ? 1 : localDirOut.z) * invDist2;
 
 	// Partial light sub-path MIS weight [tech. rep. (40)]
 	const float wLight = mis(cameraBsdfDirPdfA) * (r.dVCM + r.dVC * mis(r.mRevPdfW));
@@ -442,7 +458,7 @@ void ConnectToLightSubpath(const Interaction bsdf, const ShadingData shadingData
 		shadingData.mPosition :
 		rayOffset(shadingData.mPosition, shadingData.getGeometryNormal(), r.mDirectionToLight);
 
-    TraceConnectionRay(rayOrigin, r.mDirectionToLight, r.mDistanceToLight * 0.99, contrib, misWeight, sPathState.mPathLength+1, r.mSubpathLength+1);
+    TraceConnectionRay(rayOrigin, r.mDirectionToLight, AdjustIntersectionDistance(r.mDistanceToLight), contrib, misWeight, sPathState.mPathLength+1, r.mSubpathLength+1);
 }
 
 void ConnectToCamera(const Interaction bsdf, const ShadingData shadingData, const float3 localDirIn) {
@@ -462,9 +478,11 @@ void ConnectToCamera(const Interaction bsdf, const ShadingData shadingData, cons
 	const float cosOut = isMedium ? 1 : abs(localDirOut.z);
 
     ReflectanceEvalRecord f = bsdf.evaluateReflectance<true>(localDirIn, localDirOut);
-    if (!isMedium) {
+    if (!isMedium)
         f.mReflectance *= shadingData.shadingNormalCorrection<true>(localDirIn, localDirOut);
-	}
+    const float contProb = bsdf.continuationProb();
+    f.mFwdPdfW *= contProb;
+    f.mRevPdfW *= contProb;
 
     // Compute pdf conversion factor from image plane area to surface area
     const float imagePointToCameraDist = gRenderParams.mViews[0].imagePlaneDist() / cosAtCamera;
@@ -493,7 +511,7 @@ void ConnectToCamera(const Interaction bsdf, const ShadingData shadingData, cons
     // divided) pdf from surface area to image plane area, w.r.t. which the
     // pixel integral is actually defined. We also divide by the number of samples
     // this technique makes, which is equal to the number of light sub-paths
-    float3 contrib = sPathState.mThroughput * f.mReflectance / (gPushConstants.mLightSubpathCount * surfaceToImageFactor * cosOut);
+    float3 contrib = (sPathState.mThroughput * f.mReflectance) / (gPushConstants.mLightSubpathCount * surfaceToImageFactor * cosOut);
 
     const float3 rayOrigin = isMedium ? shadingData.mPosition : rayOffset(shadingData.mPosition, shadingData.getGeometryNormal(), toCamera);
 
@@ -507,13 +525,9 @@ void ConnectToCamera(const Interaction bsdf, const ShadingData shadingData, cons
         ray.mDistance = dist;
         ray.mPixelIndex = int(pixelCoord.y) * gPushConstants.mOutputExtent.x + int(pixelCoord.x);
         ray.mLightVertices = (int)sPathState.mPathLength + 1;
-        if (gSortShadowRays)
-            gRenderParams.mShadowRays.Append(ray.mRayOrigin, ray);
-        else {
-            uint appendIndex;
-            InterlockedAdd(gRenderParams.mShadowRays.mCounters[gRenderParams.mShadowRays.mConstants.mCellCount], 1, appendIndex);
-            gRenderParams.mShadowRays.mData[appendIndex] = ray;
-        }
+		uint appendIndex;
+		InterlockedAdd(gRenderParams.mCounters[1], 1, appendIndex);
+		gRenderParams.mShadowRays[appendIndex] = ray;
     } else {
         float transDirPdf, transNeePdf;
         gScene.traceVisibilityRay(
@@ -535,54 +549,61 @@ void StoreLightVertex(const IntersectionResult isect, const float3 localDirIn) {
 	v.mInstancePrimitiveIndex = isect.mInstancePrimitiveIndex;
 	v.mThroughput = sPathState.mThroughput;
 	v.mPackedLocalDirIn = packNormal(localDirIn);
-	v.dVC = sPathState.dVC;
+	v.dVC  = sPathState.dVC;
     v.dVCM = sPathState.dVCM;
-	v.mPathLength = sPathState.mPathLength;
+    v.mPathLength = sPathState.mPathLength;
+    v.mPathPdfW   = sPathState.mPathPdfW;
     uint idx;
-    InterlockedAdd(gRenderParams.mLightVertexCounter[0], 1, idx);
+    InterlockedAdd(gRenderParams.mCounters[0], 1, idx);
     gRenderParams.mLightVertices[idx] = v;
+}
+
+void AddEmission(const float3 emission, const float directPdfA, const float emissionPdfW, const float WtoA) {
+	float w = 1;
+	if (sPathState.mPathLength > 1) {
+		if (gUseVC && !sPathState.isSpecular) {
+			// Partial eye sub-path MIS weight [tech. rep. (43)].
+			// If the last hit was specular, then dVCM == 0.
+			const float wCamera = mis(directPdfA) * sPathState.dVCM + mis(emissionPdfW) * sPathState.dVC;
+            w = 1 / (1 + wCamera);
+        } else if (gSampleDirectIllumination && sPathState.mDirPdfW > 0) {
+            w = mis(sPathState.mDirPdfW*WtoA, directPdfA);
+		}
+	}
+
+    gRenderParams.AddRadiance(
+        sPixelIndex,
+		emission,
+		w,
+		sPathState.mPathLength + 1,
+		0);
 }
 
 bool ProcessInteraction(const Interaction bsdf, const IntersectionResult isect, const float transDirPdf, const float transNeePdf) {
     const bool isMedium = gHasMedia && isect.mShadingData.isMedium();
 
     if (!gTraceFromLight && sPathState.mPathLength == 1)
-        gRenderParams.StoreAuxillaryData(sPathState.getPixelCoord(), isect, bsdf.albedo());
+        gRenderParams.StoreAuxillaryData(sPixelIndex, isect, bsdf.albedo());
 
     const float3 localDirIn = isMedium ? -sPathState.getRayDirection() : isect.mShadingData.toLocal(-sPathState.getRayDirection());
+	const float cosIn = isMedium ? 1 : abs(localDirIn.z);
 
-    if (!gTraceFromLight || (sPathState.mPathLength > 1 || sPathState.isFinite == 1))
+    if (!gTraceFromLight || (gTraceFromLight && (sPathState.isFinite || sPathState.mPathLength > 1)))
 		sPathState.dVCM *= mis(pow2(isect.mDistance));
     if (!isMedium) {
-		sPathState.dVCM /= mis(abs(localDirIn.z));
-		sPathState.dVC  /= mis(abs(localDirIn.z));
+		sPathState.dVCM /= mis(cosIn);
+		sPathState.dVC  /= mis(cosIn);
     }
 
     if (!gTraceFromLight) {
 		// surface lights are one-sided
-        if (isMedium || dot(sPathState.getRayDirection(), isect.mShadingData.getGeometryNormal()) < 0) {
-            float w = 1;
-            if (sPathState.mPathLength > 1) {
-				const float pdfA = transNeePdf * isect.LightSamplePdfA();
-                if (gUseVC) {
-					const float emissionPdfW = pdfA * cosHemispherePdfW(localDirIn.z);
-
-					// Partial eye sub-path MIS weight [tech. rep. (43)].
-					// If the last hit was specular, then dVCM == 0.
-					const float wCamera = mis(pdfA) * sPathState.dVCM + mis(emissionPdfW) * sPathState.dVC;
-                    w = 1 / (1 + wCamera);
-                } else if (gSampleDirectIllumination) {
-                    const float AtoW = pow2(isect.mDistance) / (isMedium ? 1 : abs(localDirIn.z));
-                    w = mis(transDirPdf * sPathState.mDirPdfW, transNeePdf * pdfA * AtoW);
-                }
-            }
-
-			gRenderParams.AddRadiance(
-				sPathState.getPixelCoord(),
-				sPathState.mThroughput * bsdf.emission(),
-				w,
-				sPathState.mPathLength + 1,
-				0);
+        if (!isMedium && localDirIn.z > 0) {
+            const float3 emission = sPathState.mThroughput * bsdf.emission();
+            if (any(emission > 0)) {
+				const float directPdfA = isect.LightSamplePdfA();
+                const float emissionPdfW = directPdfA * cosHemispherePdfW(localDirIn.z);
+                AddEmission(emission, directPdfA, emissionPdfW, cosIn / pow2(isect.mDistance));
+			}
 		}
     }
 
@@ -614,27 +635,31 @@ bool ProcessInteraction(const Interaction bsdf, const IntersectionResult isect, 
     s.mRevPdfW *= continueProb;
 
     sPathState.mThroughput *= s.mReflectance / s.mFwdPdfW;
-    sPathState.mDirPdfW = s.mFwdPdfW;
+	sPathState.mPathPdfW *= s.mFwdPdfW;
 
 	const float cosOut = isMedium ? 1 : abs(s.mDirection.z);
     if (s.isSingular()) {
         // Specular scattering case [tech. rep. (53)-(55)] (partially, as noted above)
         sPathState.dVCM = 0.f;
         sPathState.dVC *= mis(cosOut);
+    	sPathState.mDirPdfW = 0;
     } else {
         // Implements [tech. rep. (34)-(36)] (partially, as noted above)
         sPathState.dVC = mis(cosOut / s.mFwdPdfW) * (sPathState.dVC * mis(s.mRevPdfW) + sPathState.dVCM);
         sPathState.dVCM = mis(1.f / s.mFwdPdfW);
-        sPathState.isSpecular = 0;
+        if (!gTraceFromLight)
+        	sPathState.isSpecular = false;
+		sPathState.mDirPdfW = s.mFwdPdfW;
 	}
 
     if (isMedium) {
-        sPathState.mPackedRayDirection = packNormal(s.mDirection);
+        sPathState.mPackedRayDirection = packNormal2(s.mDirection);
         sPathState.mRayOrigin = isect.mShadingData.mPosition;
     } else {
-		sPathState.mThroughput *= isect.mShadingData.shadingNormalCorrection<gTraceFromLight>(localDirIn, s.mDirection);
-		sPathState.mPackedRayDirection = packNormal(isect.mShadingData.toWorld(s.mDirection));
-        sPathState.mRayOrigin = rayOffset(isect.mShadingData.mPosition, isect.mShadingData.getGeometryNormal(), sPathState.getRayDirection());
+        sPathState.mThroughput *= isect.mShadingData.shadingNormalCorrection<gTraceFromLight>(localDirIn, s.mDirection);
+        const float3 worldDir = isect.mShadingData.toWorld(s.mDirection);
+		sPathState.mPackedRayDirection = packNormal2(worldDir);
+        sPathState.mRayOrigin = rayOffset(isect.mShadingData.mPosition, isect.mShadingData.getGeometryNormal(), worldDir);
 	}
 
     return !any(isnan(sPathState.mThroughput)) && any(sPathState.mThroughput > 0);
@@ -650,33 +675,15 @@ bool NextVertex() {
 
     if (!hit) {
         if (!gTraceFromLight) {
-			if (sPathState.mPathLength == 1)
-				gRenderParams.StoreAuxillaryData(sPathState.getPixelCoord(), isect, 1);
+            if (sPathState.mPathLength == 1)
+                gRenderParams.StoreAuxillaryData(sPixelIndex, isect, 1);
 
-			float envPdfW;
-			const float3 emission = gScene.EvaluateEnvironment(sPathState.getRayDirection(), envPdfW);
+			float directPdfW;
+			const float3 emission = sPathState.mThroughput * gScene.EvaluateEnvironment(sPathState.getRayDirection(), directPdfW);
 
-			if (any(emission > 0)) {
-				float w = 1;
-				if (sPathState.mPathLength > 1) {
-					if (gUseVC) {
-						const float pdfA = transNeePdf / (M_PI*pow2(gPushConstants.mSceneSphere.w));
-						const float emissionPdfW = pdfA * envPdfW;
-
-						// Partial eye sub-path MIS weight [tech. rep. (43)].
-						// If the last hit was specular, then dVCM == 0.
-						const float wCamera = mis(pdfA) * sPathState.dVCM + mis(emissionPdfW) * sPathState.dVC;
-						w = 1 / (1 + wCamera);
-					} else if (gSampleDirectIllumination)
-						w = mis(sPathState.mDirPdfW*transDirPdf, envPdfW*transNeePdf);
-				}
-
-				gRenderParams.AddRadiance(
-					sPathState.getPixelCoord(),
-					sPathState.mThroughput * emission,
-					w,
-					sPathState.mPathLength + 1,
-					0);
+            if (any(emission > 0)) {
+                const float positionPdf = concentricDiscPdfA() / pow2(gPushConstants.mSceneSphere.w);
+				AddEmission(emission, directPdfW, directPdfW * positionPdf, 1);
 			}
         }
 		return false;
@@ -693,6 +700,7 @@ bool NextVertex() {
 
 void InitializeCameraPath(const uint2 index) {
     const uint viewIndex = getViewIndex(index, gPushConstants.mOutputExtent, gPushConstants.mViewCount);
+    sPixelIndex = index.xy;
 
 	float2 uv;
 	const float3 localDir = gRenderParams.mViews[viewIndex].toWorld(index + 0.5, /*out*/ uv);
@@ -700,15 +708,15 @@ void InitializeCameraPath(const uint2 index) {
 
     sPathState.mRayOrigin = float3(t.m[0][3], t.m[1][3], t.m[2][3]);
     sPathState.mCurrentMedium = gRenderParams.mViewMediumIndices[viewIndex];
-    sPathState.mThroughput = 1;
-    sPathState.mPackedRayDirection = packNormal(normalize(t.transformVector(localDir)));
-    sPathState.mRng = RandomSampler(gPushConstants.mRandomSeed, index);
     sPathState.mPathLength = 0;
-    sPathState.mPixelIndex = index.y * gPushConstants.mOutputExtent.x + index.x;
+    sPathState.mThroughput = 1;
+    sPathState.mPathPdfW = 1;
+    sPathState.mRng = RandomSampler(gPushConstants.mRandomSeed, index);
+    sPathState.mPackedRayDirection = packNormal2(normalize(t.transformVector(localDir)));
     sPathState.mDirPdfW = 0;
 
     // Compute pdf conversion factor from area on image plane to solid angle on ray
-    const float cosAtCamera = localDir.z;
+    const float cosAtCamera = abs(localDir.z);
     const float imagePointToCameraDist = gRenderParams.mViews[viewIndex].imagePlaneDist() / cosAtCamera;
     const float imageToSolidAngleFactor = pow2(imagePointToCameraDist) / cosAtCamera;
 
@@ -723,26 +731,42 @@ void InitializeCameraPath(const uint2 index) {
     sPathState.dVCM = mis(gPushConstants.mLightSubpathCount / cameraPdfW);
     sPathState.dVC = 0;
 
+    sPathState.isSpecular = true;
+
     gRenderParams.mOutput[index] = float4(0, 0, 0, 1);
 }
 void InitializeLightPath(const uint2 index) {
-    sPathState.mRng = RandomSampler(gPushConstants.mRandomSeed, index);
+    sPathState.mRng = RandomSampler(gPushConstants.mRandomSeed, index, 0xFFFF);
     const IlluminationSampleRecord r = gScene.SampleIllumination(sPathState.mRng.nextFloat());
-
-	// TODO: environment light
+    sPathState.isFinite = r.isFinite;
 
     const float2 dirRng = sPathState.mRng.nextFloat().xy;
-    const float3 dir = sampleCosHemisphere(dirRng.x, dirRng.y);
+    float usedCosLight;
+    if (sPathState.isFinite) {
+		const float3 dir = sampleCosHemisphere(dirRng.x, dirRng.y);
+		const float3x3 onb = makeOrthonormal(r.getNormal());
+        sPathState.mRayOrigin = rayOffset(r.mPosition, r.getNormal());
+        sPathState.mThroughput = r.mRadiance * dir.z;
+		sPathState.mPackedRayDirection = packNormal2(normalize(onb[0] * dir.x + onb[1] * dir.y + onb[2] * dir.z));
+        sPathState.mDirPdfW = cosHemispherePdfW(dir.z);
+        usedCosLight = dir.z;
+    } else {
+        // environment light
+        const float2 xy = sampleConcentricDisc(dirRng.x, dirRng.y);
+        const float3x3 onb = makeOrthonormal(-r.mDirectionToLight);
+        sPathState.mRayOrigin = gPushConstants.mSceneSphere.xyz + gPushConstants.mSceneSphere.w * (onb[0] * xy.x + onb[1] * xy.y + r.mDirectionToLight);
+        sPathState.mThroughput = r.mRadiance;
+        sPathState.mPackedRayDirection = packNormal2(-r.mDirectionToLight);
+        sPathState.mDirPdfW = concentricDiscPdfA() * pow2(gPushConstants.mSceneSphere.w);
+        usedCosLight = 1;
+	}
 
-    sPathState.mRayOrigin = rayOffset(r.mPosition, r.getNormal());
-    sPathState.mCurrentMedium = gHasMedia ? gScene.GetMediumIndex(r.mPosition, gPushConstants.mVolumeInstanceCount) : INVALID_INSTANCE;
-    sPathState.mPackedRayDirection = packNormal(mul(dir, makeOrthonormal(r.getNormal())));
+    sPathState.mCurrentMedium = (gHasMedia && sPathState.isFinite) ? gScene.GetMediumIndex(r.mPosition, gPushConstants.mVolumeInstanceCount) : INVALID_INSTANCE;
     sPathState.mPathLength = 0;
-    sPathState.mPixelIndex = index.y * gPushConstants.mOutputExtent.x + index.x;
-    sPathState.mDirPdfW = cosHemispherePdfW(dir.z);
 
     const float emissionPdfW = r.mPdf * sPathState.mDirPdfW;
-    sPathState.mThroughput = r.mRadiance * dir.z / emissionPdfW;
+    sPathState.mThroughput /= emissionPdfW;
+    sPathState.mPathPdfW = emissionPdfW;
 
     // Light sub-path MIS quantities. Implements [tech. rep. (31)-(33)] partially.
     // The evaluation is completed after tracing the emission ray in the light sub-path loop.
@@ -751,7 +775,6 @@ void InitializeLightPath(const uint2 index) {
 	sPathState.dVCM = mis(r.mPdf / emissionPdfW);
 
 	if (!r.isSingular) {
-		const float usedCosLight = r.isFinite ? dir.z : 1.f;
 		sPathState.dVC = mis(usedCosLight / emissionPdfW);
 	} else {
 		sPathState.dVC = 0.f;
@@ -761,7 +784,6 @@ void InitializeLightPath(const uint2 index) {
 void LoadPathState(const uint threadIndex) {
     sPathState = gRenderParams.mPathStates[threadIndex];
 }
-
 void StorePathState(const uint threadIndex) {
 	gRenderParams.mPathStates[threadIndex] = sPathState;
 }
@@ -807,12 +829,12 @@ void RenderIteration(uint3 index: SV_DispatchThreadID) {
 }
 
 [shader("compute")]
-[numthreads(8, 8, 1)]
+[numthreads(8, 4, 1)]
 void ProcessShadowRays(uint3 index: SV_DispatchThreadID) {
     const uint idx = index.y * gPushConstants.mOutputExtent.x + index.x;
-    if (idx >= gRenderParams.mShadowRays.GetCurrentSize()) return;
+    if (idx >= gRenderParams.mCounters[1]) return;
 
-    ShadowRay ray = gRenderParams.mShadowRays.mData[idx];
+    ShadowRay ray = gRenderParams.mShadowRays[idx];
 
 	float transDirPdf, transNeePdf;
     gScene.traceVisibilityRay(
