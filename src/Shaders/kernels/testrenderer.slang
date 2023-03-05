@@ -86,25 +86,29 @@ struct PathState {
     float dEL;
     RandomSampler mRng;
     float2 mPackedRayDirection;
-	// fwd pdf of sampling the ray direction at last bounce
-    float mFwdPdfW;
-    uint mPacked;
+    uint2 mPacked;
+
+    // fwd pdf of sampling the ray direction at last bounce
+    property float mFwdPdfW {
+        get { return f16tof32(BF_GET(mPacked[0], 0, 16)); }
+        set { BF_SET(mPacked[0], f32tof16(newValue), 0, 16); }
+	}
 
 	// |normal * direction| at last bounce
     property float mCosOut {
-        get { return f16tof32(BF_GET(mPacked, 0, 16)); }
-        set { BF_SET(mPacked, f32tof16(newValue), 0, 16); }
+        get { return f16tof32(BF_GET(mPacked[0], 16, 16)); }
+        set { BF_SET(mPacked[0], f32tof16(newValue), 16, 16); }
     }
 
     // specifies if a light path came from a finite emitter (e.g. not the environment)
     property bool isFiniteLight {
-        get { return bool(BF_GET(mPacked, 31, 1)); }
-        set { BF_SET(mPacked, (newValue ? 1 : 0), 31, 1); }
+        get { return bool(BF_GET(mPacked[1], 31, 1)); }
+        set { BF_SET(mPacked[1], (newValue ? 1 : 0), 31, 1); }
     }
 	// specifies if a view path is specular
     property bool isSpecular {
-        get { return bool(BF_GET(mPacked, 31, 1)); }
-        set { BF_SET(mPacked, (newValue ? 1 : 0), 31, 1); }
+        get { return bool(BF_GET(mPacked[1], 31, 1)); }
+        set { BF_SET(mPacked[1], (newValue ? 1 : 0), 31, 1); }
     }
 
     property uint mCurrentMedium {
@@ -561,14 +565,14 @@ bool ProcessInteraction(const Interaction bsdf, const IntersectionResult isect, 
     const float cosIn = isMedium ? 1 : abs(localDirIn.z);
 
     if (!gTraceFromLight) {
-        if (sPathState.mPathLength == 1) {
+		if (sPathState.mPathLength == 1) {
             gRenderParams.StoreAuxillaryData(sPixelIndex, isect, bsdf.albedo());
             // dE_1 = N0k/cameraPdfA
             sPathState.dEL = N0k / mis(sPathState.mFwdPdfW * cosIn / pow2(sIntersectionDistance));
 		}
 
 		// surface lights are one-sided
-        if (!isMedium && localDirIn.z > 0) {
+        if (isMedium || localDirIn.z > 0) {
             const float3 emission = sPathState.mThroughput * bsdf.emission();
             if (any(emission > 0)) {
                 AddEmission(emission,
@@ -672,7 +676,6 @@ bool NextVertex() {
 
 void InitializeCameraPath(const uint2 index) {
     const uint viewIndex = getViewIndex(index, gPushConstants.mOutputExtent, gPushConstants.mViewCount);
-    sPixelIndex = index.xy;
 
 	float2 uv;
 	const float3 localDir = gRenderParams.mViews[viewIndex].toWorld(index + 0.5, /*out*/ uv);
@@ -747,6 +750,8 @@ void StorePathState(const uint threadIndex) {
 [shader("compute")]
 [numthreads(8, 4, 1)]
 void Render(uint3 index: SV_DispatchThreadID) {
+    sPixelIndex = index.xy;
+
     if ((gTraceFromLight && index.y * gPushConstants.mOutputExtent.x + index.x >= gPushConstants.mLightSubpathCount) ||
         (!gTraceFromLight && any(index.xy >= gPushConstants.mOutputExtent)))
         return;
@@ -771,7 +776,9 @@ void Render(uint3 index: SV_DispatchThreadID) {
 [shader("compute")]
 [numthreads(8, 4, 1)]
 void RenderIteration(uint3 index: SV_DispatchThreadID) {
-    if ((gTraceFromLight && index.y * gPushConstants.mOutputExtent.x + index.x > gPushConstants.mLightSubpathCount) ||
+    sPixelIndex = index.xy;
+
+    if ((gTraceFromLight && index.y * gPushConstants.mOutputExtent.x + index.x >= gPushConstants.mLightSubpathCount) ||
         (!gTraceFromLight && any(index.xy >= gPushConstants.mOutputExtent)))
 		return;
 

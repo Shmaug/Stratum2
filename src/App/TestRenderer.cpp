@@ -450,7 +450,7 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 	}
 	if (loading) {
 		// compiling shaders...
-		renderTarget.clearColor(commandBuffer, vk::ClearColorValue(array<uint32_t, 4>{ 0, 0, 0, 0 }));
+		renderTarget.clearColor(commandBuffer, vk::ClearColorValue(array<float, 4>{ 0.5f, 0.5f, 0.5f, 0 }));
 		return;
 	}
 
