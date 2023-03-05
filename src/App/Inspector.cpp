@@ -69,7 +69,7 @@ bool Inspector::drawNodeGui(Node& n) {
 		}
 
 		// add child dialog
-		if (ImGui::BeginPopupModal("Add node")) {
+		if (ImGui::BeginPopup("Add node")) {
 			mInputChildName.resize(64);
 			ImGui::InputText("Child name", mInputChildName.data(), mInputChildName.size());
 			if (ImGui::Button("Done")) {
@@ -80,7 +80,7 @@ bool Inspector::drawNodeGui(Node& n) {
 		}
 
 		// add component dialog
-		if (ImGui::BeginPopupModal("Add component")) {
+		if (ImGui::BeginPopup("Add component")) {
 			for (auto[type, ctor] : mInspectorConstructFns) {
 				if (n.hasComponent(type))
 					continue;

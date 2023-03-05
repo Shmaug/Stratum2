@@ -421,16 +421,37 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 		defines.erase("gSampleDirectIllumination");
 
 	// create pipelines
-	const shared_ptr<ComputePipeline> renderPipeline = mPipelines.at("Render").get(commandBuffer.mDevice, defines);
-	shared_ptr<ComputePipeline> renderIterationPipeline, renderLightPipeline, renderLightIterationPipeline;
-	if (mDefines.at("gMultiDispatch"))
-		renderIterationPipeline = mPipelines.at("RenderIteration").get(commandBuffer.mDevice, defines, renderPipeline->descriptorSetLayouts());
-	if (mDefines.at("gUseVC") || mLightTrace) {
-		Defines tmp = defines;
-		tmp["gTraceFromLight"] = "true";
-		renderLightPipeline = mPipelines.at("Render").get(commandBuffer.mDevice, tmp);
+
+	bool loading = false;
+
+	auto loadPipeline = [&](const string& name, const Defines& defs) {
+		const auto& p = mPipelines.at(name).getAsync(commandBuffer.mDevice, defs);
+		if (!p)
+			loading = true;
+		return p;
+	};
+
+	shared_ptr<ComputePipeline> renderPipeline, renderIterationPipeline, renderLightPipeline, renderLightIterationPipeline, processShadowRaysPipeline, processAtomicOutputPipeline;
+	{
+		renderPipeline = loadPipeline("Render", defines);
 		if (mDefines.at("gMultiDispatch"))
-			renderLightIterationPipeline = mPipelines.at("RenderIteration").get(commandBuffer.mDevice, tmp, renderPipeline->descriptorSetLayouts());
+			renderIterationPipeline = loadPipeline("RenderIteration", defines);
+		if (mDefines.at("gUseVC") || mLightTrace) {
+			Defines tmp = defines;
+			tmp["gTraceFromLight"] = "true";
+			renderLightPipeline = loadPipeline("Render", tmp);
+			if (mDefines.at("gMultiDispatch"))
+				renderLightIterationPipeline = loadPipeline("RenderIteration", tmp);
+		}
+		if (mDefines.at("gDeferShadowRays"))
+			processShadowRaysPipeline = loadPipeline("ProcessShadowRays", defines);
+		if (mDefines.at("gDeferShadowRays") || mDefines.at("gUseVC") || mLightTrace)
+			processAtomicOutputPipeline = loadPipeline("ProcessAtomicOutput", Defines{ { "gClearImage", to_string(mLightTrace) }});
+	}
+	if (loading) {
+		// compiling shaders...
+		renderTarget.clearColor(commandBuffer, vk::ClearColorValue(array<uint32_t, 4>{ 0, 0, 0, 0 }));
+		return;
 	}
 
 	// create descriptor sets
@@ -487,15 +508,12 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 
 		if (mDefines.at("gDeferShadowRays")) {
 			ProfilerScope ps("Shadow rays", &commandBuffer);
-
 			if (!mDefines.at("gUseVC") && !mLightTrace) {
 				atomicOutput.fill(commandBuffer, 0);
 				Buffer::barriers(commandBuffer, { atomicOutput },
 					vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
 					vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 			}
-
-			const shared_ptr<ComputePipeline> processShadowRaysPipeline = mPipelines.at("ProcessShadowRays").get(commandBuffer.mDevice, defines, renderPipeline->descriptorSetLayouts());
 			processShadowRaysPipeline->dispatchTiled(commandBuffer, vk::Extent3D{extent.width, (maxShadowRays + extent.width-1) / extent.width, 1}, descriptorSets, {}, mPushConstants);
 		}
 
@@ -503,8 +521,6 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 			Buffer::barriers(commandBuffer, { atomicOutput },
 				vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
 				vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
-
-			const shared_ptr<ComputePipeline> processAtomicOutputPipeline = mPipelines.at("ProcessAtomicOutput").get(commandBuffer.mDevice, Defines{ { "gClearImage", to_string(mLightTrace) }}, renderPipeline->descriptorSetLayouts());
 			processAtomicOutputPipeline->dispatchTiled(commandBuffer, extent, descriptorSets, {}, mPushConstants);
 		}
 	}

@@ -396,7 +396,6 @@ void ComputePipeline::dispatch(CommandBuffer& commandBuffer, const vk::Extent3D&
 }
 
 
-
 shared_ptr<GraphicsPipeline> GraphicsPipelineCache::get(Device& device, const Defines& defines, const vector<shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts, optional<pair<vk::RenderPass, uint32_t>> renderPass) {
 	size_t key = 0;
 	for (const auto& d : defines)
@@ -442,5 +441,36 @@ shared_ptr<ComputePipeline> ComputePipelineCache::get(Device& device, const Defi
 	return mCachedPipelines.emplace(key, pipeline).first->second;
 }
 
+shared_ptr<ComputePipeline> ComputePipelineCache::getAsync(Device& device, const Defines& defines, const vector<shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts) {
+	size_t key = 0;
+	for (const auto& d : defines)
+		key = hashArgs(key, d.first, d.second);
+	for (const auto& l : descriptorSetLayouts)
+		key = hashArgs(key, l);
+
+	// check if the pipeline is already compiled
+	if (auto it = mCachedPipelines.find(key); it != mCachedPipelines.end())
+		return it->second;
+
+	// check if the pipeline is currently compiling
+	if (auto it = mCompileJobs.find(key); it != mCompileJobs.end()) {
+		if (it->second.wait_for(10us) == future_status::ready) {
+			// compile job completed
+			const shared_ptr<ComputePipeline> pipeline = it->second.get();
+			mCompileJobs.erase(it);
+			mCachedPipelines.emplace(key, pipeline);
+			return pipeline;
+		}
+		return nullptr; // currently compiling on another thread
+	}
+
+	// compile the pipeline asynchronously
+	mCompileJobs.emplace(key, move(async(launch::async, [=, &device]() {
+		const shared_ptr<Shader> shader = make_shared<Shader>(device, mSourceFile, mEntryPoint, mProfile, mCompileArgs, defines);
+		return make_shared<ComputePipeline>(mSourceFile.stem().string() + "_" + mEntryPoint, shader, mPipelineMetadata, descriptorSetLayouts);
+	})));
+
+	return nullptr;
+}
 
 }

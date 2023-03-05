@@ -3,6 +3,8 @@
 #include "Shader.hpp"
 #include "DescriptorSets.hpp"
 
+#include <future>
+
 namespace stm2 {
 
 class PushConstantValue : public vector<byte> {
@@ -205,6 +207,7 @@ public:
 	inline const Pipeline::Metadata& pipelineMetadata() const { return mPipelineMetadata; }
 
 	[[nodiscard]] shared_ptr<ComputePipeline> get(Device& device, const Defines& defines = {}, const vector<shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts = {});
+	[[nodiscard]] shared_ptr<ComputePipeline> getAsync(Device& device, const Defines& defines = {}, const vector<shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts = {});
 
 	inline void clear() {
 		mCachedPipelines.clear();
@@ -218,6 +221,7 @@ private:
 	Pipeline::Metadata mPipelineMetadata;
 
 	unordered_map<size_t, shared_ptr<ComputePipeline>> mCachedPipelines;
+	unordered_map<size_t, future<shared_ptr<ComputePipeline>>> mCompileJobs;
 };
 
 }
