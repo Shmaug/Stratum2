@@ -149,13 +149,11 @@ inline float3 sphericalUvToCartesian(float2 uv) {
 	return float3(sinPhi*cos(uv[0]), cos(uv[1]), sinPhi*sin(uv[0]));
 }
 
-// G = cos(theta) / pow2(dist)
-inline float pdfWtoA(const float pdfW, const float G) {
-	return pdfW * G;
+inline float pdfWtoA(const float pdfW, const float cosTheta, const float dist) {
+	return pdfW * cosTheta / pow2(dist);
 }
-// G = cos(theta) / pow2(dist)
-inline float pdfAtoW(const float pdfA, const float G) {
-	return pdfA / G;
+inline float pdfAtoW(const float pdfA, const float cosTheta, const float dist) {
+	return pdfA * pow2(dist) / cosTheta;
 }
 
 #ifdef __SLANG_COMPILER__

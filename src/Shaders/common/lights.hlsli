@@ -229,8 +229,4 @@ extension IntersectionResult {
             pdfA *= 1 - gEnvironmentSampleProbability;
 		return pdfA;
 	}
-    float LightSamplePdfW(const float3 direction) {
-        const float cosLight = mShadingData.isMedium() ? 1 : abs(dot(direction, mShadingData.getShadingNormal()));
-        return pdfAtoW(LightSamplePdfA(), cosLight/pow2(mDistance));
-	}
 };
