@@ -44,7 +44,7 @@ Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily
 	ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 	ImGui::GetIO().ConfigWindowsMoveFromTitleBarOnly = true;
 
-	gImGuiDescriptorPool = swapchain.mDevice.descriptorPool();
+	gImGuiDescriptorPool = swapchain.mDevice.getDescriptorPool();
 
 	ImGui_ImplGlfw_InitForVulkan(swapchain.mWindow.window(), true);
 

@@ -3,15 +3,15 @@
 #include "Scene.hpp"
 
 #include <Shaders/compat/scene.h>
-#include <Shaders/compat/path_tracer.h>
+#include <Shaders/compat/vcm.h>
 
 namespace stm2 {
 
-class PathTracer {
+class VCM {
 public:
 	Node& mNode;
 
-	PathTracer(Node& node);
+	VCM(Node& node);
 
 	void createPipelines(Device& device);
 
@@ -35,7 +35,7 @@ private:
 
 	GraphicsPipelineCache mRasterLightPathPipeline;
 
-	PathTracerPushConstants mPushConstants;
+	VcmPushConstants mPushConstants;
 
 	bool mPauseRendering = false;
 
@@ -58,29 +58,24 @@ private:
 	VcmReservoirFlags mDIReservoirFlags = VcmReservoirFlags::eNone;
 	VcmReservoirFlags mLVCReservoirFlags = VcmReservoirFlags::eNone;
 
+
+	VcmAlgorithmType mAlgorithm = VcmAlgorithmType::kBpt;
+	float mLightPathPercent = 1;
+
+	DeviceResourcePool mResourcePool;
+	Image::View mLastResultImage;
+	chrono::high_resolution_clock::time_point mLastSceneVersion;
+
+	list<pair<Buffer::View<byte>, bool>> mSelectionData;
+	Descriptors mPrevDescriptors;
+	vector<TransformData> mPrevViewTransforms;
+
+
 	bool mVisualizeLightPaths = false;
 	uint32_t mVisualizeLightPathCount = 128;
 	float mVisualizeLightPathRadius = 0.00075f;
 	float mVisualizeLightPathLength = 0.05;
 	uint32_t mVisualizeSegmentIndex = -1;
-
-	VcmAlgorithmType mAlgorithm = VcmAlgorithmType::kBpt;
-	bool mUsePerformanceCounters = false;
-	float mLightPathPercent = 1;
-
-	uint2 mHashGridStats = uint2::Zero();
-	Buffer::View<uint32_t> mPerformanceCounters;
-	vector<uint32_t> mPrevPerformanceCounters;
-	vector<float> mPerformanceCounterPerSecond;
-	float mPerformanceCounterTimer;
-
-	DeviceResourcePool mResourcePool;
-	Image::View mLastResultImage;
-	chrono::high_resolution_clock::time_point mLastSceneVersion;
-	vector<pair<ViewData,TransformData>> mLastViews;
-	Buffer::View<VisibilityData> mSelectionData;
-	bool mSelectionDataValid;
-	bool mSelectionShift;
 };
 
 }

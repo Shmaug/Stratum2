@@ -65,7 +65,9 @@ public:
 	}
 
 	vk::raii::CommandPool& commandPool(const uint32_t queueFamily);
-	const shared_ptr<vk::raii::DescriptorPool>& descriptorPool();
+
+	const shared_ptr<vk::raii::DescriptorPool>& allocateDescriptorPool();
+	const shared_ptr<vk::raii::DescriptorPool>& getDescriptorPool();
 
 	inline uint32_t findQueueFamily(const vk::QueueFlags flags = vk::QueueFlagBits::eGraphics|vk::QueueFlagBits::eCompute|vk::QueueFlagBits::eTransfer) {
 		return stm2::findQueueFamily(mPhysicalDevice, flags);
@@ -89,7 +91,7 @@ private:
  	vk::raii::PhysicalDevice mPhysicalDevice;
 	vk::raii::PipelineCache mPipelineCache;
 	unordered_map<uint32_t, vk::raii::CommandPool> mCommandPools;
-	shared_ptr<vk::raii::DescriptorPool> mDescriptorPool;
+	stack<shared_ptr<vk::raii::DescriptorPool>> mDescriptorPools;
 
 	VmaAllocator mAllocator;
 

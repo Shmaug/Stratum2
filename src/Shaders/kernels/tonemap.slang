@@ -9,14 +9,17 @@
 #endif
 
 RWTexture2D<float4> gOutput;
+
 #ifdef gSingleBuffer
 #define gInput gOutput
 #else
 Texture2D<float4> gInput;
 #endif
+
 #ifdef gModulateAlbedo
 Texture2D<float4> gAlbedo;
 #endif
+
 RWByteAddressBuffer gMax;
 
 struct PushConstants {

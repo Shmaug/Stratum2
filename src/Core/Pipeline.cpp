@@ -6,13 +6,20 @@
 namespace stm2 {
 
 DescriptorSets::DescriptorSets(Pipeline& pipeline, const string& name) :
-	Device::Resource(pipeline.mDevice, name), mPipeline(pipeline), mDescriptorPool(pipeline.mDevice.descriptorPool()), mDescriptorSetLayouts(mPipeline.descriptorSetLayouts()) {
+	Device::Resource(pipeline.mDevice, name), mPipeline(pipeline), mDescriptorSetLayouts(mPipeline.descriptorSetLayouts()) {
 	// get descriptor set layouts
 	vector<vk::DescriptorSetLayout> layouts(mDescriptorSetLayouts.size());
 	ranges::transform(mDescriptorSetLayouts, layouts.begin(), [](auto& l){ return **l; });
 
 	// allocate descriptor sets
-	vk::raii::DescriptorSets sets(*mDevice, vk::DescriptorSetAllocateInfo(**mDescriptorPool, layouts));
+	vk::raii::DescriptorSets sets = nullptr;
+	try{
+		mDescriptorPool = mDevice.getDescriptorPool();
+		sets = vk::raii::DescriptorSets(*mDevice, vk::DescriptorSetAllocateInfo(**mDescriptorPool, layouts));
+	} catch(vk::OutOfPoolMemoryError e) {
+		mDescriptorPool = mDevice.allocateDescriptorPool();
+		sets = vk::raii::DescriptorSets(*mDevice, vk::DescriptorSetAllocateInfo(**mDescriptorPool, layouts));
+	}
 
 	mDescriptorSets.resize(sets.size());
 	for (uint32_t i = 0; i < sets.size(); i++) {
@@ -131,6 +138,18 @@ void DescriptorSets::bind(CommandBuffer& commandBuffer, const unordered_map<stri
 
 	if (compute)
 		transitionImages(commandBuffer);
+
+	#ifdef _DEBUG
+	/*
+	for (const auto&[name, value] : mPipeline.descriptorMap()) {
+		if (mDescriptors.find({name,0}) == mDescriptors.end() && mPipeline.metadata().mImmutableSamplers.find(name) == mPipeline.metadata().mImmutableSamplers.end()) {
+			if (auto bf = mPipeline.metadata().mBindingFlags.find(name); bf != mPipeline.metadata().mBindingFlags.end())
+				if (bf->second & vk::DescriptorBindingFlagBits::ePartiallyBound)
+					continue;
+			cerr << "Warning: Binding DescriptorSets with missing descriptor: " << name << endl;
+		}
+	}*/
+	#endif
 
 	// dynamic offsets
 	vector<uint32_t> dynamicOffsetValues(dynamicOffsets.size());

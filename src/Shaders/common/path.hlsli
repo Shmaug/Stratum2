@@ -1,14 +1,51 @@
 #pragma once
 
-#include "path_defines.hlsli"
+#ifndef gDIReservoirFlags
+#define gDIReservoirFlags 0
+#endif
+#ifndef gLVCReservoirFlags
+#define gLVCReservoirFlags 0
+#endif
+#ifndef gPpm
+#define gPpm false
+#endif
+#ifndef gUseVC
+#define gUseVC false
+#endif
+#ifndef gUseVM
+#define gUseVM false
+#endif
+#ifndef gUseLVC
+#define gUseLVC false
+#endif
+#ifndef gPathTraceOnly
+#define gPathTraceOnly false
+#endif
+#ifndef gLightTraceOnly
+#define gLightTraceOnly false
+#endif
+#ifndef gDebugPaths
+#define gDebugPaths false
+#endif
+#ifndef gDebugPathWeights
+#define gDebugPathWeights false
+#endif
 
-#include "compat/path_tracer.h"
+
+
+#include "compat/vcm.h"
 #include "compat/scene.h"
+
+#ifdef gLambertian
+#include "materials/lambertian.hlsli"
+#else
+#include "materials/disney.hlsli"
+#endif
 #include "intersection.hlsli"
 
 // shader parameters
 
-[[vk::push_constant]] ConstantBuffer<PathTracerPushConstants> gPushConstants;
+[[vk::push_constant]] ConstantBuffer<VcmPushConstants> gPushConstants;
 
 #include "hashgrid.hlsli"
 
@@ -18,7 +55,6 @@ struct RenderParams {
     StructuredBuffer<TransformData> mViewInverseTransforms;
 	StructuredBuffer<uint> mViewMediumInstances;
 
-	StructuredBuffer<ViewData> mPrevViews;
 	StructuredBuffer<TransformData> mPrevInverseViewTransforms;
 
     RWByteAddressBuffer mLightImage;
@@ -33,13 +69,13 @@ struct RenderParams {
     RWStructuredBuffer<uint> mLightPathLengths;
 
     ConstantBuffer<VcmConstants> mVcmConstants;
-    HashGrid<uint, true> mLightHashGrid;
+    HashGrid<uint> mLightHashGrid;
 
-    HashGrid<DirectIlluminationReservoir, false> mDirectIlluminationReservoirs;
-    HashGrid<DirectIlluminationReservoir, false> mPrevDirectIlluminationReservoirs;
+    HashGrid<DirectIlluminationReservoir> mDirectIlluminationReservoirs;
+    HashGrid<DirectIlluminationReservoir> mPrevDirectIlluminationReservoirs;
 
-    HashGrid<LVCReservoir, false> mLVCReservoirs;
-    HashGrid<LVCReservoir, false> mPrevLVCReservoirs;
+    HashGrid<LVCReservoir> mLVCReservoirs;
+    HashGrid<LVCReservoir> mPrevLVCReservoirs;
 };
 
 ParameterBlock<RenderParams> gRenderParams;
@@ -48,9 +84,7 @@ ParameterBlock<RenderParams> gRenderParams;
 
 // includes which reference shader parameters
 
-#include "materials/environment.hlsli"
-#include "materials/lambertian.hlsli"
-typedef LambertianMaterial Material;
+
 
 // useful struct properties
 
@@ -148,7 +182,7 @@ struct IlluminationSampleRecord {
         return mCosLight / pow2(mDistance);
     }
     float getDirectPdfA() {
-        return pdfWtoA(mDirectPdfW, getG());
+        return pdfWtoA(mDirectPdfW, mCosLight, mDistance);
 	}
 
     property bool isSingular {
@@ -184,24 +218,6 @@ extension SceneParameters {
     IlluminationSampleRecord sampleIllumination(const float3 referencePosition, const float4 rnd) {
         IlluminationSampleRecord r;
 
-        if (gHasEnvironment) {
-            if (gPushConstants.mLightCount == 0 || rnd.w < gPushConstants.mEnvironmentSampleProbability) {
-                float2 uv;
-                r.mRadiance = EnvironmentImage().sample(rnd.xy, /*out*/ r.mDirectionToLight, /*out*/ uv, /*out*/ r.mDirectPdfW);
-                if (gPushConstants.mLightCount > 0)
-                    r.mDirectPdfW *= gPushConstants.mEnvironmentSampleProbability;
-                r.mDistance = POS_INFINITY;
-                r.mPosition = r.mDirectionToLight;
-                r.mNormal = r.mDirectionToLight;
-                r.mEmissionPdfW = r.mDirectPdfW * concentricDiscPdfA() / pow2(gRenderParams.mVcmConstants.mSceneSphere.w);
-                r.mIntegrationWeight = 1 / r.mDirectPdfW;
-                r.mCosLight = 1;
-                r.isSingular = false;
-                r.isFinite = false;
-                return r;
-            }
-        }
-
         if (gPushConstants.mLightCount == 0)
             return { 0 };
 
@@ -223,7 +239,7 @@ extension SceneParameters {
         } else if (instance.getType() == InstanceType::eSphere) {
 			// sphere
             const SphereInstanceData sphere = reinterpret<SphereInstanceData>(instance);
-            shadingData = makeSphereShadingData(sphere, transform, sphere.radius() * sampleUniformSphereCartesian(rnd.x, rnd.y));
+            shadingData = makeSphereShadingData(sphere, transform, sphere.radius() * sampleUniformSphere(rnd.x, rnd.y));
         } else
             return { 0 }; // shouldn't happen as only environment, mesh and sphere lights are supported
 
@@ -233,11 +249,11 @@ extension SceneParameters {
 
         r.mCosLight = -dot(shadingData.getGeometryNormal(), r.mDirectionToLight);
 
-        const Material m = Material(shadingData);
+        const PackedMaterialData m = gScene.LoadMaterial(shadingData);
         pdfA *= m.emissionPdf() / shadingData.mShapeArea;
 
         r.mRadiance = r.mCosLight <= 0 ? 0 : m.emission();
-        r.mDirectPdfW = pdfAtoW(pdfA, r.mCosLight / pow2(r.mDistance));
+        r.mDirectPdfW = pdfAtoW(pdfA, r.mCosLight, r.mDistance);
         r.mEmissionPdfW = pdfA * cosHemispherePdfW(r.mCosLight);
         r.mIntegrationWeight = 1 / r.mDirectPdfW;
         r.mPosition = shadingData.mPosition;
@@ -248,23 +264,6 @@ extension SceneParameters {
     }
     EmissionSampleRecord sampleEmission(const float4 posRnd, const float2 dirRnd) {
         EmissionSampleRecord r;
-
-        if (gHasEnvironment) {
-            if (gPushConstants.mLightCount == 0 || posRnd.w < gPushConstants.mEnvironmentSampleProbability) {
-                float2 uv;
-                r.mRadiance = EnvironmentImage().sample(dirRnd, /*out*/ r.mDirection, /*out*/ uv, /*out*/ r.mDirectPdfA);
-                if (gPushConstants.mLightCount > 0)
-                    r.mDirectPdfA *= gPushConstants.mEnvironmentSampleProbability;
-                const float3x3 frame = makeOrthonormal(r.mDirection);
-                r.mPosition = gRenderParams.mVcmConstants.mSceneSphere.xyz + gRenderParams.mVcmConstants.mSceneSphere.w * (frame[0] * posRnd.x + frame[1] * posRnd.y - r.mDirection);
-                r.mEmissionPdfW = r.mDirectPdfA * concentricDiscPdfA() / pow2(gRenderParams.mVcmConstants.mSceneSphere.w);
-                r.mPackedNormal = packNormal(r.mDirection);
-				r.mCosLight = 1;
-                r.isSingular = false;
-                r.isFinite = false;
-                return r;
-            }
-        }
 
         if (gPushConstants.mLightCount == 0)
             return { 0 };
@@ -286,11 +285,11 @@ extension SceneParameters {
             pdfA /= mesh.primitiveCount();
         } else if (instance.getType() == InstanceType::eSphere) {
             const SphereInstanceData sphere = reinterpret<SphereInstanceData>(instance);
-            shadingData = makeSphereShadingData(sphere, transform, sphere.radius() * sampleUniformSphereCartesian(posRnd.x, posRnd.y));
+            shadingData = makeSphereShadingData(sphere, transform, sphere.radius() * sampleUniformSphere(posRnd.x, posRnd.y));
         } else
             return { 0 };
 
-        const Material m = Material(shadingData);
+        const PackedMaterialData m = gScene.LoadMaterial(shadingData);
 		pdfA *= m.emissionPdf() / shadingData.mShapeArea;
 
         const float3 localDirOut = sampleCosHemisphere(dirRnd.x, dirRnd.y);
@@ -316,13 +315,14 @@ LightRadianceRecord GetBackgroundRadiance(const float3 aDirection) {
 	if (!gHasEnvironment) return { 0 };
 
     LightRadianceRecord r;
-    EnvironmentImage().evaluate(aDirection, cartesianToSphericalUv(aDirection), r.mRadiance, r.mDirectPdfA);
+    r.mRadiance = 0;
+    r.mDirectPdfA = 0;
     if (gPushConstants.mLightCount > 0)
         r.mDirectPdfA *= gPushConstants.mEnvironmentSampleProbability;
     r.mEmissionPdfW = r.mDirectPdfA * concentricDiscPdfA() / pow2(gRenderParams.mVcmConstants.mSceneSphere.w);
 	return r;
 }
-LightRadianceRecord GetSurfaceRadiance(const float3 aDirection, const IntersectionResult aIsect, const BSDF aBsdf) {
+LightRadianceRecord GetSurfaceRadiance(const float3 aDirection, const IntersectionResult aIsect, const PackedMaterialData aBsdf) {
     if (gPushConstants.mLightCount == 0) return { 0 };
 
     const float cosTheta = -dot(aDirection, aIsect.mShadingData.getGeometryNormal());

@@ -1,6 +1,6 @@
 #include "ImageComparer.hpp"
 #include "Inspector.hpp"
-#include "PathTracer.hpp"
+#include "Renderer.hpp"
 
 #include <Core/Instance.hpp>
 #include <Core/Profiler.hpp>
@@ -125,7 +125,6 @@ void ImageComparer::update(CommandBuffer& commandBuffer) {
 	}
 
 	ImGui::End();
-
 }
 
 void ImageComparer::drawGui() {
@@ -140,7 +139,7 @@ void ImageComparer::drawGui() {
 	ImGui::SameLine();
 	if (ImGui::Button("Save") && !string(label).empty()) {
 		Image::View img;
-		if (auto pt = mNode.root()->findDescendant<PathTracer>())
+		if (auto pt = mNode.root()->findDescendant<VCM>())
 			img = pt->resultImage();
 		if (img)
 			mImages.emplace(label, pair<Image::View, Image::View>{ img, {} });

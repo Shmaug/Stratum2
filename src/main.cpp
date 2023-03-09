@@ -54,6 +54,7 @@ struct App {
 	shared_ptr<FlyCamera> mFlyCamera;
 	shared_ptr<Camera> mCamera;
 
+	shared_ptr<Node> mRendererNode;
 	Renderer mRenderer;
 	RendererType mRendererType;
 	shared_ptr<ImageComparer> mImageComparer;
@@ -113,15 +114,15 @@ struct App {
 			if (auto it = StringToRendererTypeMap.find(*arg); it != StringToRendererTypeMap.end())
 				mRendererType = it->second;
 
-		auto rendererNode = sceneNode->addChild("Renderer");
-		mInspector->select(rendererNode);
-		mRenderer = make_renderer(mRendererType, *rendererNode);
+		mRendererNode = sceneNode->addChild("Renderer");
+		mInspector->select(mRendererNode);
+		mRenderer = make_renderer(mRendererType, *mRendererNode);
 
-		auto denoiserNode = rendererNode->addChild("Post process");
-		denoiserNode->makeComponent<Denoiser>(*rendererNode);
-		denoiserNode->makeComponent<Tonemapper>(*rendererNode);
+		auto denoiserNode = mRendererNode->addChild("Post process");
+		denoiserNode->makeComponent<Denoiser>(*mRendererNode);
+		denoiserNode->makeComponent<Tonemapper>(*mRendererNode);
 
-		mImageComparer = rendererNode->addChild("Image comparer")->makeComponent<ImageComparer>(*rendererNode);
+		mImageComparer = mRendererNode->addChild("Image comparer")->makeComponent<ImageComparer>(*mRendererNode);
 	}
 	inline ~App() {
 		(*mDevice)->waitIdle();
@@ -136,30 +137,47 @@ struct App {
 				RendererType newType = mRendererType;
 				if (ImGui::Selectable("Test", mRendererType == RendererType::eTest))
 					newType = RendererType::eTest;
+				if (ImGui::Selectable("VCM", mRendererType == RendererType::eVCM))
+					newType = RendererType::eVCM;
 				if (ImGui::Selectable("Raster", mRendererType == RendererType::eRaster))
 					newType = RendererType::eRaster;
 				if (ImGui::Selectable("Non euclidian", mRendererType == RendererType::eNonEuclidian))
 					newType = RendererType::eNonEuclidian;
+
 				if (newType != mRendererType) {
-					(*mDevice)->waitIdle();
-					shared_ptr<Node> node;
+					mRendererType = newType;
+					bool found = false;
 					switch (mRendererType) {
+					case RendererType::eVCM:
+						if (auto r = mRendererNode->getComponent<VCM>()) {
+							mRenderer = r;
+							found = true;
+						}
+						break;
 					case RendererType::eTest:
-						node = get<shared_ptr<TestRenderer>>(mRenderer)->mNode.getPtr();
-						node->removeComponent<TestRenderer>();
+						if (auto r = mRendererNode->getComponent<TestRenderer>()) {
+							mRenderer = r;
+							found = true;
+						}
 						break;
 					case RendererType::eRaster:
-						node = get<shared_ptr<RasterRenderer>>(mRenderer)->mNode.getPtr();
-						node->removeComponent<RasterRenderer>();
+						if (auto r = mRendererNode->getComponent<RasterRenderer>()) {
+							mRenderer = r;
+							found = true;
+						}
 						break;
 					case RendererType::eNonEuclidian:
-						node = get<shared_ptr<NonEuclidianRenderer>>(mRenderer)->mNode.getPtr();
-						node->removeComponent<NonEuclidianRenderer>();
+						if (auto r = mRendererNode->getComponent<NonEuclidianRenderer>()) {
+							mRenderer = r;
+							found = true;
+						}
 						break;
 					}
-					mRendererType = newType;
-					mRenderer = make_renderer(mRendererType, *node);
+					if (!found)
+						mRenderer = make_renderer(mRendererType, *mRendererNode);
 				}
+
+				ImGui::EndCombo();
 			}
 		}
 		ImGui::End();

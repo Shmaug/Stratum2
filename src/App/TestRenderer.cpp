@@ -26,6 +26,7 @@ TestRenderer::TestRenderer(Node& node) : mNode(node) {
 		{ "gDeferShadowRays", false },
 		{ "gDebugPaths", false },
 		{ "gDebugPathWeights", false },
+		{ "gReSTIR_DI", false },
 		{ "gLambertian", false },
 	};
 
@@ -33,6 +34,7 @@ TestRenderer::TestRenderer(Node& node) : mNode(node) {
 	mPushConstants["mMaxNullCollisions"] = 1000;
 	mPushConstants["mDebugPathLengths"] = 3 | (1<<16);
 	mPushConstants["mEnvironmentSampleProbability"] = 0.9f;
+	mPushConstants["mCandidateSamples"] = 32;
 
 	Device& device = *mNode.findAncestor<Device>();
 
@@ -113,12 +115,16 @@ void TestRenderer::drawGui() {
 			if (ImGui::SliderFloat("Light subpath count", &mLightSubpathCount, 0, 2)) changed = true;
 		}
 
-		if (ImGui::CollapsingHeader("Hash grid")) {
-			ImGui::Indent();
-			if (ImGui::DragScalar("Cell count", ImGuiDataType_U32, &mHashGridCellCount)) changed = true;
-			if (ImGui::DragFloat("Min cell size", &mHashGridCellSize, .01f)) changed = true;
-			if (ImGui::DragFloat("Cell pixel radius", &mHashGridCellPixelRadius, .5f, 0, 1000)) changed = true;
-			ImGui::Unindent();
+		if (mDefines.at("gReSTIR_DI")) {
+			if (ImGui::DragScalar("Candidate samples", ImGuiDataType_U32, &mPushConstants["mCandidateSamples"].get<uint32_t>())) changed = true;
+
+			if (ImGui::CollapsingHeader("Hash grid")) {
+				ImGui::Indent();
+				if (ImGui::DragScalar("Cell count", ImGuiDataType_U32, &mHashGridCellCount)) changed = true;
+				if (ImGui::DragFloat("Min cell size", &mHashGridCellSize, .01f)) changed = true;
+				if (ImGui::DragFloat("Cell pixel radius", &mHashGridCellPixelRadius, .5f, 0, 1000)) changed = true;
+				ImGui::Unindent();
+			}
 		}
 
 		ImGui::PopItemWidth();
@@ -141,7 +147,7 @@ void TestRenderer::drawGui() {
 }
 
 void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
-	ProfilerScope ps("PathTracer::render", &commandBuffer);
+	ProfilerScope ps("TestRenderer::render", &commandBuffer);
 
 	mResourcePool.clean();
 
@@ -230,8 +236,10 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 	// find views, assign scene descriptors
 	{
 		const Scene::FrameData& sceneData = scene->frameData();
-		if (sceneData.mDescriptors.empty())
+		if (sceneData.mDescriptors.empty()) {
+			renderTarget.clearColor(commandBuffer, vk::ClearColorValue(array<uint32_t, 4>{ 0, 0, 0, 0 }));
 			return;
+		}
 
 		if (scene->lastUpdate() > mLastSceneVersion) {
 			changed = true;
@@ -401,7 +409,6 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 	descriptors[{ "gRenderParams.mCounters", 0 }] = counterBuffer;
 	descriptors[{ "gRenderParams.mShadowRays", 0 }] = mResourcePool.getBuffer<array<float4,4>>(commandBuffer.mDevice, "mShadowRays", max(1u, maxShadowRays));
 
-
 	Defines defines;
 	for (const auto&[define,enabled] : mDefines)
 		if (enabled)
@@ -413,12 +420,13 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 	if (mDefines.at("gDebugPathWeights") && !mDefines.at("gDebugPaths"))
 		defines.emplace("gDebugPaths", "true");
 
+	if (mDefines.at("gUseVC"))
+		defines.erase("gSampleDirectIllumination");
+
 	if (mLightTrace) {
 		defines.erase("gUseVC");
 		defines.erase("gSampleDirectIllumination");
 	}
-	if (mDefines.at("gUseVC"))
-		defines.erase("gSampleDirectIllumination");
 
 	// create pipelines
 
@@ -547,7 +555,7 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 
 	// run tonemapper
 	if (mTonemap && tonemapper) {
-		tonemapper->render(commandBuffer, processedOutput, outputImage, (mDenoise && denoiser && denoiser->demodulateAlbedo() && processedOutput != outputImage) ? albedoImage : Image::View{});
+		tonemapper->render(commandBuffer, processedOutput, outputImage, (mDenoise && denoiser && denoiser->demodulateAlbedo()) ? albedoImage : Image::View{});
 		// copy outputImage to renderTarget
 		if (outputImage.image()->format() == renderTarget.image()->format())
 			Image::copy(commandBuffer, outputImage, renderTarget);

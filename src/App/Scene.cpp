@@ -537,7 +537,7 @@ void Scene::updateFrameData(CommandBuffer& commandBuffer) {
 			}
 
 			Buffer::View<byte> normals, texcoords;
-			Mesh::VertexAttributeDescription normalsDesc, texcoordsDesc;
+			Mesh::VertexAttributeDescription normalsDesc = {}, texcoordsDesc = {};
 			if (auto attrib = prim->mMesh->vertices().find(Mesh::VertexAttributeType::eNormal))
 				tie(normals, normalsDesc) = *attrib;
 			if (auto attrib = prim->mMesh->vertices().find(Mesh::VertexAttributeType::eTexcoord))

@@ -17,7 +17,7 @@ struct VcmConstants {
     float mVmNormalization;
 };
 
-struct PathTracerPushConstants {
+struct VcmPushConstants {
     uint2 mOutputExtent;
 	uint mScreenPixelCount;  // Number of pixels
 	uint mLightSubPathCount; // Number of light sub-paths

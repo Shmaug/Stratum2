@@ -1,4 +1,4 @@
-#include "PathTracer.hpp"
+#include "VCM.hpp"
 #include "Denoiser.hpp"
 #include "Tonemapper.hpp"
 #include "Gui.hpp"
@@ -15,9 +15,9 @@
 
 namespace stm2 {
 
-PathTracer::PathTracer(Node& node) : mNode(node) {
+VCM::VCM(Node& node) : mNode(node) {
 	if (shared_ptr<Inspector> inspector = mNode.root()->findDescendant<Inspector>())
-		inspector->setInspectCallback<PathTracer>();
+		inspector->setInspectCallback<VCM>();
 
 	Device& device = *mNode.findAncestor<Device>();
 	createPipelines(device);
@@ -41,7 +41,7 @@ PathTracer::PathTracer(Node& node) : mNode(node) {
 	if (auto arg = device.mInstance.findArgument("maxPathLength"); arg) mPushConstants.mMaxPathLength = atoi(arg->c_str());
 }
 
-void PathTracer::createPipelines(Device& device) {
+void VCM::createPipelines(Device& device) {
 	const auto samplerRepeat = make_shared<vk::raii::Sampler>(*device, vk::SamplerCreateInfo({},
 		vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eLinear,
 		vk::SamplerAddressMode::eRepeat, vk::SamplerAddressMode::eRepeat, vk::SamplerAddressMode::eRepeat,
@@ -53,6 +53,7 @@ void PathTracer::createPipelines(Device& device) {
 	md.mBindingFlags["gScene.mVertexBuffers"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
 	md.mBindingFlags["gScene.mImages"]  = vk::DescriptorBindingFlagBits::ePartiallyBound;
 	md.mBindingFlags["gScene.mImage1s"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	md.mBindingFlags["gScene.mImage2s"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
 	md.mBindingFlags["gScene.mVolumes"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
 
 	const filesystem::path shaderPath = *device.mInstance.findArgument("shaderKernelPath");
@@ -66,21 +67,14 @@ void PathTracer::createPipelines(Device& device) {
 	const filesystem::path kernelPath = shaderPath / "vcm.slang";
 	mRenderPipelines[RenderPipelineIndex::eGenerateLightPaths]     = ComputePipelineCache(kernelPath, "GenerateLightPaths"    , "sm_6_6", args, md);
 	mRenderPipelines[RenderPipelineIndex::eGenerateCameraPaths]    = ComputePipelineCache(kernelPath, "GenerateCameraPaths"   , "sm_6_6", args, md);
-	mRenderPipelines[RenderPipelineIndex::eHashGridComputeIndices] = ComputePipelineCache(kernelPath, "ComputeHashGridIndices", "sm_6_6", args, md);
-	mRenderPipelines[RenderPipelineIndex::eHashGridSwizzle]        = ComputePipelineCache(kernelPath, "SwizzleHashGrid"       , "sm_6_6", args, md);
+	mRenderPipelines[RenderPipelineIndex::eHashGridComputeIndices] = ComputePipelineCache(shaderPath / "hashgrid.slang", "ComputeIndices", "sm_6_6", { "-O3", "-matrix-layout-row-major", "-capability", "spirv_1_5" });
+	mRenderPipelines[RenderPipelineIndex::eHashGridSwizzle]        = ComputePipelineCache(shaderPath / "hashgrid.slang", "Swizzle"       , "sm_6_6", { "-O3", "-matrix-layout-row-major", "-capability", "spirv_1_5" });
 
 	auto swapchain = mNode.root()->findDescendant<Swapchain>();
 	createRasterPipeline(device, swapchain->extent(), swapchain->format().format);
-
-	mPerformanceCounters = make_shared<Buffer>(device, "mPerformanceCounters", 4*sizeof(uint32_t), vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-	mPrevPerformanceCounters.resize(mPerformanceCounters.size());
-	mPerformanceCounterPerSecond.resize(mPerformanceCounters.size());
-	ranges::fill(mPerformanceCounters, 0);
-	ranges::fill(mPrevPerformanceCounters, 0);
-	mPerformanceCounterTimer = 0;
 }
 
-void PathTracer::createRasterPipeline(Device& device, const vk::Extent2D& extent, const vk::Format format) {
+void VCM::createRasterPipeline(Device& device, const vk::Extent2D& extent, const vk::Format format) {
 	GraphicsPipeline::GraphicsMetadata gmd;
 	gmd.mColorBlendState = GraphicsPipeline::ColorBlendState();
 	gmd.mColorBlendState->mAttachments = { vk::PipelineColorBlendAttachmentState(
@@ -145,7 +139,7 @@ void PathTracer::createRasterPipeline(Device& device, const vk::Extent2D& extent
 	}, rasterArgs, gmd);
 }
 
-void PathTracer::drawGui() {
+void VCM::drawGui() {
 	bool changed = false;
 
 	ImGui::PushID(this);
@@ -172,7 +166,6 @@ void PathTracer::drawGui() {
 		}
 		if (ImGui::Checkbox("Alpha testing", &mUseAlphaTesting)) changed = true;
 		if (ImGui::Checkbox("Random frame seed", &mRandomPerFrame)) changed = true;
-		if (ImGui::Checkbox("Performance counters", &mUsePerformanceCounters)) changed = true;
 		ImGui::PushItemWidth(60);
 
 		uint32_t one = 1;
@@ -284,23 +277,16 @@ void PathTracer::drawGui() {
 		if (auto denoiser = mNode.getComponent<Denoiser>(); denoiser)
 			denoiser->resetAccumulation();
 	}
-
-	if (mUsePerformanceCounters) {
-		const auto [rps, ext] = formatNumber(mPerformanceCounterPerSecond[0]);
-		ImGui::Text("%.2f%s Rays/second (%u%% visibility)", rps, ext, mPerformanceCounterPerSecond[0] == 0 ? 0 : (uint32_t)(100*mPerformanceCounterPerSecond[1] / mPerformanceCounterPerSecond[0]));
-		ImGui::Text("%u failed inserts, %u buckets used", mHashGridStats[0], mHashGridStats[1]);
-	}
 }
 
-void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
-#if 0
+void VCM::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
 	if (mPauseRendering) return;
 
-	ProfilerScope ps("PathTracer::render", &commandBuffer);
+	ProfilerScope ps("VCM::render", &commandBuffer);
 
 	const shared_ptr<Scene> scene = mNode.findAncestor<Scene>();
 	const Scene::FrameData& sceneData = scene->frameData();
-	if (sceneData.mLightCount == 0 && sceneData.mEnvironmentMaterialAddress == -1) {
+	if (sceneData.mDescriptors.empty()) {
 		renderTarget.clearColor(commandBuffer, vk::ClearColorValue(array<uint32_t, 4>{ 0, 0, 0, 0 }));
 		return;
 	}
@@ -308,49 +294,36 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 	const shared_ptr<Denoiser>   denoiser   = mNode.findDescendant<Denoiser>();
 	const shared_ptr<Tonemapper> tonemapper = mNode.findDescendant<Tonemapper>();
 
-	// read gpu->cpu data from frame
-	{
-		// count rays per second
-		{
-			frame->mTime = chrono::high_resolution_clock::now();
-			if (mPrevFrame) {
-				const float deltaTime = chrono::duration_cast<chrono::duration<float>>(frame->mTime - mPrevFrame->mTime).count();
-				mPerformanceCounterTimer += deltaTime;
-				if (mPerformanceCounterTimer >= 1) {
-					for (uint32_t i = 0; i < mPerformanceCounterPerSecond.size(); i++)
-						mPerformanceCounterPerSecond[i] = (mPerformanceCounters[i] - mPrevPerformanceCounters[i]) / mPerformanceCounterTimer;
-					ranges::copy(mPerformanceCounters, mPrevPerformanceCounters.begin());
-					mPerformanceCounterTimer -= 1;
+	// scene object picker
+	for (auto it = mSelectionData.begin(); it != mSelectionData.end();) {
+		if (it->first.buffer()->inFlight())
+			break;
+
+		const uint32_t selectedInstance = it->first.cast<VisibilityData>()[0].instanceIndex();
+		if (shared_ptr<Inspector> inspector = mNode.root()->findDescendant<Inspector>()) {
+			if (selectedInstance == INVALID_INSTANCE || selectedInstance >= scene->frameData().mInstanceNodes.size())
+				inspector->select(nullptr);
+			else {
+				if (shared_ptr<Node> selected = scene->frameData().mInstanceNodes[selectedInstance].lock()) {
+					if (it->second) {
+						shared_ptr<Node> tn;
+						if (selected->findAncestor<TransformData>(&tn))
+							inspector->select(tn);
+						else
+							inspector->select(selected);
+					} else
+						inspector->select(selected);
 				}
 			}
 		}
 
-		// scene object picking using frame's mSelectionData
-		{
-			ProfilerScope ps("Object picking");
-			if (frame->mSelectionData && frame->mSelectionDataValid) {
-				const uint32_t selectedInstance = frame->mSelectionData.data()->instanceIndex();
-				if (shared_ptr<Inspector> inspector = mNode.root()->findDescendant<Inspector>()) {
-					if (selectedInstance == INVALID_INSTANCE || selectedInstance >= sceneData.mInstanceNodes.size())
-						inspector->select(nullptr);
-					else {
-						if (shared_ptr<Node> selected = sceneData.mInstanceNodes[selectedInstance].lock()) {
-							if (frame->mSelectionShift) {
-								shared_ptr<Node> tn;
-								if (selected->findAncestor<TransformData>(&tn))
-									inspector->select(tn);
-								else
-									inspector->select(selected);
-							} else
-								inspector->select(selected);
-						}
-					}
-				}
-			}
-		}
+		it = mSelectionData.erase(it);
+	}
 
-		if (auto it = frame->mBuffers.find("mLightHashGrid.mStats"); it != frame->mBuffers.end())
-			mHashGridStats = it->second.cast<uint2>()[0];
+	bool changed = false;
+	if (scene->lastUpdate() > mLastSceneVersion) {
+		changed = true;
+		mLastSceneVersion = scene->lastUpdate();
 	}
 
 	bool has_volumes = false;
@@ -358,11 +331,11 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 	Descriptors descriptors;
 
 	// copy camera/view data to GPU, compute gViewMediumInstances
+	vector<ViewData>      views;
+	vector<TransformData> viewTransforms;
 	{
 		ProfilerScope ps("Upload views", &commandBuffer);
 
-		vector<ViewData>      views;
-		vector<TransformData> viewTransforms;
 		vector<TransformData> viewInverseTransforms;
 
 		mNode.root()->forEachDescendant<Camera>([&](Node& node, const shared_ptr<Camera>& camera) {
@@ -382,83 +355,107 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		descriptors[{"gRenderParams.mViewTransforms",0}]        = mResourcePool.uploadData<TransformData>(commandBuffer, "mViewTransforms"       , viewTransforms);
 		descriptors[{"gRenderParams.mViewInverseTransforms",0}] = mResourcePool.uploadData<TransformData>(commandBuffer, "mViewInverseTransforms", viewInverseTransforms);
 
-		auto prevViews                 = frame->getBuffer<ViewData>     ("mPrevViews"                , views.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
-		auto prevInverseViewTransforms = frame->getBuffer<TransformData>("mPrevInverseViewTransforms", views.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
-		if (mPrevFrame) {
-			for (uint32_t i = 0; i < mPrevFrame->mViews.size(); i++) {
-				prevViews[i] = mPrevFrame->mViews[i].first;
-				prevInverseViewTransforms[i] = mPrevFrame->mViews[i].second.inverse();
-			}
+		vector<TransformData> prevInverseViewTransforms(views.size());
+		for (uint32_t i = 0; i < mPrevViewTransforms.size(); i++) {
+			prevInverseViewTransforms[i] = mPrevViewTransforms[i].inverse();
 		}
+		descriptors[{"gRenderParams.mPrevInverseViewTransforms",0}] = mResourcePool.uploadData<TransformData>(commandBuffer, "mPrevInverseViewTransforms", prevInverseViewTransforms);
 
+		if (!mPrevViewTransforms.empty() && (mPrevViewTransforms[0].m != viewTransforms[0].m).any())
+			changed = true;
+		mPrevViewTransforms = viewTransforms;
 
 		// find if views are inside a volume
-		auto viewMediumIndicesBuffer = mResourcePool.getBuffer<uint32_t>("mViewMediumInstances", views.size(), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
-		ranges::fill(viewMediumIndicesBuffer, INVALID_INSTANCE);
-		descriptors[{"gRenderParams.mViewMediumInstances",0}] = viewMediumIndicesBuffer;
-
+		vector<uint32_t> viewMediumIndices(views.size());
+		ranges::fill(viewMediumIndices, INVALID_INSTANCE);
 		mNode.forEachDescendant<Medium>([&](Node& node, const shared_ptr<Medium>& vol) {
 			has_volumes = true;
 			for (uint32_t i = 0; i < views.size(); i++) {
 				const float3 localViewPos = nodeToWorld(node).inverse().transformPoint( viewTransforms[i].transformPoint(float3::Zero()) );
 				if (vol->mDensityGrid->grid<float>()->worldBBox().isInside(nanovdb::Vec3R(localViewPos[0], localViewPos[1], localViewPos[2])))
-					viewMediumIndicesBuffer[i] = sceneData.mInstanceTransformMap.at(vol.get()).second;
+					viewMediumIndices[i] = sceneData.mInstanceTransformMap.at(vol.get()).second;
 			}
 		});
+		descriptors[{"gRenderParams.mViewMediumInstances",0}] = mResourcePool.uploadData<uint32_t>(commandBuffer, "mViewMediumInstances", viewMediumIndices);
 	}
 
-	shared_ptr<DescriptorSets> descriptorSets;
+	const vk::Extent3D extent = renderTarget.extent();
+	mPushConstants.mOutputExtent = uint2(extent.width, extent.height);
+	mPushConstants.mScreenPixelCount = extent.width * extent.height;
+	mPushConstants.mLightSubPathCount = max<uint32_t>(1, mPushConstants.mScreenPixelCount * mLightPathPercent);
+	const uint32_t maxLightVertices  = mPushConstants.mLightSubPathCount*mPushConstants.mMaxPathLength;
+	const uint32_t maxCameraVertices = mPushConstants.mLightSubPathCount*mPushConstants.mMaxPathLength;
 
-	auto makeHashGridBuffers = [&]<typename T>(const string& name, const uint32_t cellCount, const uint32_t maxElements) {
-		descriptors[{"gRenderParams." + name + ".mChecksums",0}]     = mResourcePool.getBuffer<uint>  (commandBuffer.mDevice, name + ".mChecksums"    , cellCount    , vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
-		descriptors[{"gRenderParams." + name + ".mCounters",0}]      = mResourcePool.getBuffer<uint>  (commandBuffer.mDevice, name + ".mCounters"     , cellCount    , vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
-		descriptors[{"gRenderParams." + name + ".mAppendIndices",0}] = mResourcePool.getBuffer<uint2> (commandBuffer.mDevice, name + ".mAppendIndices", 1+maxElements, vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
-		descriptors[{"gRenderParams." + name + ".mAppendData",0}]    = mResourcePool.getBuffer<T>     (commandBuffer.mDevice, name + ".mAppendData"   , maxElements);
-		descriptors[{"gRenderParams." + name + ".mIndices",0}]       = mResourcePool.getBuffer<uint>  (commandBuffer.mDevice, name + ".mIndices"      , cellCount);
-		descriptors[{"gRenderParams." + name + ".mData",0}]          = mResourcePool.getBuffer<T>     (commandBuffer.mDevice, name + ".mData"         , maxElements);
-		descriptors[{"gRenderParams." + name + ".mActiveCells",0}]   = mResourcePool.getBuffer<uint>  (commandBuffer.mDevice, name + ".mActiveCells"  , cellCount);
-		descriptors[{"gRenderParams." + name + ".mCellCenters",0}]   = mResourcePool.getBuffer<float4>(commandBuffer.mDevice, name + ".mCellCenters"  , cellCount);
-		descriptors[{"gRenderParams." + name + ".mCellNormals",0}]   = mResourcePool.getBuffer<int4>  (commandBuffer.mDevice, name + ".mCellNormals"  , cellCount, vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
-		descriptors[{"gRenderParams." + name + ".mStats",0}]         = mResourcePool.getBuffer<uint>  (commandBuffer.mDevice, name + ".mStats", 2, vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+	auto makeHashGrid = [&]<typename T>(const string& name, const uint32_t size, const uint cellCount) {
+		struct HashGridConstants {
+			uint mCellCount;
+			uint mCellPixelRadius;
+			uint mMinCellSize;
+			uint pad;
+			float3 mCameraPosition;
+			float mDistanceScale;
+		};
+		HashGridConstants constants;
+		constants.mCellCount = cellCount;
+		constants.mCellPixelRadius = mPushConstants.mHashGridCellPixelRadius;
+		constants.mMinCellSize = mPushConstants.mHashGridMinCellSize;
+		constants.mCameraPosition = viewTransforms[0].transformPoint(float3::Zero());
+		constants.mDistanceScale = tan(constants.mCellPixelRadius * views[0].mProjection.mVerticalFoV * max(1.0f / extent.height, extent.height / (float)pow2(extent.width)));
+
+		const unordered_map<string, Buffer::View<byte>> buffers {
+			{ "mChecksums"        , mResourcePool.getBuffer<uint32_t>          (commandBuffer.mDevice, name + ".mChecksums", cellCount, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst) },
+			{ "mCounters"         , mResourcePool.getBuffer<uint32_t>          (commandBuffer.mDevice, name + ".mCounters" , cellCount+3, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst) },
+			{ "mAppendDataIndices", mResourcePool.getBuffer<uint2>             (commandBuffer.mDevice, name + ".mAppendDataIndices", size) },
+			{ "mAppendData"       , mResourcePool.getBuffer<T>                 (commandBuffer.mDevice, name + ".mAppendData", size) },
+			{ "mIndices"          , mResourcePool.getBuffer<uint32_t>          (commandBuffer.mDevice, name + ".mIndices", cellCount) },
+			{ "mActiveCellIndices", mResourcePool.getBuffer<uint32_t>          (commandBuffer.mDevice, name + ".mActiveCellIndices", cellCount) },
+			{ "mData"             , mResourcePool.getBuffer<T>                 (commandBuffer.mDevice, name + ".mData", size) },
+			{ "mConstants"        , mResourcePool.uploadData<HashGridConstants>(commandBuffer        , name + ".mConstants", constants, vk::BufferUsageFlagBits::eUniformBuffer|vk::BufferUsageFlagBits::eTransferDst) },
+		};
+
+		Descriptors hashGridDescriptors;
+		for (const auto&[bufferName, buf] : buffers) {
+			descriptors[{"gRenderParams." + name + "." + bufferName, 0 }] = buf;
+			hashGridDescriptors[{ "gHashGrid." + bufferName, 0 }] = buf;
+		}
+		return hashGridDescriptors;
 	};
-	auto clearHashGrid = [&](const string& name) {
-		const Buffer::View<byte>& appendIndices = frame->mBuffers.at(name + ".mAppendIndices");
-		Buffer::View<byte> appendIndices0(appendIndices.buffer(), appendIndices.offset(), sizeof(uint2));
+	auto clearHashGrid = [&](const Descriptors& hashGridDescriptors) {
+		get<BufferDescriptor>(hashGridDescriptors.at({ "gHashGrid.mChecksums", 0 })).fill(commandBuffer, 0);
+		get<BufferDescriptor>(hashGridDescriptors.at({ "gHashGrid.mCounters", 0 })).fill(commandBuffer, 0);
 
-		frame->mBuffers.at(name + ".mChecksums").fill(commandBuffer, 0);
-		frame->mBuffers.at(name + ".mCounters").fill(commandBuffer, 0);
-		frame->mBuffers.at(name + ".mCellNormals").fill(commandBuffer, 0);
-		appendIndices0.fill(commandBuffer, 0);
-
-		Buffer::barriers(commandBuffer,
-			{
-				frame->mBuffers.at(name + ".mChecksums"),
-				frame->mBuffers.at(name + ".mCounters"),
-				appendIndices0
-			},
+		Buffer::barriers(commandBuffer, {
+			get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mChecksums",0})),
+			get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mCounters",0})) },
 			vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
 			vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
-
-		frame->mBuffers.at(name + ".mStats").cast<uint2>()[0] = uint2::Zero();
 	};
-	auto buildHashGrid = [&](const string& name, const uint32_t size) {
-		const uint32_t w = renderTarget.extent().width;
-		const Defines defines { { "gHashGrid", "gRenderParams." + name } };
-		{
-			ProfilerScope ps("Compute HashGrid indices (" + name + ")", &commandBuffer);
-			const vk::Extent3D indicesExtent(w, (mPushConstants.mHashGridCellCount + w-1) / w, 1);
-			mRenderPipelines[eHashGridComputeIndices].get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, indicesExtent, descriptorSets);
+	auto buildHashGrid = [&](const Descriptors& hashGridDescriptors, const string& dataTypeStr, const uint32_t size, const uint cellCount) {
+		auto computeIndicesPipeline = mRenderPipelines[eHashGridComputeIndices].get(commandBuffer.mDevice, { { "DataType", dataTypeStr } });
+		const auto hashGridDescriptorSets = computeIndicesPipeline->getDescriptorSets(hashGridDescriptors);
 
-			frame->mBuffers.at(name+".mIndices").barrier(commandBuffer,
+		{
+			get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mCounters",0})).barrier(
+				commandBuffer,
 				vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
-				vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
-		}
-		{
-			ProfilerScope ps("Swizzle HashGrid (" + name + ")", &commandBuffer);
-			const vk::Extent3D swizzleExtent(w, (size + w-1) / w, 1);
-			mRenderPipelines[eHashGridSwizzle].get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, swizzleExtent, descriptorSets);
+				vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 
-			frame->mBuffers.at(name+".mData").barrier(commandBuffer,
+			computeIndicesPipeline->dispatchTiled(commandBuffer, vk::Extent3D{cellCount%1024, cellCount/1024, 1}, hashGridDescriptorSets);
+		}
+
+		{
+			Buffer::barriers(commandBuffer, {
+				get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mIndices",0})),
+				get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mAppendData",0})),
+				get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mAppendDataIndices",0})) },
+				vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
+				vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
+
+			auto swizzlePipeline = mRenderPipelines[eHashGridSwizzle].get(commandBuffer.mDevice, { { "DataType", dataTypeStr } }, computeIndicesPipeline->descriptorSetLayouts());
+			swizzlePipeline->dispatchTiled(commandBuffer, vk::Extent3D{size%1024, size/1024, 1}, hashGridDescriptorSets);
+
+			get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mData",0})).barrier(
+				commandBuffer,
 				vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
 				vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
 		}
@@ -470,7 +467,6 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 	bool useVM = false;
 	Defines defines {
 		{ "gHasMedia",            to_string(has_volumes) },
-		{ "gPerformanceCounters", to_string(mUsePerformanceCounters) },
 		{ "gDebugPaths",          to_string(mDebugPaths) },
 		{ "gDebugPathWeights",    to_string(mDebugPathWeights) },
 		{ "gDIReservoirFlags",    to_string((uint32_t)mDIReservoirFlags) },
@@ -516,16 +512,11 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 	}
 
 
-	const vk::Extent3D extent = renderTarget.extent();
-	mPushConstants.mOutputExtent = uint2(extent.width, extent.height);
-	mPushConstants.mScreenPixelCount = extent.width * extent.height;
-	mPushConstants.mLightSubPathCount = max<uint32_t>(1, mPushConstants.mScreenPixelCount * mLightPathPercent);
-	const uint32_t maxLightVertices  = mPushConstants.mLightSubPathCount*mPushConstants.mMaxPathLength;
-	const uint32_t maxCameraVertices = mPushConstants.mLightSubPathCount*mPushConstants.mMaxPathLength;
+	Descriptors lightHashGrid, diReservoirHashGrid, lvcReservoirHashGrid;
 
 	// update values, allocate data
 	{
-		mPushConstants.reservoirHistoryValid((bool)mPrevFrame && !ImGui::IsKeyPressed(ImGuiKey_F5));
+		mPushConstants.reservoirHistoryValid(!mPrevDescriptors.empty() && !ImGui::IsKeyPressed(ImGuiKey_F5));
 		mPushConstants.mEnvironmentMaterialAddress = sceneData.mEnvironmentMaterialAddress;
 		mPushConstants.mLightCount = sceneData.mLightCount;
 		if (mRandomPerFrame) mPushConstants.mRandomSeed = (mDenoise && denoiser) ? denoiser->accumulatedFrames() : rand();
@@ -556,56 +547,83 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 			constants.mMisVmWeightFactor = useVM ? Mis(etaVCM) : 0.f;
 			constants.mMisVcWeightFactor = useVC ? Mis(1.f / etaVCM) : 0.f;
 
-			descriptors["gRenderParams.mVcmConstants"] = mResourcePool.uploadData<VcmConstants>(commandBuffer, "gRenderParams.mVcmConstants", &constants, vk::BufferUsageFlagBits::eUniformBuffer);
+			descriptors[{"gRenderParams.mVcmConstants",0}] = mResourcePool.uploadData<VcmConstants>(commandBuffer, "gRenderParams.mVcmConstants", constants, vk::BufferUsageFlagBits::eUniformBuffer);
 		}
 
 		// allocate data
-		{
-			ProfilerScope ps("Allocate data");
 
-			auto usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst;
+		ProfilerScope ps("Allocate data");
 
-			frame->getImage("mOutput",     extent, vk::Format::eR32G32B32A32Sfloat, usage);
-			frame->getImage("mAlbedo",     extent, vk::Format::eR16G16B16A16Sfloat, usage);
-			frame->getImage("mPrevUVs",    extent, vk::Format::eR32G32Sfloat, usage);
-			frame->getImage("mVisibility", extent, vk::Format::eR32G32Uint, usage);
-			frame->getImage("mDepth" ,     extent, vk::Format::eR32G32B32A32Sfloat, usage);
+		auto usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst;
 
-			frame->getBuffer<uint4>("mLightImage", mPushConstants.mScreenPixelCount*sizeof(uint4), vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
-			frame->getBuffer<PackedVcmVertex>("mLightVertices", maxLightVertices);
-			frame->getBuffer<uint32_t>("mLightPathLengths", mPushConstants.mLightSubPathCount, vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
+		descriptors[{"gRenderParams.mOutput",0}]     = ImageDescriptor{mResourcePool.getImage(commandBuffer.mDevice, "mOutput",     Image::Metadata{ .mFormat = vk::Format::eR32G32B32A32Sfloat, .mExtent = extent, .mUsage = usage }), vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {}};
+		descriptors[{"gRenderParams.mAlbedo",0}]     = ImageDescriptor{mResourcePool.getImage(commandBuffer.mDevice, "mAlbedo",     Image::Metadata{ .mFormat = vk::Format::eR16G16B16A16Sfloat, .mExtent = extent, .mUsage = usage }), vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {}};
+		descriptors[{"gRenderParams.mPrevUVs",0}]    = ImageDescriptor{mResourcePool.getImage(commandBuffer.mDevice, "mPrevUVs",    Image::Metadata{ .mFormat = vk::Format::eR32G32Sfloat,       .mExtent = extent, .mUsage = usage }), vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {}};
+		descriptors[{"gRenderParams.mVisibility",0}] = ImageDescriptor{mResourcePool.getImage(commandBuffer.mDevice, "mVisibility", Image::Metadata{ .mFormat = vk::Format::eR32G32Uint,         .mExtent = extent, .mUsage = usage }), vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {}};
+		descriptors[{"gRenderParams.mDepth",0}]      = ImageDescriptor{mResourcePool.getImage(commandBuffer.mDevice, "mDepth" ,     Image::Metadata{ .mFormat = vk::Format::eR32G32B32A32Sfloat, .mExtent = extent, .mUsage = usage }), vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {}};
 
-			makeHashGridBuffers.operator()<uint>("mLightHashGrid", mPushConstants.mHashGridCellCount, maxLightVertices);
-			makeHashGridBuffers.operator()<DirectIlluminationReservoir>("mDirectIlluminationReservoirs", mPushConstants.mHashGridCellCount, maxCameraVertices);
-			makeHashGridBuffers.operator()<LVCReservoir>("mLVCReservoirs", mPushConstants.mHashGridCellCount, maxCameraVertices);
+		descriptors[{"gRenderParams.mLightImage",0}]       = mResourcePool.getBuffer<uint4>          (commandBuffer.mDevice, "mLightImage", mPushConstants.mScreenPixelCount*sizeof(uint4), vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
+		descriptors[{"gRenderParams.mLightVertices",0}]    = mResourcePool.getBuffer<PackedVcmVertex>(commandBuffer.mDevice, "mLightVertices", maxLightVertices);
+		descriptors[{"gRenderParams.mLightPathLengths",0}] = mResourcePool.getBuffer<uint32_t>       (commandBuffer.mDevice, "mLightPathLengths", mPushConstants.mLightSubPathCount, vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
 
-			if (!frame->mSelectionData)
-				frame->mSelectionData = make_shared<Buffer>(commandBuffer.mDevice, "mSelectionData", sizeof(VisibilityData), vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-		}
+		lightHashGrid        = makeHashGrid.operator()<uint32_t>("mLightHashGrid", mPushConstants.mHashGridCellCount, maxLightVertices);
+		diReservoirHashGrid  = makeHashGrid.operator()<DirectIlluminationReservoir>("mDirectIlluminationReservoirs", mPushConstants.mHashGridCellCount, maxCameraVertices);
+		lvcReservoirHashGrid = makeHashGrid.operator()<LVCReservoir>("mLVCReservoirs", mPushConstants.mHashGridCellCount, maxCameraVertices);
 
-		for (const string d : {
-			"mChecksums",
-			"mCounters",
-			"mAppendIndices",
-			"mAppendData",
-			"mIndices",
-			"mData",
-			"mActiveCells",
-			"mStats" }) {
-			frame->mBuffers["mPrevDirectIlluminationReservoirs."+d] = (mPrevFrame ? mPrevFrame : frame)->mBuffers.at("mDirectIlluminationReservoirs."+d);
-			frame->mBuffers["mPrevLVCReservoirs."+d]                = (mPrevFrame ? mPrevFrame : frame)->mBuffers.at("mLVCReservoirs."+d);
-		}
+		// assign prev hashgrids
+		auto assignPrevHashgrid = [&](const string& name) {
+			for (const char* d : {
+				"mChecksums",
+				"mCounters",
+				"mAppendDataIndices",
+				"mAppendData",
+				"mIndices",
+				"mActiveCellIndices",
+				"mData",
+				"mConstants" })
+				descriptors[{"gRenderParams.mPrev"+name+"."+d,0}] = (mPrevDescriptors.empty() ? descriptors : mPrevDescriptors).at({"gRenderParams.m"+name+"."+d,0});
+		};
+		assignPrevHashgrid("DirectIlluminationReservoirs");
+		assignPrevHashgrid("LVCReservoirs");
 	}
 
+	mPrevDescriptors = descriptors;
+
 	// create mDescriptorSets
+	shared_ptr<DescriptorSets> descriptorSets;
 	{
 		ProfilerScope ps("Assign descriptors", &commandBuffer);
 
 		for (auto& [name, d] : sceneData.mDescriptors)
 			descriptors[{ "gScene." + name.first, name.second }] = d;
-		descriptors[{ "gScene.mPerformanceCounters", 0u }] = mPerformanceCounters;
+		descriptors[{ "gScene.mRayCount", 0u }] = make_shared<Buffer>(commandBuffer.mDevice, "mRayCount", 2*sizeof(uint32_t), vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+
+		// track resources which are not held by the descriptorset
+		commandBuffer.trackResource(sceneData.mAccelerationStructureBuffer.buffer());
 
 		descriptorSets = mRenderPipelines[eGenerateLightPaths].get(commandBuffer.mDevice, defines)->getDescriptorSets(descriptors);
+	}
+
+
+	bool loading = false;
+
+	auto loadPipeline = [&](const RenderPipelineIndex idx, const Defines& defs) {
+		const auto& p = mRenderPipelines[idx].getAsync(commandBuffer.mDevice, defs);
+		if (!p)
+			loading = true;
+		return p;
+	};
+
+	shared_ptr<ComputePipeline> generateLightPathsPipeline, generateCameraPathsPipeline;
+
+	if (mAlgorithm != VcmAlgorithmType::kPathTrace)
+		generateLightPathsPipeline = loadPipeline(eGenerateLightPaths, defines);
+	generateCameraPathsPipeline = loadPipeline(eGenerateCameraPaths, defines);
+
+	if (loading) {
+		// compiling shaders...
+		renderTarget.clearColor(commandBuffer, vk::ClearColorValue(array<float, 4>{ 0.5f, 0.5f, 0.5f, 0 }));
+		return;
 	}
 
 	// rendering
@@ -613,24 +631,24 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 		// clearing things
 		{
 			if (useVM || (mLVCHashGridSampling && mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache))
-				clearHashGrid("mLightHashGrid");
+				clearHashGrid(lightHashGrid);
 
 			if ((mDIReservoirFlags & VcmReservoirFlags::eReuse) && mAlgorithm != VcmAlgorithmType::kPpm && mAlgorithm != VcmAlgorithmType::kLightTrace)
-				clearHashGrid("mDirectIlluminationReservoirs");
+				clearHashGrid(diReservoirHashGrid);
 			if ((mLVCReservoirFlags & VcmReservoirFlags::eReuse) && mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache)
-				clearHashGrid("mLVCReservoirs");
+				clearHashGrid(lvcReservoirHashGrid);
 
 			// clear light image
 			if (mAlgorithm != VcmAlgorithmType::kPathTrace) {
-				frame->mBuffers.at("mLightImage").fill(commandBuffer, 0);
-				frame->mBuffers.at("mLightImage").barrier(commandBuffer,
+				get<BufferDescriptor>(descriptors.at({"gRenderParams.mLightImage",0})).fill(commandBuffer, 0);
+				get<BufferDescriptor>(descriptors.at({"gRenderParams.mLightImage",0})).barrier(commandBuffer,
 					vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
 					vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite);
 			}
 
 			// clear light vertex counter
 			if (mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache) {
-				const Buffer::View<byte>& lightPathLengths = frame->mBuffers.at("mLightPathLengths");
+				const Buffer::View<byte>& lightPathLengths = get<BufferDescriptor>(descriptors.at({"gRenderParams.mLightPathLengths",0}));
 				Buffer::View<uint32_t> lightPathLengths0(lightPathLengths.buffer(), lightPathLengths.offset(), 2);
 
 				lightPathLengths0.fill(commandBuffer, 0);
@@ -645,7 +663,7 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 			ProfilerScope ps("Generate light paths", &commandBuffer);
 
 			const vk::Extent3D lightExtent(extent.width, (mPushConstants.mLightSubPathCount + extent.width-1) / extent.width, 1);
-			mRenderPipelines[eGenerateLightPaths].get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, lightExtent, descriptorSets, {}, { { "", PushConstantValue(mPushConstants) } });
+			generateLightPathsPipeline->dispatchTiled(commandBuffer, lightExtent, descriptorSets, {}, { { "", PushConstantValue(mPushConstants) } });
 
 			commandBuffer->pipelineBarrier(
 				vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
@@ -654,86 +672,84 @@ void PathTracer::render(CommandBuffer& commandBuffer, const Image::View& renderT
 
 			// Build hash grid over light vertices
 			if (useVM || (mLVCHashGridSampling && mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache))
-				buildHashGrid("mLightHashGrid", maxLightVertices);
+				buildHashGrid(lightHashGrid, "uint", maxLightVertices, mPushConstants.mHashGridCellCount);
 		}
 
 		// generate camera paths
 		{
 			ProfilerScope ps("Generate camera paths", &commandBuffer);
-			mRenderPipelines[eGenerateCameraPaths].get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, extent, descriptorSets, {}, { { "", PushConstantValue(mPushConstants) } });
+			generateCameraPathsPipeline->dispatchTiled(commandBuffer, extent, descriptorSets, {}, { { "", PushConstantValue(mPushConstants) } });
 		}
 
 		// build hashgrids
 		if ((mDIReservoirFlags & VcmReservoirFlags::eReuse) && mAlgorithm != VcmAlgorithmType::kPpm && mAlgorithm != VcmAlgorithmType::kLightTrace)
-			buildHashGrid("mDirectIlluminationReservoirs", maxLightVertices);
+			buildHashGrid(diReservoirHashGrid, "float4[3]", maxLightVertices, mPushConstants.mHashGridCellCount);
 		if ((mLVCReservoirFlags & VcmReservoirFlags::eReuse) && mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache)
-			buildHashGrid("mLVCReservoirs", maxLightVertices);
+			buildHashGrid(lvcReservoirHashGrid, "float4[8]", maxLightVertices, mPushConstants.mHashGridCellCount);
 	}
 
-	Image::View renderResult = get<Image::View>(frame->mImages.at("mOutput"));
+	const Image::View& outputImage = get<Image::View>(get<ImageDescriptor>(descriptors.at({"gRenderParams.mOutput",0})));
+	const Image::View& albedoImage = get<Image::View>(get<ImageDescriptor>(descriptors.at({"gRenderParams.mAlbedo",0})));
+	Image::View processedOutput = outputImage;
+
 
 	// post processing
 	{
 		// run denoiser
 		if (mDenoise && denoiser && mRandomPerFrame) {
-			bool changed = mPrevFrame && (frame->mBuffers.at("mViewTransforms").cast<TransformData>()[0].m != mPrevFrame->mBuffers.at("mViewTransforms").cast<TransformData>()[0].m).any();
-
-			if (scene->lastUpdate() > mLastSceneVersion) {
-				changed = true;
-				mLastSceneVersion = scene->lastUpdate();
-			}
-
 			if (changed && !denoiser->reprojection())
 				denoiser->resetAccumulation();
 
-			renderResult = denoiser->denoise(
+			processedOutput = denoiser->denoise(
 				commandBuffer,
-				renderResult,
-				get<Image::View>(frame->mImages.at("mAlbedo")),
-				get<Image::View>(frame->mImages.at("mPrevUVs")),
-				get<Image::View>(frame->mImages.at("mVisibility")),
-				get<Image::View>(frame->mImages.at("mDepth")),
-				frame->mBuffers.at("mViews").cast<ViewData>() );
+				outputImage,
+				albedoImage,
+				get<Image::View>(get<ImageDescriptor>(descriptors.at({"gRenderParams.mPrevUVs",0}))),
+				get<Image::View>(get<ImageDescriptor>(descriptors.at({"gRenderParams.mVisibility",0}))),
+				get<Image::View>(get<ImageDescriptor>(descriptors.at({"gRenderParams.mDepth",0}))),
+				get<BufferDescriptor>(descriptors.at({"gRenderParams.mViews",0})).cast<ViewData>() );
 		}
 
 		// run tonemapper
-		if (mTonemap && tonemapper)
-			tonemapper->render(commandBuffer, renderResult, renderTarget, (mDenoise && denoiser && denoiser->demodulateAlbedo()) ? get<Image::View>(frame->mImages.at("mAlbedo")) : Image::View{});
-		else {
-			// just copy renderResult to renderTarget
-			if (renderResult.image()->format() == renderTarget.image()->format())
-				Image::copy(commandBuffer, renderResult, renderTarget);
+		if (mTonemap && tonemapper) {
+			tonemapper->render(commandBuffer, processedOutput, outputImage, (mDenoise && denoiser && denoiser->demodulateAlbedo()) ? albedoImage : Image::View{});
+			// copy outputImage to renderTarget
+			if (outputImage.image()->format() == renderTarget.image()->format())
+				Image::copy(commandBuffer, outputImage, renderTarget);
 			else
-				Image::blit(commandBuffer, renderResult, renderTarget);
+				Image::blit(commandBuffer, outputImage, renderTarget);
+			mLastResultImage = outputImage;
+		} else {
+			// copy processedOutput to renderTarget
+			if (processedOutput.image()->format() == renderTarget.image()->format())
+				Image::copy(commandBuffer, processedOutput, renderTarget);
+			else
+				Image::blit(commandBuffer, processedOutput, renderTarget);
+			mLastResultImage = processedOutput;
 		}
 	}
 
-
 	// copy VisibilityData for selected pixel for scene object picking
-	frame->mSelectionDataValid = false;
 	if (!ImGui::GetIO().WantCaptureMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsUsing()) {
-		const Image::View v = get<Image::View>(frame->mImages.at("mVisibility"));
-		v.barrier(commandBuffer, vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferRead);
-
 		const ImVec2 c = ImGui::GetIO().MousePos;
-		for (const auto&[view, transform] : views)
+		for (const ViewData& view : views)
 			if (view.isInside(int2(c.x, c.y))) {
-				frame->mSelectionData.copyFromImage(commandBuffer, v.image(), v.subresourceLayer(), vk::Offset3D{int(c.x), int(c.y), 0}, vk::Extent3D{1,1,1});
-				frame->mSelectionDataValid = true;
-				frame->mSelectionShift = ImGui::GetIO().KeyShift;
+				const Image::View& visibilityImage = get<Image::View>(get<ImageDescriptor>(descriptors.at({"gRenderParams.mVisibility", 0})));
+				Buffer::View<VisibilityData> selectionBuffer = make_shared<Buffer>(commandBuffer.mDevice, "SelectionData", sizeof(uint2), vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+				visibilityImage.barrier(commandBuffer, vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferRead);
+				selectionBuffer.copyFromImage(commandBuffer, visibilityImage.image(), visibilityImage.subresourceLayer(), vk::Offset3D{int(c.x), int(c.y), 0}, vk::Extent3D{1,1,1});
+				mSelectionData.push_back(make_pair(selectionBuffer, ImGui::GetIO().KeyShift));
+				break;
 			}
 	}
-
 
 	// visualize paths
 	if (mVisualizeLightPaths && mAlgorithm != VcmAlgorithmType::kPathTrace)
 		rasterLightPaths(commandBuffer, renderTarget);
 
-	mLastResultImage = renderResult;
-#endif
 }
 
-void PathTracer::rasterLightPaths(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
+void VCM::rasterLightPaths(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
 #if 0
 	if (renderTarget.image()->format() != mRasterLightPathPipeline.pipelineMetadata().mDynamicRenderingState->mColorFormats[0])
 		createRasterPipeline(commandBuffer.mDevice, vk::Extent2D(renderTarget.extent().width, renderTarget.extent().height), renderTarget.image()->format());

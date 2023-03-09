@@ -14,7 +14,6 @@ Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) :
 	mPhysicalDevice(physicalDevice),
 	mDevice(nullptr),
 	mPipelineCache(nullptr),
-	mDescriptorPool(nullptr),
 	mFrameIndex(0),
 	mLastFrameDone(0) {
 	unordered_set<string> deviceExtensions;
@@ -95,9 +94,9 @@ Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) :
 
 	// Load pipeline cache
 
-	vk::PipelineCacheCreateInfo cacheInfo = {};
 	vector<uint8_t> cacheData;
 	string tmp;
+	vk::PipelineCacheCreateInfo cacheInfo = {};
 	if (!mInstance.findArgument("noPipelineCache")) {
 		try {
 			cacheData = readFile<vector<uint8_t>>(filesystem::temp_directory_path() / "stm2_pcache");
@@ -145,22 +144,25 @@ vk::raii::CommandPool& Device::commandPool(const uint32_t queueFamily) {
 	return mCommandPools.emplace(queueFamily, vk::raii::CommandPool(mDevice, vk::CommandPoolCreateInfo(vk::CommandPoolCreateFlagBits::eResetCommandBuffer, queueFamily))).first->second;
 }
 
-const shared_ptr<vk::raii::DescriptorPool>& Device::descriptorPool() {
-	if (!mDescriptorPool) {
-		vector<vk::DescriptorPoolSize> poolSizes {
-			vk::DescriptorPoolSize(vk::DescriptorType::eSampler,              min(16384u, mLimits.maxDescriptorSetSamplers)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, min(16384u, mLimits.maxDescriptorSetSampledImages)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eInputAttachment,      min(16384u, mLimits.maxDescriptorSetInputAttachments)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eSampledImage,         min(16384u, mLimits.maxDescriptorSetSampledImages)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eStorageImage,         min(16384u, mLimits.maxDescriptorSetStorageImages)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer,        min(16384u, mLimits.maxDescriptorSetUniformBuffers)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eUniformBufferDynamic, min(16384u, mLimits.maxDescriptorSetUniformBuffersDynamic)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer,        min(16384u, mLimits.maxDescriptorSetStorageBuffers)),
-			vk::DescriptorPoolSize(vk::DescriptorType::eStorageBufferDynamic, min(16384u, mLimits.maxDescriptorSetStorageBuffersDynamic))
-		};
-		mDescriptorPool = make_shared<vk::raii::DescriptorPool>(mDevice, vk::DescriptorPoolCreateInfo(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet, 4096, poolSizes));
-	}
-	return mDescriptorPool;
+const shared_ptr<vk::raii::DescriptorPool>& Device::allocateDescriptorPool() {
+	vector<vk::DescriptorPoolSize> poolSizes {
+		vk::DescriptorPoolSize(vk::DescriptorType::eSampler,              min(16384u, mLimits.maxDescriptorSetSamplers)),
+		vk::DescriptorPoolSize(vk::DescriptorType::eCombinedImageSampler, min(16384u, mLimits.maxDescriptorSetSampledImages)),
+		vk::DescriptorPoolSize(vk::DescriptorType::eInputAttachment,      min(16384u, mLimits.maxDescriptorSetInputAttachments)),
+		vk::DescriptorPoolSize(vk::DescriptorType::eSampledImage,         min(16384u, mLimits.maxDescriptorSetSampledImages)),
+		vk::DescriptorPoolSize(vk::DescriptorType::eStorageImage,         min(16384u, mLimits.maxDescriptorSetStorageImages)),
+		vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer,        min(16384u, mLimits.maxDescriptorSetUniformBuffers)),
+		vk::DescriptorPoolSize(vk::DescriptorType::eUniformBufferDynamic, min(16384u, mLimits.maxDescriptorSetUniformBuffersDynamic)),
+		vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer,        min(16384u, mLimits.maxDescriptorSetStorageBuffers)),
+		vk::DescriptorPoolSize(vk::DescriptorType::eStorageBufferDynamic, min(16384u, mLimits.maxDescriptorSetStorageBuffersDynamic))
+	};
+	mDescriptorPools.push(make_shared<vk::raii::DescriptorPool>(mDevice, vk::DescriptorPoolCreateInfo(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet, 8192, poolSizes)));
+	return mDescriptorPools.top();
+}
+const shared_ptr<vk::raii::DescriptorPool>& Device::getDescriptorPool() {
+	if (mDescriptorPools.empty())
+		return allocateDescriptorPool();
+	return mDescriptorPools.top();
 }
 
 void Device::submit(const vk::raii::Queue queue, const vk::ArrayProxy<const shared_ptr<CommandBuffer>>& commandBuffers, const vk::ArrayProxy<pair<shared_ptr<vk::raii::Semaphore>, vk::PipelineStageFlags>>& waitSemaphores, const vk::ArrayProxy<shared_ptr<vk::raii::Semaphore>>& signalSemaphores) {

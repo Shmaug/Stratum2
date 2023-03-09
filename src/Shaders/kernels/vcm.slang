@@ -68,12 +68,12 @@ struct VertexCM {
     bool SampleScattering<let Adjoint : bool>(const BSDF aBsdf, inout SubPathState aoState) {
 		// Russian roulette
         const float contProb = aBsdf.continuationProb();
-        if (mRng.nextFloat() > contProb)
+        if (mRng.nextFloat().x > contProb)
             return false;
 
 		const float3 localDirIn = unpackNormal(aoState.mVertex.mLocalDirectionIn);
-        const MaterialSampleRecord sampleRecord   = aBsdf.sample<Adjoint>(mRng.nextFloat3(), localDirIn);
-        MaterialEvalRecord         evaluateRecord = aBsdf.evaluate<Adjoint>(localDirIn, sampleRecord.mDirection);
+        const DirectionSampleRecord sampleRecord   = aBsdf.sampleDirection<Adjoint>(mRng.nextFloat().xyz, localDirIn);
+        ReflectanceEvalRecord       evaluateRecord = aBsdf.evaluateReflectance<Adjoint>(localDirIn, sampleRecord.mDirection);
         evaluateRecord.mReflectance *= aoState.mVertex.mShadingData.shadingNormalCorrection<Adjoint>(localDirIn, sampleRecord.mDirection);
 
         if (all(evaluateRecord.mReflectance <= 0))
@@ -116,6 +116,22 @@ struct VertexCM {
         return true;
     }
 }
+
+interface BSDF {
+    bool canEvaluate();
+    bool isSingular();
+
+    float3 emission();
+    float emissionPdf();
+    float3 albedo();
+
+    float continuationProb();
+
+    ReflectanceEvalRecord evaluateReflectance<let Adjoint : bool>(const float3 dirIn, const float3 dirOut);
+    DirectionSampleRecord sampleDirection<let Adjoint : bool>(const float3 rnd, const float3 dirIn);
+};
+extension PackedMaterialData : BSDF {};
+extension Medium : BSDF {};
 
 // Camera tracing methods
 extension VertexCM {
@@ -215,7 +231,7 @@ extension VertexCM {
         float misWeight;
         if (gPathTraceOnly) {
             // Basic NEE MIS weight
-            misWeight = 1 / (1 + Mis(pdfAtoW(aLight.mDirectPdfA, aFwdG)) / Mis(aCameraState.mFwdBsdfPdfW));
+            misWeight = 1 / (1 + Mis(aLight.mDirectPdfA/aFwdG) / Mis(aCameraState.mFwdBsdfPdfW));
         } else {
             // Full path MIS weight [tech. rep. (37)].
             misWeight = 1 / (1 + wCamera);
@@ -330,7 +346,7 @@ extension VertexCM {
         // canonical samples
         reservoir.M = gPushConstants.mDIReservoirSampleCount;
         for (uint i = 0; i < gPushConstants.mDIReservoirSampleCount; i++)
-            reservoir.ProcessSample(aCameraState, aCameraBsdf, mRng.nextFloat4(), mRng.nextFloat());
+            reservoir.ProcessSample(aCameraState, aCameraBsdf, mRng.nextFloat(), mRng.nextFloat().x);
 
         // visibility ray for canonical samples
         if (reservoir.mCachedTargetPdf > 0) {
@@ -341,15 +357,15 @@ extension VertexCM {
 
         if (bool(gDIReservoirFlags & (uint)VcmReservoirFlags::eReuse)) {
             if (gPushConstants.reservoirHistoryValid()) {
-				const float2 jitter = mRng.nextFloat2() * 2 - 1;
+				const float2 jitter = mRng.nextFloat().xy * 2 - 1;
                 const float3x3 frame = makeOrthonormal(aCameraState.mVertex.mShadingData.getGeometryNormal());
                 const float3 queryPos = aCameraState.mVertex.mShadingData.mPosition + gPushConstants.mHashGridJitterRadius * (frame[0] * jitter.x + frame[1] * jitter.y);
                 const float cellSize = gRenderParams.mPrevDirectIlluminationReservoirs.GetCellSize(queryPos);
-				const uint cellIndex = gRenderParams.mPrevDirectIlluminationReservoirs.FindCellIndex(queryPos, cellSize);
+				const uint cellIndex = gRenderParams.mPrevDirectIlluminationReservoirs.FindCellIndex<false>(queryPos, cellSize);
                 if (cellIndex != -1) {
 					const uint2 range = gRenderParams.mPrevDirectIlluminationReservoirs.GetCellDataRange(cellIndex);
                     if (range.y > range.x)
-                        reservoir.Reuse(aCameraState, aCameraBsdf, gRenderParams.mPrevDirectIlluminationReservoirs.mData[range.x + mRng.next() % (range.y - range.x)], mRng.nextFloat());
+                        reservoir.Reuse(aCameraState, aCameraBsdf, gRenderParams.mPrevDirectIlluminationReservoirs.mData[range.x + mRng.next().x % (range.y - range.x)], mRng.nextFloat().x);
                 }
 			}
 
@@ -363,8 +379,6 @@ extension VertexCM {
                 storedReservoir.mCachedTargetPdf = reservoir.mCachedTargetPdf;
                 gRenderParams.mDirectIlluminationReservoirs.Append(
 					aCameraState.mVertex.mShadingData.mPosition,
-					aCameraState.mVertex.mShadingData.getShadingNormal(),
-					luminance(aCameraState.mVertex.mThroughput),
 					storedReservoir);
             }
         }
@@ -384,7 +398,7 @@ extension VertexCM {
             if (emissionSample.mIntegrationWeight <= 0)
                 return 0;
         } else
-            emissionSample = gScene.sampleIllumination(aCameraState.mVertex.mShadingData.mPosition, mRng.nextFloat4());
+            emissionSample = gScene.sampleIllumination(aCameraState.mVertex.mShadingData.mPosition, mRng.nextFloat());
 
         // If radiance == 0, other values are undefined, so have to early exit
         if (all(emissionSample.mRadiance <= 0) || emissionSample.mIntegrationWeight <= 0)
@@ -392,7 +406,7 @@ extension VertexCM {
 
         const float3 localDirIn   = unpackNormal(aCameraState.mVertex.mLocalDirectionIn);
         const float3 localToLight = aCameraState.mVertex.mShadingData.toLocal(emissionSample.mDirectionToLight);
-		MaterialEvalRecord evaluateRecord = aBsdf.evaluate<false>(localDirIn, localToLight);
+		ReflectanceEvalRecord evaluateRecord = aBsdf.evaluateReflectance<false>(localDirIn, localToLight);
         evaluateRecord.mReflectance *= aCameraState.mVertex.mShadingData.shadingNormalCorrection<false>(localDirIn, localToLight);
 
         if (all(evaluateRecord.mReflectance <= 0))
@@ -476,7 +490,7 @@ extension VertexCM {
         const float3 cameraLocalDirIn = unpackNormal(aCameraVertex.mLocalDirectionIn);
         const float3 cameraLocalDirOut = aCameraVertex.mShadingData.toLocal(direction);
         const float cosCamera = aCameraVertex.mShadingData.isSurface() ? cameraLocalDirOut.z : 1;
-        const MaterialEvalRecord cameraBsdfEval = aCameraBsdf.evaluate<false>(cameraLocalDirIn, cameraLocalDirOut);
+        const ReflectanceEvalRecord cameraBsdfEval = aCameraBsdf.evaluateReflectance<false>(cameraLocalDirIn, cameraLocalDirOut);
         const float3 cameraBsdfFactor = cameraBsdfEval.mReflectance * aCameraVertex.mShadingData.shadingNormalCorrection<false>(cameraLocalDirIn, cameraLocalDirOut);
         float cameraBsdfDirPdfW = cameraBsdfEval.mFwdPdfW;
         float cameraBsdfRevPdfW = cameraBsdfEval.mRevPdfW;
@@ -489,13 +503,14 @@ extension VertexCM {
         cameraBsdfDirPdfW *= cameraCont;
         cameraBsdfRevPdfW *= cameraCont;
 
-        const BSDF lightBsdf = Material(aLightVertex.mShadingData);
+        const PackedMaterialData lightBsdf = gScene.LoadMaterial(aLightVertex.mShadingData);
+        gScene.ApplyNormalMap(aLightVertex.mShadingData);
 
         // Evaluate BSDF at light vertex
         const float3 lightLocalDirIn = unpackNormal(aLightVertex.mLocalDirectionIn);
         const float3 lightLocalDirOut = aLightVertex.mShadingData.toLocal(-direction);
         const float cosLight = aLightVertex.mShadingData.isSurface() ? lightLocalDirOut.z : 1;
-        const MaterialEvalRecord lightBsdfEval = lightBsdf.evaluate<true>(lightLocalDirIn, lightLocalDirOut);
+        const ReflectanceEvalRecord lightBsdfEval = lightBsdf.evaluateReflectance<true>(lightLocalDirIn, lightLocalDirOut);
         const float3 lightBsdfFactor = lightBsdfEval.mReflectance * aLightVertex.mShadingData.shadingNormalCorrection<true>(lightLocalDirIn, lightLocalDirOut);
         float lightBsdfDirPdfW = lightBsdfEval.mFwdPdfW;
         float lightBsdfRevPdfW = lightBsdfEval.mRevPdfW;
@@ -512,8 +527,8 @@ extension VertexCM {
         const float geometryTerm = 1 / dist2;
 
         // Convert pdfs to area pdf
-        const float cameraBsdfDirPdfA = pdfWtoA(cameraBsdfDirPdfW, abs(cosLight)/pow2(distance));
-        const float lightBsdfDirPdfA  = pdfWtoA(lightBsdfDirPdfW, abs(cosCamera)/pow2(distance));
+        const float cameraBsdfDirPdfA = pdfWtoA(cameraBsdfDirPdfW, abs(cosLight), distance);
+        const float lightBsdfDirPdfA  = pdfWtoA(lightBsdfDirPdfW, abs(cosCamera), distance);
 
         // Partial light sub-path MIS weight [tech. rep. (40)]
         const float wLight = Mis(cameraBsdfDirPdfA) * (gRenderParams.mVcmConstants.mMisVmWeightFactor + aLightVertex.dVCM + aLightVertex.dVC * Mis(lightBsdfRevPdfW));
@@ -629,7 +644,8 @@ extension VertexCM {
             float phat_i_old;
             {
                 CameraVertex v = VcmVertex(aReservoir.mCameraVertex);
-                Material bsdf = Material(v.mShadingData);
+                PackedMaterialData bsdf = gScene.LoadMaterial(v.mShadingData);
+                gScene.ApplyNormalMap(v.mShadingData);
                 float3 tmp;
                 phat_i_old = GetTargetPdf(v, bsdf, mSample, tmp);
             }
@@ -660,67 +676,13 @@ extension VertexCM {
     }
 
     [mutating]
-    uint SampleLightCells(const SubPathState aCameraState, out float W) {
-        uint2 selected = -1;
-        float cachedTargetPdf = 0;
-        float totalWeight = 0;
-
-        const uint cellCount = gRenderParams.mLightHashGrid.mStats[1];
-        const float sourcePdf = 1;// / float(cellCount);
-
-        for (uint i = 0; i < gPushConstants.mLVCHashGridSampleCount; i++) {
-            const uint   candidateCellIndex     = gRenderParams.mLightHashGrid.mActiveCells[mRng.next() % cellCount];
-            const uint2  candidateCellDataRange = gRenderParams.mLightHashGrid.GetCellDataRange(candidateCellIndex);
-            const float3 candidateCellPosition  = gRenderParams.mLightHashGrid.mCellCenters[candidateCellIndex].xyz;
-            const float4 candidateCellNormal    = gRenderParams.mLightHashGrid.mCellNormals[candidateCellIndex] / float(gRenderParams.mLightHashGrid.gNormalQuantization);
-
-            float3 toCell = candidateCellPosition - aCameraState.mVertex.mShadingData.mPosition;
-            const float dist2 = dot(toCell, toCell);
-            toCell /= sqrt(dist2);
-
-            // note: the larger n is, the more concentrated the normals in the cell are
-            const float n = length(candidateCellNormal.xyz);
-
-            const float cosCamera = abs(dot(aCameraState.mVertex.mShadingData.getShadingNormal(), toCell));
-            const float cosLight  = (n <= 0.5) ? 1 : abs(dot(candidateCellNormal.xyz / n, toCell));
-
-            if (cosLight * cosCamera <= 0)
-                continue;
-
-            const float cellSize = gRenderParams.mLightHashGrid.GetCellSize(candidateCellPosition);
-            const float targetPdf = (candidateCellDataRange.y - candidateCellDataRange.x) * candidateCellNormal.w / max(pow2(cellSize * .5), dist2) * cosCamera * cosLight;
-
-            if (targetPdf <= 0)
-                continue;
-
-            const float wi = targetPdf / sourcePdf;
-
-            totalWeight += wi;
-            if (mRng.nextFloat() * totalWeight <= wi) {
-                cachedTargetPdf = targetPdf;
-                selected = candidateCellDataRange;
-			}
-        }
-
-        if (selected.x == -1) {
-            W = 1;
-            return mRng.next() % gRenderParams.mLightPathLengths[0];
-        }
-
-		// return a random vertex from the selected cell
-
-        W = totalWeight / (gPushConstants.mLVCHashGridSampleCount * cachedTargetPdf);
-        return selected.x + (selected.y - selected.x) % mRng.next();
-	}
-
-    [mutating]
     void ConnectToLVCReservoir(const SubPathState aCameraState, const BSDF aCameraBsdf) {
         ReservoirStateLVC reservoir = ReservoirStateLVC();
 
         // canonical samples
         reservoir.M = gPushConstants.mLVCReservoirSampleCount;
         for (uint i = 0; i < gPushConstants.mLVCReservoirSampleCount; i++) {
-            reservoir.ProcessSample(aCameraState, aCameraBsdf, gRenderParams.mLightVertices[mRng.next() % gRenderParams.mLightPathLengths[0]], mRng.nextFloat());
+            reservoir.ProcessSample(aCameraState, aCameraBsdf, gRenderParams.mLightVertices[mRng.next().x % gRenderParams.mLightPathLengths[0]], mRng.nextFloat().x);
 		}
 
         // visibility ray for canonical samples
@@ -732,15 +694,15 @@ extension VertexCM {
 
         if (bool(gLVCReservoirFlags & (uint)VcmReservoirFlags::eReuse)) {
             if (gPushConstants.reservoirHistoryValid()) {
-                const float2 jitter = mRng.nextFloat2() * 2 - 1;
+                const float2 jitter = mRng.nextFloat().xy * 2 - 1;
                 const float3x3 frame = makeOrthonormal(aCameraState.mVertex.mShadingData.getGeometryNormal());
                 const float3 queryPos = aCameraState.mVertex.mShadingData.mPosition + gPushConstants.mHashGridJitterRadius * (frame[0] * jitter.x + frame[1] * jitter.y);
                 const float cellSize = gRenderParams.mPrevLVCReservoirs.GetCellSize(queryPos);
-                const uint cellIndex = gRenderParams.mPrevLVCReservoirs.FindCellIndex(queryPos, cellSize);
+                const uint cellIndex = gRenderParams.mPrevLVCReservoirs.FindCellIndex<false>(queryPos, cellSize);
                 if (cellIndex != -1) {
                     const uint2 range = gRenderParams.mPrevLVCReservoirs.GetCellDataRange(cellIndex);
                     if (range.y > range.x)
-                        reservoir.Reuse(aCameraState, aCameraBsdf, gRenderParams.mPrevLVCReservoirs.mData[range.x + mRng.next() % (range.y - range.x)], mRng.nextFloat());
+                        reservoir.Reuse(aCameraState, aCameraBsdf, gRenderParams.mPrevLVCReservoirs.mData[range.x + mRng.next().x % (range.y - range.x)], mRng.nextFloat().x);
                 }
             }
 
@@ -753,8 +715,6 @@ extension VertexCM {
                 storedReservoir.mCachedTargetPdf = reservoir.mCachedTargetPdf;
                 gRenderParams.mLVCReservoirs.Append(
                     aCameraState.mVertex.mShadingData.mPosition,
-                    aCameraState.mVertex.mShadingData.getShadingNormal(),
-                    luminance(aCameraState.mVertex.mThroughput),
 					storedReservoir);
             }
         }
@@ -777,15 +737,8 @@ extension VertexCM {
         if (gRenderParams.mLightPathLengths[0] == 0)
             return; // no light vertices...
 
-        uint idx;
-		float W;
-
-        if (gLVCHashGridSampling) {
-            idx = SampleLightCells(aCameraState, W);
-        } else {
-            idx = mRng.next() % gRenderParams.mLightPathLengths[0];
-            W = 1;
-        }
+		uint idx = mRng.next().x % gRenderParams.mLightPathLengths[0];
+		float W = 1;
 
         LightVertex lightVertex = VcmVertex(gRenderParams.mLightVertices[idx]);
         const uint fullPathLength = lightVertex.mPathLength + 1 + aCameraState.mVertex.mPathLength;
@@ -847,7 +800,7 @@ extension VertexCM {
 		for (int j = 0; j < 8; j++) {
 			const int3 offset = int3((j%2), (j%4)/2, j/4) * offsetSign;
 
-			const uint cellIndex = gRenderParams.mLightHashGrid.FindCellIndex(queryPos, gRenderParams.mLightHashGrid.GetCellSize(queryPos), offset);
+			const uint cellIndex = gRenderParams.mLightHashGrid.FindCellIndex<false>(queryPos, gRenderParams.mLightHashGrid.GetCellSize(queryPos), offset);
 			if (cellIndex == -1)
 				continue;
 
@@ -878,7 +831,7 @@ extension VertexCM {
         const float3 localDirIn = unpackNormal(aCameraState.mVertex.mLocalDirectionIn);
 		const float3 localDirOut = aCameraState.mVertex.mShadingData.toLocal(aLightVertex.mShadingData.toWorld(unpackNormal(aLightVertex.mLocalDirectionIn)));
 
-        const MaterialEvalRecord eval = aCameraBsdf.evaluate<false>(localDirIn, localDirOut);
+        const ReflectanceEvalRecord eval = aCameraBsdf.evaluateReflectance<false>(localDirIn, localDirOut);
         const float3 cameraBsdfFactor = eval.mReflectance * aCameraState.mVertex.mShadingData.shadingNormalCorrection<false>(localDirIn, localDirOut);
 		float cameraBsdfDirPdfW = eval.mFwdPdfW;
         float cameraBsdfRevPdfW = eval.mRevPdfW;
@@ -888,7 +841,8 @@ extension VertexCM {
 
 		cameraBsdfDirPdfW *= aCameraBsdf.continuationProb();
 
-		const Material lightBsdf = Material(aLightVertex.mShadingData);
+        const PackedMaterialData lightBsdf = gScene.LoadMaterial(aLightVertex.mShadingData);
+        gScene.ApplyNormalMap(aLightVertex.mShadingData);
 
 		// Even though this is pdf from camera BSDF, the continuation probability
 		// must come from light BSDF, because that would govern it if light path
@@ -983,7 +937,8 @@ extension VertexCM {
                 cameraState.mVertex.mPathPdfA *= fwdG;
 			}
 
-			const Material bsdf = Material(cameraState.mVertex.mShadingData);
+            const PackedMaterialData bsdf = gScene.LoadMaterial(cameraState.mVertex.mShadingData);
+            gScene.ApplyNormalMap(cameraState.mVertex.mShadingData);
 
 			if (cameraState.mVertex.mPathLength == 1)
 				gRenderParams.mAlbedo[mIndex] = float4(bsdf.albedo(), 1);
@@ -1049,7 +1004,7 @@ extension VertexCM {
     // Samples light emission
     [mutating]
     void GenerateLightSample(out SubPathState oLightState) {
-        const EmissionSampleRecord emissionSample = gScene.sampleEmission(mRng.nextFloat4(), mRng.nextFloat2());
+        const EmissionSampleRecord emissionSample = gScene.sampleEmission(mRng.nextFloat(), mRng.nextFloat().xy);
 
         oLightState.mVertex.mShadingData.mPosition = emissionSample.mPosition;
         oLightState.mVertex.mShadingData.mPackedGeometryNormal = oLightState.mVertex.mShadingData.mPackedShadingNormal = emissionSample.mPackedNormal;
@@ -1098,7 +1053,7 @@ extension VertexCM {
         // Get the BSDF
         const float3 localDirIn    = unpackNormal(aLightState.mVertex.mLocalDirectionIn);
         const float3 localToCamera = aLightState.mVertex.mShadingData.toLocal(directionToCamera);
-        MaterialEvalRecord evaluateRecord = aBsdf.evaluate<true>(localDirIn, localToCamera);
+        ReflectanceEvalRecord evaluateRecord = aBsdf.evaluateReflectance<true>(localDirIn, localToCamera);
         evaluateRecord.mReflectance *= aLightState.mVertex.mShadingData.shadingNormalCorrection<true>(localDirIn, localToCamera);
 
         if (all(evaluateRecord.mReflectance <= 0))
@@ -1168,12 +1123,10 @@ extension VertexCM {
         }
 
         gRenderParams.mLightVertices[idx] = PackedVcmVertex(aLightState.mVertex, aLightState.mInstancePrimitiveIndex);
-        if (gUseVM || gLVCHashGridSampling) {
+        if (gUseVM) {
             if (any(aLightState.mVertex.mThroughput > 0))
                 gRenderParams.mLightHashGrid.Append(
                     aLightState.mVertex.mShadingData.mPosition,
-                    aLightState.mVertex.mShadingData.getShadingNormal(),
-                    luminance(aLightState.mVertex.mThroughput),
 					idx);
         }
 	}
@@ -1207,9 +1160,11 @@ extension VertexCM {
 			lightState.mVertex.mShadingData.mTexcoordScreenSize = 0;
 			lightState.mVertex.mLocalDirectionIn = packNormal(lightState.mVertex.mShadingData.toLocal(-lightState.mDirection));
 
-			const Material bsdf = Material(lightState.mVertex.mShadingData);
+			const PackedMaterialData bsdf = gScene.LoadMaterial(lightState.mVertex.mShadingData);
 			if (!bsdf.canEvaluate())
 				break;
+
+            gScene.ApplyNormalMap(lightState.mVertex.mShadingData);
 
 			// Update the MIS quantities before storing them at the vertex.
 			// These updates follow the initialization in GenerateLightSample() or
@@ -1271,20 +1226,4 @@ void GenerateCameraPaths(uint3 index: SV_DispatchThreadID) {
 
     VertexCM vcm = VertexCM(index.xy);
     vcm.GenerateCameraPaths();
-}
-
-#ifndef gHashGrid
-#define gHashGrid gRenderParams.mLightHashGrid
-#endif
-
-[shader("compute")]
-[numthreads(64, 1, 1)]
-void ComputeHashGridIndices(uint3 index: SV_DispatchThreadID) {
-	gHashGrid._ComputeIndices(index.y * gPushConstants.mOutputExtent.x + index.x);
-}
-
-[shader("compute")]
-[numthreads(64, 1, 1)]
-void SwizzleHashGrid(uint3 index: SV_DispatchThreadID) {
-	gHashGrid._Swizzle(index.y * gPushConstants.mOutputExtent.x + index.x);
 }
