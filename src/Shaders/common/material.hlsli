@@ -1,5 +1,6 @@
 #pragma once
 
+// used by material conversion kernels
 #ifndef MATERIAL_STORE_FN
 
 #ifndef gNormalMaps

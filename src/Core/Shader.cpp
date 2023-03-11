@@ -6,7 +6,23 @@
 #include <slang/slang.h>
 #include <portable-file-dialogs.h>
 
+#include <stdio.h>
+#include <stdlib.h>
+
 namespace stm2 {
+
+string exec(const char* cmd) {
+	FILE* pipe = _popen(cmd, "r");
+    if (pipe == nullptr)
+        return "";
+	string result;
+	array<char, 128> buffer;
+    while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
+        result += buffer.data();
+    }
+	_pclose(pipe);
+    return result;
+}
 
 Shader::Shader(Device& device, const filesystem::path& sourceFile, const string& entryPoint, const string& profile, const vector<string>& compileArgs, const unordered_map<string, string>& defines)
 	: Device::Resource(device, sourceFile.stem().string() + "_" + entryPoint), mModule(nullptr) {
@@ -19,7 +35,7 @@ Shader::Shader(Device& device, const filesystem::path& sourceFile, const string&
 
 	slang::ICompileRequest* request;
 	int targetIndex, entryPointIndex;
-	do {
+	do { // loop to allow user to retry compilatiop (e.g. after fixing an error)
 		session->createCompileRequest(&request);
 
 		// process compile args
@@ -65,23 +81,52 @@ Shader::Shader(Device& device, const filesystem::path& sourceFile, const string&
 		break;
 	} while (true);
 
-	// get spirv
+	// get spirv binary
+	{
+		slang::IBlob* blob;
+		SlangResult r = request->getEntryPointCodeBlob(entryPointIndex, targetIndex, &blob);
+		// disabled because it seems to fail on warnings
+		/*if (SLANG_FAILED(r)) {
+			std::stringstream stream;
+			stream << "facility 0x" << std::setfill('0') << std::setw(4) << std::hex << SLANG_GET_RESULT_FACILITY(r);
+			stream << ", result 0x" << std::setfill('0') << std::setw(4) << std::hex << SLANG_GET_RESULT_CODE(r);
+			const string msg = stream.str();
+			cerr << "Error: Failed to get code blob for " << resourceName() << ": " << msg << endl;
+			throw runtime_error(msg);
+		}*/
 
-	slang::IBlob* blob;
-	SlangResult r = request->getEntryPointCodeBlob(entryPointIndex, targetIndex, &blob);
-	/*if (SLANG_FAILED(r)) {
-		std::stringstream stream;
-		stream << "facility 0x" << std::setfill('0') << std::setw(4) << std::hex << SLANG_GET_RESULT_FACILITY(r);
-		stream << ", result 0x" << std::setfill('0') << std::setw(4) << std::hex << SLANG_GET_RESULT_CODE(r);
-		const string msg = stream.str();
-		cerr << "Error: Failed to get code blob for " << resourceName() << ": " << msg << endl;
-		throw runtime_error(msg);
-	}*/
+		vector<uint32_t> spirv(blob->getBufferSize()/sizeof(uint32_t));
+		memcpy(spirv.data(), blob->getBufferPointer(), blob->getBufferSize());
+		mModule = vk::raii::ShaderModule(*mDevice, vk::ShaderModuleCreateInfo({}, spirv));
+		blob->Release();
 
-	vector<uint32_t> spirv(blob->getBufferSize()/sizeof(uint32_t));
-	memcpy(spirv.data(), blob->getBufferPointer(), blob->getBufferSize());
-	mModule = vk::raii::ShaderModule(*mDevice, vk::ShaderModuleCreateInfo({}, spirv));
-	blob->Release();
+		#if 0
+		// Output SPIR-V binary for debugging
+		// Also try to run RGA
+		// should work on Radeon GPUs with RadeonDeveloperToolSuite in the PATH
+		static optional<bool> sHasRGA = nullopt;
+		const filesystem::path folder = filesystem::temp_directory_path() / "stm_spv";
+		if (sHasRGA == nullopt) {
+			sHasRGA = !exec("rga -h").empty();
+			if (!filesystem::exists(folder))
+				filesystem::create_directory(folder);
+		}
+
+		const filesystem::path spvp = folder / (sourceFile.stem().replace_extension().string() + "_" + entryPoint + ".spv");
+		writeFile(spvp, spirv);
+
+		if (sHasRGA.has_value() && sHasRGA.value()) {
+			const filesystem::path ap   = folder / (sourceFile.stem().replace_extension().string() + "_" + entryPoint + "_analysis.txt");
+			const filesystem::path isap = folder / (sourceFile.stem().replace_extension().string() + "_" + entryPoint + "_isa.txt");
+			const string cmd = "rga -s vulkan " + spvp.string() +
+				" --asic gfx1030"
+				" --analysis " + ap.string()   +
+				" --isa      " + isap.string();
+			//cout << cmd << endl;
+			exec(cmd.c_str());
+		}
+		#endif
+	}
 
 	// reflection
 

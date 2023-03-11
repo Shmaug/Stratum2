@@ -20,14 +20,16 @@ TestRenderer::TestRenderer(Node& node) : mNode(node) {
 		{ "gAlphaTest", true },
 		{ "gNormalMaps", true },
 		{ "gShadingNormals", true },
-		{ "gSampleDirectIllumination", true },
-		{ "gUseVC", true },
-		{ "gMultiDispatch", false },
-		{ "gDeferShadowRays", false },
+		{ "gLambertian", false },
+		{ "gDebugFastBRDF", true },
 		{ "gDebugPaths", false },
 		{ "gDebugPathWeights", false },
+		{ "gMultiDispatch", true },
+		{ "gDeferShadowRays", true },
+		{ "gSampleDirectIllumination", true },
+		{ "gSampleDirectIlluminationOnly", false },
 		{ "gReSTIR_DI", false },
-		{ "gLambertian", false },
+		{ "gUseVC", false },
 	};
 
 	mPushConstants["mMaxDepth"] = 5u;
@@ -97,6 +99,24 @@ void TestRenderer::drawGui() {
 	if (ImGui::CollapsingHeader("Defines")) {
 		for (auto&[define, enabled] : mDefines) {
 			if (ImGui::Checkbox(define.c_str(), &enabled)) changed = true;
+		}
+
+		if (changed) {
+			// make sure defines are consistent
+
+			if (mDefines.at("gDebugPathWeights"))
+				mDefines.at("gDebugPaths") = true;
+
+			if (mLightTrace) {
+				mDefines.at("gUseVC") = false;
+				mDefines.at("gSampleDirectIllumination") = false;
+				mDefines.at("gSampleDirectIlluminationOnly") = false;
+			}
+
+			if (mDefines.at("gUseVC")) {
+				mDefines.at("gSampleDirectIllumination") = false;
+				mDefines.at("gSampleDirectIlluminationOnly") = false;
+			}
 		}
 	}
 
@@ -409,24 +429,18 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 	descriptors[{ "gRenderParams.mCounters", 0 }] = counterBuffer;
 	descriptors[{ "gRenderParams.mShadowRays", 0 }] = mResourcePool.getBuffer<array<float4,4>>(commandBuffer.mDevice, "mShadowRays", max(1u, maxShadowRays));
 
+	// setup shader defines
+
 	Defines defines;
 	for (const auto&[define,enabled] : mDefines)
 		if (enabled)
 			defines[define] = to_string(enabled);
+
 	if (mPushConstants["mVolumeInstanceCount"].get<uint32_t>() > 0)
 		defines.emplace("gHasMedia", "true");
 	if (hasHeterogeneousMedia)
 		defines.emplace("gHasHeterogeneousMedia", "true");
-	if (mDefines.at("gDebugPathWeights") && !mDefines.at("gDebugPaths"))
-		defines.emplace("gDebugPaths", "true");
 
-	if (mDefines.at("gUseVC"))
-		defines.erase("gSampleDirectIllumination");
-
-	if (mLightTrace) {
-		defines.erase("gUseVC");
-		defines.erase("gSampleDirectIllumination");
-	}
 
 	// create pipelines
 
@@ -441,15 +455,22 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 
 	shared_ptr<ComputePipeline> renderPipeline, renderIterationPipeline, renderLightPipeline, renderLightIterationPipeline, processShadowRaysPipeline, processAtomicOutputPipeline;
 	{
-		renderPipeline = loadPipeline("Render", defines);
-		if (mDefines.at("gMultiDispatch"))
-			renderIterationPipeline = loadPipeline("RenderIteration", defines);
+		{
+			Defines tmp = defines;
+			if (mDefines.at("gMultiDispatch")) {
+				renderIterationPipeline = loadPipeline("RenderIteration", tmp);
+				tmp["gMultiDispatchFirst"] = "true";
+			}
+			renderPipeline = loadPipeline("Render", tmp);
+		}
 		if (mDefines.at("gUseVC") || mLightTrace) {
 			Defines tmp = defines;
 			tmp["gTraceFromLight"] = "true";
-			renderLightPipeline = loadPipeline("Render", tmp);
-			if (mDefines.at("gMultiDispatch"))
+			if (mDefines.at("gMultiDispatch")) {
 				renderLightIterationPipeline = loadPipeline("RenderIteration", tmp);
+				tmp["gMultiDispatchFirst"] = "true";
+			}
+			renderLightPipeline = loadPipeline("Render", tmp);
 		}
 		if (mDefines.at("gDeferShadowRays"))
 			processShadowRaysPipeline = loadPipeline("ProcessShadowRays", defines);

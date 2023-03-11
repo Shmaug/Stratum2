@@ -7,11 +7,11 @@ extension PackedMaterialData {
     float getEta1() { return getEta() + 1; }
 
     float3 eval<let Adjoint : bool>(const float3 dir_in, const float3 dir_out) {
-		const float aspect = sqrt(1 - getAnisotropic() * float(0.9));
-		const float min_alpha = float(0.0001);
+		const float aspect = sqrt(1 - getAnisotropic() * 0.9);
+		const float min_alpha = 1e-4;
 		const float alpha = pow2(getRoughness());
 		const float alpha_x = max(min_alpha, alpha / aspect);
-        const float alpha_y = max(min_alpha, alpha *aspect);
+        const float alpha_y = max(min_alpha, alpha * aspect);
 
         const float metallic = getMetallic();
 
@@ -32,7 +32,7 @@ extension PackedMaterialData {
 
 			// For diffuse, metallic, sheen, and clearcoat, the light bounces
 			// only at the top of the surface.
-			if (dir_in.z >= 0 && dir_out.z >= 0 && n_dot_out > 0) {
+			if (dir_in.z >= 0 && dir_out.z >= 0) {
 				// Diffuse
 
 				// The base diffuse model
@@ -51,9 +51,8 @@ extension PackedMaterialData {
 
 				const float3 baseColor = getBaseColor();
 
-				contrib +=
-					(1 - getTransmission()) * (1 - metallic) * getBaseColor() *
-					(lerp(base_diffuse, ss, getSubsurface()) / M_PI) * n_dot_out;
+                contrib += (1 - getTransmission()) * (1 - metallic) *
+					baseColor * (lerp(base_diffuse, ss, getSubsurface()) / M_PI) * n_dot_out;
 
 				// Sheen
 				const float3 Ctint =
@@ -68,14 +67,15 @@ extension PackedMaterialData {
 					const float eta = getEta1(); // we're always going inside
                     const float spec_f0 = (eta - 1) * (eta - 1) / ((eta + 1) * (eta + 1));
                     const float3 spec_color = lerp(1, Ctint, getSpecularTint());
-                    const float3 Cspec0 = getSpecular() * spec_f0 * (1 - metallic) * spec_color + metallic * getBaseColor();
-					const float spec_weight = (1 - getTransmission() * (1 - metallic));
+                    const float3 Cspec0 = lerp(getSpecular() * spec_f0 * spec_color, getBaseColor(), metallic);
 
 					const float3 F    = schlick_fresnel(Cspec0, h_dot_out);
 					const float D     = GTR2(half_vector, alpha_x, alpha_y);
-					const float G_in  = smith_masking_gtr2(dir_in, alpha_x, alpha_y);
+					const float G_in  = smith_masking_gtr2(dir_in , alpha_x, alpha_y);
 					const float G_out = smith_masking_gtr2(dir_out, alpha_x, alpha_y);
 					const float G = G_in * G_out;
+
+					const float spec_weight = 1 - getTransmission() * (1 - metallic);
 					contrib += spec_weight * F * D * G / (4 * n_dot_in);
 				}
 
@@ -94,19 +94,24 @@ extension PackedMaterialData {
 				}
 			}
 
-			// Glass
-			// For glass, lights bounce at both sides of the surface.
-			{
+            // Glass
+            // For glass, lights bounce at both sides of the surface.
+            const float glass_w = (1 - metallic) * getTransmission();
+			if (glass_w > 0) {
 				const float eta = dir_in.z > 0 ? getEta1() : 1 / getEta1();
 				const float Fg    = fresnel_dielectric(h_dot_in, eta);
 				const float D     = GTR2(half_vector, alpha_x, alpha_y);
 				const float G_in  = smith_masking_gtr2(dir_in, alpha_x, alpha_y);
 				const float G_out = smith_masking_gtr2(dir_out, alpha_x, alpha_y);
 				const float G = G_in * G_out;
-				contrib += getBaseColor() * ((1 - metallic) * getTransmission() * (Fg * D * G) / (4 * abs(n_dot_in)));
+				contrib += getBaseColor() * (glass_w * (Fg * D * G) / (4 * abs(n_dot_in)));
 			}
 			return contrib;
-		} else {
+        } else {
+            const float glass_w = (1 - metallic) * getTransmission();
+            if (glass_w <= 0)
+                return 0;
+
 			// Only the glass component for refraction
 			const float eta = dir_in.z > 0 ? getEta1() : 1 / getEta1();
 			float3 half_vector = normalize(dir_in + dir_out * eta);
@@ -127,7 +132,7 @@ extension PackedMaterialData {
 			const float G = G_in * G_out;
 
 			// Burley propose to take the square root of the base color to preserve albedo
-			return sqrt(getBaseColor()) * ((1 - metallic) * getTransmission() *
+			return sqrt(getBaseColor()) * (glass_w *
 				(eta_factor * (1 - Fg) * D * G * eta * eta * abs(h_dot_out * h_dot_in)) /
 				(abs(dir_in.z) * sqrt_denom * sqrt_denom));
 		}
@@ -385,14 +390,37 @@ extension PackedMaterialData {
 
 	ReflectanceEvalRecord evaluateReflectance<let Adjoint : bool>(float3 dirIn, float3 dirOut) {
         ReflectanceEvalRecord r;
+		#ifdef gDebugFastBRDF
+		r.mReflectance = evaluateReflectanceFast<Adjoint>(dirIn, dirOut);
+		r.mFwdPdfW     = cosHemispherePdfW(abs(dirOut.z));
+		r.mRevPdfW     = cosHemispherePdfW(abs(dirIn.z));
+		#else
         r.mReflectance = eval<Adjoint>(dirIn, dirOut);
 		r.mFwdPdfW     = evalPdf(dirIn, dirOut);
 		r.mRevPdfW     = evalPdf(dirOut, dirIn);
-		return r;
-	}
+		#endif
+        return r;
+    }
+    float3 evaluateReflectanceFast<let Adjoint : bool>(const float3 dirIn, const float3 dirOut) {
+        // phong brdf
+
+        const float ks = 1 - getTransmission() * (1 - getMetallic());
+        const float kd = 1 - ks;
+
+        const float n = sqrt(2 / (getRoughness() + 2));
+        const float alpha = max(0, dot(dirOut, normalize(-dirIn + 2 * dot(dirIn, float3(0, 0, sign(dirIn.z))) * float3(0, 0, sign(dirIn.z)))));
+        return (kd / M_PI + ks * (n + 2) / (2 * M_PI) * pow(alpha, n)) * abs(dirOut.z);
+    }
 
     DirectionSampleRecord sampleDirection<let Adjoint : bool>(const float3 rnd, float3 dirIn) {
+		#ifdef gDebugFastBRDF
+		DirectionSampleRecord r;
+        r.mDirection = sampleCosHemisphere(rnd.x, rnd.y);
+        r.mEta = 0;
+        r.mRoughness = 1;
+		#else
         DirectionSampleRecord r = sample(dirIn, rnd);
+		#endif
         const ReflectanceEvalRecord f = evaluateReflectance<Adjoint>(dirIn, r.mDirection);
         r.mReflectance = f.mReflectance;
         r.mFwdPdfW = f.mFwdPdfW;

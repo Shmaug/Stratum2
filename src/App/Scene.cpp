@@ -347,19 +347,45 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 
 	// load input files
 
+	bool update = mAlwaysUpdate || mUpdateOnce;
+	bool loaded = false;
+	for (auto it = mLoading.begin(); it != mLoading.end();) {
+		if (it->wait_for(1us) != future_status::ready) {
+		 	it++;
+			continue;
+		}
+
+		mNode.addChild(it->get());
+
+		it = mLoading.erase(it);
+
+		loaded = true;
+		update = true;
+	}
+
 	if (auto w = mNode.root()->findDescendant<Window>()) {
 		for (const string& file : w->droppedFiles())
 			mToLoad.emplace_back(file);
 		w->droppedFiles().clear();
 	}
-
-	bool update = mAlwaysUpdate || mUpdateOnce;
-	bool loaded = false;
 	for (const string& file : mToLoad) {
 		const filesystem::path filepath = file;
-		mNode.addChild(load(commandBuffer, filepath));
+		//*
+		mNode.addChild( load(commandBuffer, filepath) );
 		loaded = true;
 		update = true;
+		/*/
+		Device& device = commandBuffer.mDevice;
+		mLoading.emplace_back( move(async(launch::async, [=,&device](){
+			const uint32_t family = device.findQueueFamily(vk::QueueFlagBits::eTransfer|vk::QueueFlagBits::eCompute);
+			shared_ptr<CommandBuffer> cb = make_shared<CommandBuffer>(device, "scene load", family);
+			(*cb)->begin(vk::CommandBufferBeginInfo{});
+			shared_ptr<Node> node = load(*cb, filepath);
+			(*cb)->end();
+			device.submit(device->getQueue(family, 0), cb);
+			return node;
+		})) );
+		//*/
 	}
 	mToLoad.clear();
 

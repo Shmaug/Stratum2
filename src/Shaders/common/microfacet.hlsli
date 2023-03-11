@@ -19,13 +19,13 @@
 /// See "Memo on Fresnel equations" from Sebastien Lagarde
 /// for a really nice introduction.
 /// https://seblagarde.wordpress.com/2013/04/29/memo-on-fresnel-equations/
-float3 schlick_fresnel(const float3 F0, float cos_theta) {
-    return F0 + (float(1) - F0) * pow(max(1 - cos_theta, float(0)), float(5));
+float3 schlick_fresnel(const float3 F0, const float cos_theta) {
+    return F0 + (1 - F0) * pow(max(1 - cos_theta, float(0)), float(5));
 }
-float schlick_fresnel(const float F0, float cos_theta) {
-    return F0 + (float(1) - F0) * pow(max(1 - cos_theta, float(0)), float(5));
+float schlick_fresnel(const float F0, const float cos_theta) {
+    return F0 + (1 - F0) * pow(max(1 - cos_theta, float(0)), float(5));
 }
-float3 schlick_fresnel(const float3 F0, float cos_theta, float eta) {
+float3 schlick_fresnel(const float3 F0, const float cos_theta, const float eta) {
     float h_dot_out_sq = 1 - (1 / (eta * eta)) * (1 - cos_theta * cos_theta);
     float3 F = 1;
     if (h_dot_out_sq > 0) {

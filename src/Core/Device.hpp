@@ -1,6 +1,7 @@
 #pragma once
 
 #include <unordered_set>
+#include <shared_mutex>
 
 #include <vk_mem_alloc.h>
 
@@ -90,7 +91,11 @@ private:
 	vk::raii::Device mDevice;
  	vk::raii::PhysicalDevice mPhysicalDevice;
 	vk::raii::PipelineCache mPipelineCache;
-	unordered_map<uint32_t, vk::raii::CommandPool> mCommandPools;
+
+	shared_mutex mCommandPoolMutex;
+	unordered_map<thread::id, unordered_map<uint32_t, vk::raii::CommandPool>> mCommandPools;
+
+	shared_mutex mDescriptorPoolMutex;
 	stack<shared_ptr<vk::raii::DescriptorPool>> mDescriptorPools;
 
 	VmaAllocator mAllocator;

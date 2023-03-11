@@ -10,6 +10,8 @@
 #include "Node.hpp"
 #include "Material.hpp"
 
+#include <future>
+
 namespace stm2 {
 
 TransformData nodeToWorld(const Node& node);
@@ -205,6 +207,7 @@ private:
 	ComputePipelineCache mConvertDiffuseSpecularPipeline;
 
 	vector<string> mToLoad;
+	vector<future<shared_ptr<Node>>> mLoading;
 
 	bool mAlwaysUpdate = false;
 	bool mUpdateOnce = false;

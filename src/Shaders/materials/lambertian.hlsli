@@ -20,8 +20,11 @@ extension PackedMaterialData {
 		r.mReflectance = getBaseColor() * abs(dirOut.z) / M_PI;
 		r.mFwdPdfW = cosHemispherePdfW(max(gCosEpsilon, abs(dirOut.z)));
 		r.mRevPdfW = cosHemispherePdfW(max(gCosEpsilon, abs(dirIn.z)));
-		return r;
-	}
+        return r;
+    }
+    float3 evaluateReflectanceFast<let Adjoint : bool>(const float3 dirIn, const float3 dirOut) {
+        return getBaseColor() * abs(dirOut.z) / M_PI;
+    }
 
     DirectionSampleRecord sampleDirection<let Adjoint : bool>(const float3 rnd, const float3 dirIn) {
         DirectionSampleRecord r;

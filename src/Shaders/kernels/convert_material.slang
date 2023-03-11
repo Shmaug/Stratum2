@@ -48,6 +48,8 @@ void from_gltf_pbr(uint3 index : SV_DispatchThreadId) {
 	const float4 metallic_roughness = gUseSpecular ? gSpecular[index.xy] : 1;
 
     PackedMaterialData m;
+    m.mPackedData = 0;
+    m.mEmissionScale = 0;
 
     m.setBaseColor(diffuse.rgb);
     m.setEmission(gUseEmission ? gEmission[index.xy] : 1);

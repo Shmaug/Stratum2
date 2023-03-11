@@ -139,9 +139,11 @@ Device::~Device() {
 }
 
 vk::raii::CommandPool& Device::commandPool(const uint32_t queueFamily) {
-	if (auto it = mCommandPools.find(queueFamily); it != mCommandPools.end())
+	scoped_lock l(mCommandPoolMutex);
+	auto& pools = mCommandPools[this_thread::get_id()];
+	if (auto it = pools.find(queueFamily); it != pools.end())
 		return it->second;
-	return mCommandPools.emplace(queueFamily, vk::raii::CommandPool(mDevice, vk::CommandPoolCreateInfo(vk::CommandPoolCreateFlagBits::eResetCommandBuffer, queueFamily))).first->second;
+	return pools.emplace(queueFamily, vk::raii::CommandPool(mDevice, vk::CommandPoolCreateInfo(vk::CommandPoolCreateFlagBits::eResetCommandBuffer, queueFamily))).first->second;
 }
 
 const shared_ptr<vk::raii::DescriptorPool>& Device::allocateDescriptorPool() {

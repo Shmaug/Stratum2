@@ -47,8 +47,11 @@ struct Medium {
 		r.mReflectance = v;
 		r.mFwdPdfW = v;
 		r.mRevPdfW = v;
-		return r;
-	}
+        return r;
+    }
+    float3 evaluateReflectanceFast<let Adjoint : bool>(const float3 localDirIn, const float3 localDirOut) {
+        return evaluateReflectance<Adjoint>(localDirIn, localDirOut).mReflectance;
+    }
     DirectionSampleRecord sampleDirection<let Adjoint : bool>(const float3 rnd, const float3 dirIn) {
         const float anisotropy2 = mAnisotropy * mAnisotropy;
 		DirectionSampleRecord r;

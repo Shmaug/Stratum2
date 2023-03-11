@@ -473,7 +473,7 @@ shared_ptr<ComputePipeline> ComputePipelineCache::getAsync(Device& device, const
 
 	// check if the pipeline is currently compiling
 	if (auto it = mCompileJobs.find(key); it != mCompileJobs.end()) {
-		if (it->second.wait_for(10us) == future_status::ready) {
+		if (it->second.wait_for(1us) == future_status::ready) {
 			// compile job completed
 			const shared_ptr<ComputePipeline> pipeline = it->second.get();
 			mCompileJobs.erase(it);

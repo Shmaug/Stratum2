@@ -43,8 +43,8 @@ struct PackedMaterialData {
 	float getTransmission()   { return BF_GET(mPackedData[3], 16, 8) / float(255); }
 	float getEta()            { return BF_GET(mPackedData[3], 24, 8) / float(255); }
 
-    float getSpecularTint() { return 0; }
-    float getSheenTint()    { return 0; }
+    float getSpecularTint() { return 0.5; }
+    float getSheenTint()    { return 0.5; }
 
 
     SLANG_MUTATING
