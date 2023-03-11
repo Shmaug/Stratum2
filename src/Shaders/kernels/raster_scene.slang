@@ -52,7 +52,7 @@ void fsmain(VSOut i, out float4 outputColor: SV_Target0, out uint2 visibility: S
     float alphaCutoff;
     gScene.getMaterialAlphaMask(gPushConstants.mMaterialAddress, alphaMask, alphaCutoff);
     if (alphaMask < gImageCount) {
-        if (gScene.mImage1s[alphaMask].Sample(gScene.mStaticSampler, i.uv) < alphaCutoff)
+        if (gScene.mImage1s[alphaMask].SampleLevel(gScene.mStaticSampler, i.uv, 0) < alphaCutoff)
             discard;
     }
 #endif

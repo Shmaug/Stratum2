@@ -30,7 +30,12 @@ extension SceneParameters {
             m.setEmission(m.getEmission()   * SampleImage4(imageIndices.y, uv, uvScreenSize).rgb);
         }
         if (imageIndices.z < gImageCount) {
-            m.mPackedData[2] = D3DX_FLOAT4_to_R8G8B8A8_UNORM(D3DX_R8G8B8A8_UNORM_to_FLOAT4(m.mPackedData[2]) * SampleImage4(imageIndices.z, uv, uvScreenSize));
+            float4 v = D3DX_R8G8B8A8_UNORM_to_FLOAT4(m.mPackedData[2]);
+            const float4 vi = SampleImage4(imageIndices.z, uv, uvScreenSize);
+            v.xzw *= vi.xzw;
+			// convert "roughness" to "smoothness" before modulation, so that materials can be made rougher
+            v.y = 1 - (1 - v.y) * (1 - vi.y);
+            m.mPackedData[2] = D3DX_FLOAT4_to_R8G8B8A8_UNORM(v);
         }
         if (imageIndices.w < gImageCount) {
             m.mPackedData[3] = D3DX_FLOAT4_to_R8G8B8A8_UNORM(D3DX_R8G8B8A8_UNORM_to_FLOAT4(m.mPackedData[3]) * SampleImage4(imageIndices.w, uv, uvScreenSize));

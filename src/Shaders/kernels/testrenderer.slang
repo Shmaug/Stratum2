@@ -492,8 +492,7 @@ IlluminationSampleRecord SampleIlluminationReSTIR(const Interaction bsdf, const 
         const IlluminationSampleRecord r = gScene.SampleIllumination(si, shadingData.mPosition);
 
         const float3 localDirOut = (gHasMedia && shadingData.isMedium()) ? 1 : shadingData.toLocal(r.mDirectionToLight);
-        const float targetPdf = luminance(bsdf.evaluateReflectanceFast<false>(localDirIn, localDirOut) * r.mRadiance) *
-			(abs((gHasMedia && shadingData.isMedium()) ? 1 : localDirOut.z) * r.mCosLight) / pow2(r.mDistanceToLight);
+        const float targetPdf = luminance(bsdf.evaluateReflectance<false>(localDirIn, localDirOut).mReflectance * r.mRadiance) * r.mCosLight / pow2(r.mDistanceToLight);
         if (targetPdf <= 0 || r.mPdf <= 0)
             continue;
 
@@ -775,15 +774,22 @@ bool NextVertex<let bFromLight : bool>() {
 void InitializeCameraPath(const uint2 index) {
     const uint viewIndex = getViewIndex(index, gPushConstants.mOutputExtent, gPushConstants.mViewCount);
 
-	float2 uv;
-	const float3 localDir = gRenderParams.mViews[viewIndex].toWorld(index + 0.5, /*out*/ uv);
+    sPathState.mRng = RandomSampler(gPushConstants.mRandomSeed, index);
+
+	#ifdef gPixelJitter
+    const float2 offset = sPathState.mRng.nextFloat().xy;
+	#else
+    const float2 offset = 0.5;
+	#endif
+
+    float2 uv;
+    const float3 localDir = gRenderParams.mViews[viewIndex].toWorld(index + offset, /*out*/ uv);
 	const TransformData t = gRenderParams.mViewTransforms[viewIndex];
 
     sPathState.mRayOrigin = float3(t.m[0][3], t.m[1][3], t.m[2][3]);
     sPathState.mCurrentMedium = gRenderParams.mViewMediumIndices[viewIndex];
     sPathState.mPathLength = 0;
     sPathState.mThroughput = 1;
-    sPathState.mRng = RandomSampler(gPushConstants.mRandomSeed, index);
     sPathState.mPackedRayDirection = packNormal2(normalize(t.transformVector(localDir)));
 
 	#ifdef gUseVC

@@ -69,10 +69,10 @@ extension SceneParameters {
 		RayQuery<RAY_FLAG_NONE> rayQuery;
 		rayQuery.TraceRayInline(mAccelerationStructure, closest ? RAY_FLAG_NONE : RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, ~0, ray);
 		while (rayQuery.Proceed()) {
-			const uint mInstanceIndex = rayQuery.CandidateInstanceID();
+			const uint instanceIndex = rayQuery.CandidateInstanceID();
 			switch (rayQuery.CandidateType()) {
 				case CANDIDATE_PROCEDURAL_PRIMITIVE: {
-					const InstanceData instance = mInstances[mInstanceIndex];
+					const InstanceData instance = mInstances[instanceIndex];
 					switch (instance.getType()) {
 						case InstanceType::eSphere: {
 							const float2 st = raySphere(rayQuery.CandidateObjectRayOrigin(), rayQuery.CandidateObjectRayDirection(), 0, reinterpret<SphereInstanceData>(instance).radius());
@@ -109,7 +109,7 @@ extension SceneParameters {
 								float3 localNormal = float3(t1 == t) - float3(t0 == t);
 								if (volumeIndex != -1)
 									localNormal = pnanovdb_grid_index_to_world_dirf(mVolumes[NonUniformResourceIndex(volumeIndex)], {0}, localNormal);
-								const float3 normal = normalize(mInstanceTransforms[mInstanceIndex].transformVector(localNormal));
+								const float3 normal = normalize(mInstanceTransforms[instanceIndex].transformVector(localNormal));
 								isect.mShadingData.mPackedGeometryNormal = isect.mShadingData.mPackedShadingNormal = packNormal(normal);
 								rayQuery.CommitProceduralPrimitiveHit(t);
 							}
@@ -123,25 +123,20 @@ extension SceneParameters {
 						break;
 					}
 
-                    const MeshInstanceData instance = reinterpret<MeshInstanceData>(mInstances[mInstanceIndex]);
+                    const MeshInstanceData instance = reinterpret<MeshInstanceData>(mInstances[instanceIndex]);
 
                     uint alphaMask;
                     float alphaCutoff;
-					getMaterialAlphaMask(instance.getMaterialAddress(), alphaMask, alphaCutoff);
-					if (alphaMask >= gImageCount)
+                    getMaterialAlphaMask(instance.getMaterialAddress(), alphaMask, alphaCutoff);
+                    if (alphaMask >= gImageCount) {
+						rayQuery.CommitNonOpaqueTriangleHit();
                         break;
+                    }
 
-					const MeshVertexInfo vertexInfo = mMeshVertexInfo[instance.vertexInfoIndex()];
-                    if (vertexInfo.texcoordBuffer() >= gVertexBufferCount)
-                        break;
+                    TransformData tmp;
+                    const ShadingData sd = makeTriangleShadingData(instance, tmp, rayQuery.CandidatePrimitiveIndex(), rayQuery.CandidateTriangleBarycentrics());
 
-                    const uint3 tri = LoadTriangleIndices(mVertexBuffers[NonUniformResourceIndex(vertexInfo.indexBuffer())], vertexInfo.indexStride(), vertexInfo.indexStride(), rayQuery.CandidatePrimitiveIndex());
-					float2 v0,v1,v2;
-					LoadTriangleAttribute(mVertexBuffers[NonUniformResourceIndex(vertexInfo.texcoordBuffer())], vertexInfo.texcoordOffset(), vertexInfo.texcoordStride(), tri, v0, v1, v2);
-
-					const float2 barycentrics = rayQuery.CandidateTriangleBarycentrics();
-                    const float2 uv = v0 + (v1 - v0) * barycentrics.x + (v2 - v0) * barycentrics.y;
-                    if (mImage1s[NonUniformResourceIndex(alphaMask)].SampleLevel(mStaticSampler, uv, 0) >= alphaCutoff)
+                    if (mImage1s[NonUniformResourceIndex(alphaMask)].SampleLevel(mStaticSampler, sd.mTexcoord, 0) >= alphaCutoff)
 						rayQuery.CommitNonOpaqueTriangleHit();
 					break;
 				}
@@ -162,7 +157,7 @@ extension SceneParameters {
 			}
 			case COMMITTED_TRIANGLE_HIT: {
 				isect.mDistance = rayQuery.CommittedRayT();
-				isect.mInstanceIndex = rayQuery.CommittedInstanceID();
+				isect.mInstanceIndex  = rayQuery.CommittedInstanceID();
 				isect.mPrimitiveIndex = rayQuery.CommittedPrimitiveIndex();
 
                 MeshInstanceData meshInstance = reinterpret<MeshInstanceData>(isect.getInstance());

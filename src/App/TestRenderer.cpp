@@ -20,8 +20,9 @@ TestRenderer::TestRenderer(Node& node) : mNode(node) {
 		{ "gAlphaTest", true },
 		{ "gNormalMaps", true },
 		{ "gShadingNormals", true },
+		{ "gPixelJitter", false },
 		{ "gLambertian", false },
-		{ "gDebugFastBRDF", true },
+		{ "gDebugFastBRDF", false },
 		{ "gDebugPaths", false },
 		{ "gDebugPathWeights", false },
 		{ "gMultiDispatch", true },
@@ -122,6 +123,7 @@ void TestRenderer::drawGui() {
 
 	if (ImGui::CollapsingHeader("Configuration")) {
 		if (mDefines.at("gDebugPaths")) {
+			ImGui::SetNextItemWidth(40);
 			if (ImGui::DragScalarN("Length, light vertices", ImGuiDataType_U16, &mPushConstants["mDebugPathLengths"].get<uint32_t>(), 2, .2f)) changed = true;
 		}
 		if (ImGui::Checkbox("Random frame seed", &mRandomPerFrame)) changed = true;
@@ -339,8 +341,9 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 		sphere.head<3>() = (sceneData.mAabbMax + sceneData.mAabbMin) / 2;
 		sphere[3] = length<float,3>(sceneData.mAabbMax - sphere.head<3>());
 		mPushConstants["mSceneSphere"] = sphere;
+
 		if (mRandomPerFrame)
-			mPushConstants["mRandomSeed"] = (uint32_t)rand();
+			mPushConstants["mRandomSeed"] = (mDenoise && denoiser) ? denoiser->accumulatedFrames() : (uint32_t)rand();
 		else
 			mPushConstants["mRandomSeed"] = 0u;
 	}

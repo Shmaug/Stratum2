@@ -229,12 +229,12 @@ Material Scene::makeMetallicRoughnessMaterial(CommandBuffer& commandBuffer, cons
 		}
 		descriptors[{ "gOutputAlphaMask", 0 }] = ImageDescriptor{ m.mAlphaMask ? m.mAlphaMask : d, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 
-		m.mMinAlpha = make_shared<Buffer>(commandBuffer.mDevice, "mMinAlpha", sizeof(uint32_t), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
-		m.mMinAlpha[0] = 255;
-		descriptors[{ "gOutputMinAlpha", 0 }] = m.mMinAlpha;
-		m.mMinAlpha.barrier(commandBuffer,
-			vk::PipelineStageFlagBits::eHost, vk::PipelineStageFlagBits::eComputeShader,
-			vk::AccessFlagBits::eHostWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
+		Buffer::View<uint32_t> minAlphaGpu = make_shared<Buffer>(commandBuffer.mDevice, "mMinAlpha", sizeof(uint32_t), vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eTransferSrc);
+		minAlphaGpu.fill(commandBuffer, 255);
+		minAlphaGpu.barrier(commandBuffer,
+			vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
+			vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
+		descriptors[{ "gOutputMinAlpha", 0 }] = minAlphaGpu;
 
 		descriptors[{ "gDiffuse", 0 }]       = ImageDescriptor{ baseColor.mImage          ? baseColor.mImage          : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
 		descriptors[{ "gSpecular", 0 }]      = ImageDescriptor{ metallic_roughness.mImage ? metallic_roughness.mImage : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
@@ -251,6 +251,14 @@ Material Scene::makeMetallicRoughnessMaterial(CommandBuffer& commandBuffer, cons
 
 		for (const Image::View& img : m.mImages)
 			img.image()->generateMipMaps(commandBuffer);
+
+		if (m.mAlphaMask) {
+			m.mMinAlpha = make_shared<Buffer>(commandBuffer.mDevice, "mMinAlpha", sizeof(uint32_t), vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+			minAlphaGpu.barrier(commandBuffer,
+				vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eTransfer,
+				vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead);
+			Buffer::copy(commandBuffer, minAlphaGpu, m.mMinAlpha);
+		}
 	}
 	return m;
 }
@@ -1133,7 +1141,7 @@ void Material::drawGui(Node& node) {
 			ImGui::Image(Gui::getTextureID(image), ImVec2(w, w * image.extent().height / (float)image.extent().width));
 		}
 	if (mAlphaMask) {
-		ImGui::Text("%s", mAlphaMask.image()->resourceName().c_str());
+		ImGui::Text("%s (Min alpha: %u)", mAlphaMask.image()->resourceName().c_str(), mMinAlpha ? mMinAlpha[0] : 255u);
 		ImGui::Image(Gui::getTextureID(mAlphaMask), ImVec2(w, w * mAlphaMask.extent().height / (float)mAlphaMask.extent().width));
 	}
 	if (mBumpImage) {
