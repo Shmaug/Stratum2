@@ -389,8 +389,8 @@ void VCM::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) 
 	auto makeHashGrid = [&]<typename T>(const string& name, const uint32_t size, const uint cellCount) {
 		struct HashGridConstants {
 			uint mCellCount;
-			uint mCellPixelRadius;
-			uint mMinCellSize;
+			float mCellPixelRadius;
+			float mMinCellSize;
 			uint pad;
 			float3 mCameraPosition;
 			float mDistanceScale;

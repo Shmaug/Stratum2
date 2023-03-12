@@ -1,27 +1,46 @@
-#include "compat/path_tracer.h"
-struct PushConstants {
-    uint mLightSubPathCount;
-    uint mHashGridCellCount;
-    uint mSegmentIndex;
-    float mLineRadius;
-    float mLineLength;
-};
-[[vk::push_constant]] ConstantBuffer<PushConstants> gPushConstants;
+#include "compat/scene.h"
+#include "common/shading_data.hlsli"
 
-#include "common/hashgrid.hlsli"
-#include "common/scene.hlsli"
+struct PackedLightVertex {
+    float3 mLocalPosition;
+    uint mInstancePrimitiveIndex;
+    float3 mThroughput;
+    uint mPackedLocalDirIn;
+    uint mPathLength;
+    float dVC;
+    float dVCM;
+    float pad;
+
+    uint getInstanceIndex() { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
+    uint getPrimitiveIndex() { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
+    float3 getLocalDirIn() { return unpackNormal(mPackedLocalDirIn); }
+    ShadingData getShadingData() {
+        const uint instanceIndex = getInstanceIndex();
+        ShadingData sd = gScene.makeShadingData(gScene.mInstances[instanceIndex], gScene.mInstanceTransforms[instanceIndex], mLocalPosition, getPrimitiveIndex());
+        sd.mTexcoordScreenSize = 0;
+        return sd;
+    }
+};
 
 struct Params {
 	StructuredBuffer<ViewData> mViews;
-	StructuredBuffer<TransformData> mViewTransforms;
-	StructuredBuffer<TransformData> mViewInverseTransforms;
+    StructuredBuffer<TransformData> mViewInverseTransforms;
 
-	RWStructuredBuffer<VcmVertex> mLightVertices;
-	RWStructuredBuffer<uint> mLightPathLengths;
+    RWStructuredBuffer<PackedLightVertex> mLightVertices;
+
+    RWStructuredBuffer<uint> mCounters; // 0 -> light vertices, 1 -> shadow rays
     Texture2D<float4> mDepth;
 };
 
 ParameterBlock<Params> gParams;
+
+struct PushConstants {
+    uint mDepth;
+    float mVertexPercent;
+    float mLineRadius;
+    float mLineLength;
+};
+[[vk::push_constant]] ConstantBuffer<PushConstants> gPushConstants;
 
 struct VSOut {
     float4 position : SV_Position;
@@ -30,7 +49,7 @@ struct VSOut {
 };
 
 [shader("vertex")]
-VSOut LightVertexVS(float3 p: POSITION, uint instanceID: SV_InstanceID, uint vertexID: SV_VertexID) {
+VSOut LightVertexVS(float3 p: POSITION, uint vertexID: SV_VertexID) {
 	static const float2 gStripVertices[6] = {
 		float2(0, 0),
 		float2(1, 1),
@@ -38,37 +57,43 @@ VSOut LightVertexVS(float3 p: POSITION, uint instanceID: SV_InstanceID, uint ver
 
 		float2(0, 1),
 		float2(1, 1),
-		float2(0, 0) };
+		float2(0, 0)
+	};
 
     VSOut o;
 
-	const uint lightPathIndex = instanceID;
-    const uint count = gParams.mLightPathLengths[lightPathIndex];
     const uint segmentIndex = vertexID / 6;
 
-    if (segmentIndex >= count || (gPushConstants.mSegmentIndex != -1 && segmentIndex != gPushConstants.mSegmentIndex)) {
+    if (segmentIndex >= uint(gPushConstants.mVertexPercent * gParams.mCounters[1])) {
         o.position = float4(0,0,0,0);
         o.color = 0;
         o.camPos = 0;
         return o;
     }
 
-    const float2 p = gStripVertices[vertexID % 6];
+    const PackedLightVertex lightVertex = gParams.mLightVertices[segmentIndex];
 
-	const VcmVertex lightVertex  = gParams.mLightVertices[segmentIndex * gPushConstants.mLightSubPathCount + lightPathIndex];
-    const float3 cameraPos  = gParams.mViewInverseTransforms[0].transformPoint(lightVertex.mShadingData.mPosition);
+    if (gPushConstants.mDepth != -1 && lightVertex.mPathLength != gPushConstants.mDepth) {
+        o.position = float4(0, 0, 0, 0);
+        o.color = 0;
+        o.camPos = 0;
+        return o;
+	}
+
+    const ShadingData sd = lightVertex.getShadingData();
+
+    const float3 cameraPos = gParams.mViewInverseTransforms[0].transformPoint(sd.mPosition);
 
     o.color = lightVertex.mThroughput / luminance(lightVertex.mThroughput);
 
-    const float3 dir = gParams.mViewInverseTransforms[0].transformVector(lightVertex.mShadingData.toWorld(unpackNormal(lightVertex.mLocalDirectionIn)));
+    const float3 dir = gParams.mViewInverseTransforms[0].transformVector(sd.toWorld(lightVertex.getLocalDirIn()));
     float3 up = cross(dir, float3(0,0,1));
     up.z = 0;
-
-    const float d = length(cameraPos);
-
+    const float d = 1;//length(cameraPos);///gParams.mViews[0].imagePlaneDist();
+    const float2 p = gStripVertices[vertexID % 6];
     o.camPos = cameraPos + normalize(dir) * gPushConstants.mLineLength * d * p.x + normalize(up) * gPushConstants.mLineRadius * d * (p.y * 2 - 1);
 
-    o.position = gParams.mViews[0].mProjection.projectPoint(o.camPos);
+	o.position = gParams.mViews[0].mProjection.projectPoint(o.camPos);
     o.position.y = -o.position.y;
     return o;
 }

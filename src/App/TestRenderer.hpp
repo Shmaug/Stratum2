@@ -22,8 +22,10 @@ public:
 
 private:
 	shared_ptr<vk::raii::Sampler> mStaticSampler;
+	GraphicsPipelineCache mRasterLightPathPipeline;
 	unordered_map<string, ComputePipelineCache> mPipelines;
 	PushConstants mPushConstants;
+	PushConstants mRasterPushConstants;
 
 	uint32_t mHashGridCellCount = 100000;
 	float mHashGridCellSize = 0.1f;
@@ -33,11 +35,15 @@ private:
 
 	unordered_map<string, bool> mDefines;
 
+	optional<Descriptors> mPrevHashGrid;
+
 
 	bool mRandomPerFrame = true;
 
 	bool mDenoise = true;
 	bool mTonemap = true;
+
+	bool mVisualizeLightPaths = false;
 
 	chrono::high_resolution_clock::time_point mLastSceneVersion;
 

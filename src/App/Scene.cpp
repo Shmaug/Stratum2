@@ -29,7 +29,7 @@ tuple<shared_ptr<vk::raii::AccelerationStructureKHR>, Buffer::View<byte>> buildA
 
 	Buffer::View<byte> buffer = make_shared<Buffer>(
 		commandBuffer.mDevice,
-		name,
+		name + "/Buffer",
 		buildSizes.accelerationStructureSize,
 		vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress);
 
@@ -40,6 +40,7 @@ tuple<shared_ptr<vk::raii::AccelerationStructureKHR>, Buffer::View<byte>> buildA
 		vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eStorageBuffer);
 
 	shared_ptr<vk::raii::AccelerationStructureKHR> accelerationStructure = make_shared<vk::raii::AccelerationStructureKHR>(*commandBuffer.mDevice, vk::AccelerationStructureCreateInfoKHR({}, **buffer.buffer(), buffer.offset(), buffer.sizeBytes(), type));
+	commandBuffer.mDevice.setDebugName(**accelerationStructure, name);
 
 	buildGeometry.dstAccelerationStructure = **accelerationStructure;
 	buildGeometry.scratchData = scratchData.deviceAddress();

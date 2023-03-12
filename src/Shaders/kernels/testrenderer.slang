@@ -15,7 +15,9 @@ struct PushConstants {
 
 	float4 mSceneSphere;
 
+    float mMaxM;
     uint mCandidateSamples;
+    uint mPrevHashGridValid;
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> gPushConstants;
 
@@ -62,7 +64,7 @@ struct PathState {
     float3 mRayOrigin;
     uint mPackedCurrentMedium;
     float3 mThroughput;
-	uint pad;
+	uint mInstancePrimitiveIndex;
     RandomSampler mRng;
     float2 mPackedRayDirection;
     uint2 mPacked;
@@ -104,8 +106,10 @@ struct PathState {
 	}
 
     float3 getRayDirection() {
-		return unpackNormal2(mPackedRayDirection);
-	}
+        return unpackNormal2(mPackedRayDirection);
+    }
+    uint getInstanceIndex()  { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
+    uint getPrimitiveIndex() { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
 };
 
 struct ShadowRay {
@@ -123,6 +127,28 @@ struct ShadowRay {
     uint2 getPixelCoord() {
         return uint2(mPixelIndex % gPushConstants.mOutputExtent.x, mPixelIndex / gPushConstants.mOutputExtent.x);
     }
+};
+
+struct HashGridData {
+    float3 mLocalPosition;
+    uint mInstancePrimitiveIndex;
+
+    float4 mDI_Sample;
+
+    float mDI_CachedTargetPdf;
+    float mDI_W;
+    float mDI_M;
+    uint mPackedLocalDirIn;
+
+    uint getInstanceIndex()  { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
+    uint getPrimitiveIndex() { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
+    float3 getLocalDirIn() { return unpackNormal(mPackedLocalDirIn); }
+    ShadingData getShadingData() {
+        const uint instanceIndex = getInstanceIndex();
+        ShadingData sd = gScene.makeShadingData(gScene.mInstances[instanceIndex], gScene.mInstanceTransforms[instanceIndex], mLocalPosition, getPrimitiveIndex());
+        sd.mTexcoordScreenSize = 0;
+        return sd;
+	}
 };
 
 #define gQuantizationFactor 16384
@@ -146,6 +172,9 @@ struct RenderParams {
     RWStructuredBuffer<uint> mCounters; // 0 -> light vertices, 1 -> shadow rays
 
     RWStructuredBuffer<uint4> mOutputAtomic;
+
+    HashGrid<HashGridData> mHashGrid;
+    HashGrid<HashGridData> mPrevHashGrid;
 
 	void StoreAuxillaryData(const uint2 index, const IntersectionResult isect, const float3 albedo) {
 		float2 prevPixelCoord = index + 0.5;
@@ -283,10 +312,10 @@ float AdjustIntersectionDistance(const float d) {
 }
 
 
-void StoreLightVertex(const IntersectionResult isect, const float3 localDirIn) {
+void StoreLightVertex(const ShadingData shadingData, const float3 localDirIn) {
     PackedLightVertex v;
-	v.mLocalPosition = gScene.mInstanceInverseTransforms[isect.mInstanceIndex].transformPoint(isect.mShadingData.mPosition);
-	v.mInstancePrimitiveIndex = isect.mInstancePrimitiveIndex;
+	v.mLocalPosition = gScene.mInstanceInverseTransforms[sPathState.getInstanceIndex()].transformPoint(shadingData.mPosition);
+	v.mInstancePrimitiveIndex = sPathState.mInstancePrimitiveIndex;
 	v.mThroughput = sPathState.mThroughput;
 	v.mPackedLocalDirIn = packNormal(localDirIn);
     v.mPathLength = sPathState.mPathLength;
@@ -483,68 +512,8 @@ void ConnectToCamera(const Interaction bsdf, const ShadingData shadingData, cons
     #endif
 }
 
-IlluminationSampleRecord SampleIlluminationReSTIR(const Interaction bsdf, const ShadingData shadingData, const float3 localDirIn, const uint M, out float integrationWeight) {
-    float wsum = 0;
-    float cachedTargetPdf;
-    float4 sample;
-    for (uint i = 0; i < M; i++) {
-        const float4 si = sPathState.mRng.nextFloat();
-        const IlluminationSampleRecord r = gScene.SampleIllumination(si, shadingData.mPosition);
 
-        const float3 localDirOut = (gHasMedia && shadingData.isMedium()) ? 1 : shadingData.toLocal(r.mDirectionToLight);
-        const float targetPdf = luminance(bsdf.evaluateReflectance<false>(localDirIn, localDirOut).mReflectance * r.mRadiance) * r.mCosLight / pow2(r.mDistanceToLight);
-        if (targetPdf <= 0 || r.mPdf <= 0)
-            continue;
-
-        const float wi = targetPdf / (M * r.mPdf);
-        wsum += wi;
-        if (sPathState.mRng.nextFloat().x <= wi / wsum) {
-            sample = si;
-            cachedTargetPdf = targetPdf;
-		}
-    }
-
-    integrationWeight = wsum / cachedTargetPdf;
-
-    return gScene.SampleIllumination(sample, shadingData.mPosition);
-}
-
-void ConnectToLight(const Interaction bsdf, const ShadingData shadingData, const float3 localDirIn) {
-    float integrationWeight;
-	#ifdef gReSTIR_DI
-		const IlluminationSampleRecord r = SampleIlluminationReSTIR(bsdf, shadingData, localDirIn, gPushConstants.mCandidateSamples, integrationWeight);
-	#else
-		const IlluminationSampleRecord r = gScene.SampleIllumination(sPathState.mRng.nextFloat(), shadingData.mPosition);
-	#endif
-	if (all(r.mRadiance <= 0) || r.mPdf <= 0)
-		return;
-
-	float AtoW = 1;
-	if (r.isFinite)
-		AtoW = pow2(r.mDistanceToLight) / r.mCosLight;
-    const float directPdfW = r.mPdf * AtoW;
-
-	#ifdef gReSTIR_DI
-		integrationWeight /= AtoW;
-	#else
-		integrationWeight = 1 / directPdfW;
-	#endif
-
-    const bool isMedium = gHasMedia && shadingData.isMedium();
-
-    const float3 localDirOut = isMedium ? r.mDirectionToLight : shadingData.toLocal(r.mDirectionToLight);
-
-    ReflectanceEvalRecord f = bsdf.evaluateReflectance<false>(localDirIn, localDirOut);
-    if (!isMedium)
-        f.mReflectance *= shadingData.shadingNormalCorrection<false>(localDirIn, localDirOut);
-	const float contProb = bsdf.continuationProb();
-	f.mFwdPdfW *= contProb;
-	f.mRevPdfW *= contProb;
-
-    const float3 contrib = (sPathState.mThroughput * r.mRadiance * f.mReflectance) * integrationWeight;
-
-	// compute mis weight
-
+float ComputeMIS_DI(const IlluminationSampleRecord r, const ReflectanceEvalRecord f, const float directPdfW, const float cosOut, const float AtoW) {
     #ifdef gUseVC
 		const float emissionPdfW = r.mPdf * cosHemispherePdfW(r.mCosLight);
 
@@ -570,16 +539,204 @@ void ConnectToLight(const Interaction bsdf, const ShadingData shadingData, const
         //
         // Also note that both emissionPdfW and directPdfW should be
         // multiplied by lightPickProb, so it cancels out.
-        const float wCamera = mis(emissionPdfW * abs(isMedium ? 1 : localDirOut.z) / (directPdfW * r.mCosLight)) * (
+        const float wCamera = mis(emissionPdfW * cosOut / (directPdfW * r.mCosLight)) * (
 			gMisVmWeightFactor + sPathState.dVCM + sPathState.dVC * mis(f.mRevPdfW));
 
-        const float misWeight = 1 / (wLight + 1 + wCamera);
+        return 1 / (wLight + 1 + wCamera);
 	#elif defined(gSampleDirectIlluminationOnly)
-		const float misWeight = 1;
+		return 1;
 	#else
 		// mis with BSDF sampling
-        const float misWeight = mis(r.mPdf, f.mFwdPdfW / AtoW);
+        return mis(r.mPdf, f.mFwdPdfW / AtoW);
 	#endif
+}
+
+struct ReservoirSampleData {
+    float4 mSample;
+	float mSourcePdf;
+    float mCachedMisWeight;
+    float mCachedWtoA;
+    float3 mCachedContribution; // f * Le
+    RayDesc mVisibilityRay;
+
+    property float mTargetPdf { get { return luminance(mCachedContribution) * mCachedWtoA; } }
+    property float mRISWeight { get { return mTargetPdf / mSourcePdf; } }
+
+    __init(const Interaction bsdf, const ShadingData shadingData, const float3 localDirIn, const float4 x) {
+       mSample = x;
+       mCachedContribution = 0;
+       mCachedWtoA = 0;
+       const IlluminationSampleRecord r = gScene.SampleIllumination(mSample, shadingData.mPosition);
+	   mSourcePdf = r.mPdf;
+       if (luminance(r.mRadiance) > 0 && r.mPdf > 0) {
+			const bool isMedium = gHasMedia && shadingData.isMedium();
+
+			const float3 localDirOut = isMedium ? r.mDirectionToLight : shadingData.toLocal(r.mDirectionToLight);
+
+			ReflectanceEvalRecord f = bsdf.evaluateReflectance<false>(localDirIn, localDirOut);
+			if (!isMedium)
+						f.mReflectance *= shadingData.shadingNormalCorrection<false>(localDirIn, localDirOut);
+			const float contProb = bsdf.continuationProb();
+			f.mFwdPdfW *= contProb;
+			f.mRevPdfW *= contProb;
+
+			mCachedContribution = f.mReflectance * r.mRadiance;
+			mCachedWtoA = r.isFinite ? r.mCosLight / pow2(r.mDistanceToLight) : 1;
+
+			const float AtoW = r.isFinite ? pow2(r.mDistanceToLight) / r.mCosLight : 1;
+			mCachedMisWeight = ComputeMIS_DI(r, f, mSourcePdf * AtoW, isMedium ? 1 : abs(localDirOut.z), AtoW);
+
+			const float3 rayOrigin = isMedium ?
+			shadingData.mPosition :
+			rayOffset(shadingData.mPosition, shadingData.getGeometryNormal(), r.mDirectionToLight);
+			mVisibilityRay = makeRay(rayOrigin, r.mDirectionToLight, 0, AdjustIntersectionDistance(r.mDistanceToLight));
+       }
+    }
+};
+
+void ReservoirReuseDI(const Interaction bsdf, const ShadingData shadingData, const float3 localDirIn, const HashGridData q, inout ReservoirSampleData currentSample, inout float integrationWeight) {
+	if (q.mDI_M <= 0)
+		return;
+
+	// target pdfs
+
+    // currentSample in q's domain
+    ReservoirSampleData currentSample_q;
+    {
+		ShadingData sd_i = q.getShadingData();
+		if (gHasMedia && sd_i.isMedium()) {
+			currentSample_q = ReservoirSampleData(Medium(shadingData.getMaterialAddress()), sd_i, q.getLocalDirIn(), currentSample.mSample);
+		} else {
+			gScene.ApplyNormalMap(sd_i);
+			currentSample_q = ReservoirSampleData(gScene.LoadMaterial(sd_i), sd_i, q.getLocalDirIn(), currentSample.mSample);
+		}
+    }
+
+	// resampling MIS weights
+
+    const float M = gPushConstants.mCandidateSamples;
+    const float m0 = mis(currentSample.mTargetPdf * M, currentSample_q.mTargetPdf * q.mDI_M);
+
+    // q's sample in the current domain
+    const ReservoirSampleData newSample = ReservoirSampleData(bsdf, shadingData, localDirIn, q.mDI_Sample);
+    const float m1 = mis(q.mDI_CachedTargetPdf * q.mDI_M, newSample.mTargetPdf * M);
+
+	// RIS weights
+
+	const float shiftJacobian = 1;
+
+    const float w0 = m0 * currentSample.mTargetPdf * integrationWeight;
+    const float w1 = m1 * newSample.mTargetPdf * q.mDI_W * shiftJacobian;
+
+	// create new reservoir from current and new reservoirs
+
+	const float totalWeight = w0 + w1;
+    if (sPathState.mRng.nextFloat().x * totalWeight <= w1) {
+        currentSample = newSample;
+	}
+
+    integrationWeight = totalWeight / currentSample.mTargetPdf;
+}
+
+ReservoirSampleData SampleIlluminationReSTIR(const Interaction bsdf, const ShadingData shadingData, const float3 localDirIn, out float integrationWeight) {
+	ReservoirSampleData sample;
+	float wsum = 0;
+
+	// initial ris
+
+    for (uint i = 0; i < gPushConstants.mCandidateSamples; i++) {
+        const ReservoirSampleData xi = ReservoirSampleData(bsdf, shadingData, localDirIn, sPathState.mRng.nextFloat());
+        if (xi.mTargetPdf <= 0)
+            continue;
+
+        wsum += xi.mRISWeight;
+        if (sPathState.mRng.nextFloat().x <= xi.mRISWeight / wsum)
+            sample = xi;
+    }
+
+    integrationWeight = wsum / (gPushConstants.mCandidateSamples * sample.mTargetPdf);
+
+	// reuse
+
+	#ifdef gReSTIR_DI_Reuse
+
+	// TODO: trace visibility ray, zero integrationWeight if occluded
+
+    float Mq = 0;
+    if (gPushConstants.mPrevHashGridValid) {
+		const float3 queryPos = shadingData.mPosition;
+        const float cellSize = gRenderParams.mPrevHashGrid.GetCellSize(queryPos);
+        const uint cellIndex = gRenderParams.mPrevHashGrid.FindCellIndex<false>(queryPos, cellSize);
+        if (cellIndex != -1) {
+			const uint2 range = gRenderParams.mPrevHashGrid.GetCellDataRange(cellIndex);
+            if (range.y > range.x) {
+                const HashGridData q = gRenderParams.mPrevHashGrid.mData[range.x + sPathState.mRng.next().x % (range.y - range.x)];
+                Mq = q.mDI_M;
+                ReservoirReuseDI(bsdf, shadingData, localDirIn, q, sample, integrationWeight);
+            }
+        }
+	}
+
+	// store for reuse
+    if (integrationWeight > 0) {
+        HashGridData d;
+        d.mLocalPosition = gScene.mInstanceInverseTransforms[sPathState.getInstanceIndex()].transformPoint(shadingData.mPosition);
+        d.mInstancePrimitiveIndex = sPathState.mInstancePrimitiveIndex;
+        d.mDI_Sample = sample.mSample;
+        d.mDI_CachedTargetPdf = sample.mTargetPdf;
+        d.mDI_W = integrationWeight;
+        d.mDI_M = min(gPushConstants.mMaxM * gPushConstants.mCandidateSamples, gPushConstants.mCandidateSamples + Mq);
+        gRenderParams.mHashGrid.Append(shadingData.mPosition, d, gRenderParams.mHashGrid.GetCellSize(shadingData.mPosition));
+	}
+	#endif
+
+    return sample;
+}
+
+#ifdef gReSTIR_DI
+
+void ConnectToLight(const Interaction bsdf, const ShadingData shadingData, const float3 localDirIn) {
+    float integrationWeight;
+    const ReservoirSampleData r = SampleIlluminationReSTIR(bsdf, shadingData, localDirIn, integrationWeight);
+
+    if (integrationWeight <= 0)
+		return;
+
+	// convert 1/pdfA to 1/pdfW
+	integrationWeight *= r.mCachedWtoA;
+
+    const float3 contrib = (sPathState.mThroughput * r.mCachedContribution) * integrationWeight;
+
+    TraceConnectionRay(r.mVisibilityRay.Origin, r.mVisibilityRay.Direction, r.mVisibilityRay.TMax, contrib, r.mCachedMisWeight, sPathState.mPathLength + 1, 1);
+}
+
+#else
+
+void ConnectToLight(const Interaction bsdf, const ShadingData shadingData, const float3 localDirIn) {
+	const IlluminationSampleRecord r = gScene.SampleIllumination(sPathState.mRng.nextFloat(), shadingData.mPosition);
+	if (all(r.mRadiance <= 0) || r.mPdf <= 0)
+		return;
+
+	float AtoW = 1;
+	if (r.isFinite)
+		AtoW = pow2(r.mDistanceToLight) / r.mCosLight;
+    const float directPdfW = r.mPdf * AtoW;
+
+    const bool isMedium = gHasMedia && shadingData.isMedium();
+    const float3 localDirOut = isMedium ? r.mDirectionToLight : shadingData.toLocal(r.mDirectionToLight);
+
+    ReflectanceEvalRecord f = bsdf.evaluateReflectance<false>(localDirIn, localDirOut);
+    if (!isMedium)
+        f.mReflectance *= shadingData.shadingNormalCorrection<false>(localDirIn, localDirOut);
+	const float contProb = bsdf.continuationProb();
+	f.mFwdPdfW *= contProb;
+	f.mRevPdfW *= contProb;
+
+    const float3 contrib = (sPathState.mThroughput * r.mRadiance * f.mReflectance) / directPdfW;
+
+    // compute mis weight
+    const float misWeight = ComputeMIS_DI(r, f, directPdfW, abs(isMedium ? 1 : localDirOut.z), AtoW);
+
 	// evaluate transmittance along shadow ray
 
     const float3 rayOrigin = isMedium ?
@@ -588,6 +745,8 @@ void ConnectToLight(const Interaction bsdf, const ShadingData shadingData, const
 
     TraceConnectionRay(rayOrigin, r.mDirectionToLight, AdjustIntersectionDistance(r.mDistanceToLight), contrib, misWeight, sPathState.mPathLength + 1, 1);
 }
+
+#endif
 
 
 void AddEmission(const float3 emission, const float directPdfA, const float emissionPdfW, const float WtoA) {
@@ -739,7 +898,8 @@ bool NextVertex<let bFromLight : bool>() {
 	float transDirPdf, transNeePdf;
 	const bool hit = gScene.traceScatteringRay(makeRay(sPathState.mRayOrigin, sPathState.getRayDirection()), sPathState.mRng, sPathState.mCurrentMedium, sPathState.mThroughput, transDirPdf, transNeePdf, isect);
 	sPathState.mThroughput /= transDirPdf;
-	sPathState.mPathLength++;
+    sPathState.mPathLength++;
+    sPathState.mInstancePrimitiveIndex = isect.mInstancePrimitiveIndex;
     isect.mShadingData.mTexcoordScreenSize = 0; // disable mipmaps for now
 
     if (!hit) {

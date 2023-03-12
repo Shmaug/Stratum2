@@ -166,6 +166,7 @@ void RasterRenderer::render(CommandBuffer& commandBuffer, const Image::View& ren
 	descriptors[{"gParams.mViewInverseTransforms",0}] = mResourcePool.uploadData<TransformData>(commandBuffer, "mViewInverseTransforms", viewInverseTransforms);
 	for (const auto&[id,descriptor] : scene->frameData().mDescriptors)
 		descriptors[{ "gScene." + id.first, id.second }] = descriptor;
+	descriptors.erase({"gScene.mAccelerationStructure", 0});
 
 
 	const vk::Extent3D extent = renderTarget.extent();

@@ -4,8 +4,8 @@
 
 struct HashGridConstants {
     uint mCellCount;
-    uint mCellPixelRadius;
-    uint mMinCellSize;
+    float mCellPixelRadius;
+    float mMinCellSize;
     uint pad;
     float3 mCameraPosition;
     float mDistanceScale;

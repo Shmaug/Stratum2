@@ -166,6 +166,8 @@ public:
 	GraphicsPipelineCache& operator=(const GraphicsPipelineCache&) = default;
 	GraphicsPipelineCache& operator=(GraphicsPipelineCache&&) = default;
 
+	inline operator bool() const { return !mEntryPointProfiles.empty(); }
+
 	inline const GraphicsPipeline::GraphicsMetadata& pipelineMetadata() const { return mPipelineMetadata; }
 
 	[[nodiscard]] shared_ptr<GraphicsPipeline> get(Device& device, const Defines& defines = {}, const vector<shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts = {}, optional<pair<vk::RenderPass, uint32_t>> renderPass = {});
@@ -203,6 +205,8 @@ public:
 	ComputePipelineCache(ComputePipelineCache&&) = default;
 	ComputePipelineCache& operator=(const ComputePipelineCache&) = default;
 	ComputePipelineCache& operator=(ComputePipelineCache&&) = default;
+
+	inline operator bool() const { return !mSourceFile.empty(); }
 
 	inline const Pipeline::Metadata& pipelineMetadata() const { return mPipelineMetadata; }
 

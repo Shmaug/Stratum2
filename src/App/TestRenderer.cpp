@@ -30,6 +30,7 @@ TestRenderer::TestRenderer(Node& node) : mNode(node) {
 		{ "gSampleDirectIllumination", true },
 		{ "gSampleDirectIlluminationOnly", false },
 		{ "gReSTIR_DI", false },
+		{ "gReSTIR_DI_Reuse", false },
 		{ "gUseVC", false },
 	};
 
@@ -38,6 +39,12 @@ TestRenderer::TestRenderer(Node& node) : mNode(node) {
 	mPushConstants["mDebugPathLengths"] = 3 | (1<<16);
 	mPushConstants["mEnvironmentSampleProbability"] = 0.9f;
 	mPushConstants["mCandidateSamples"] = 32;
+	mPushConstants["mMaxM"] = 3.f;
+
+    mRasterPushConstants["mDepth"] = -1;
+    mRasterPushConstants["mLineRadius"] = .0001f;
+    mRasterPushConstants["mLineLength"] = .001f;
+    mRasterPushConstants["mVertexPercent"] = .1f;
 
 	Device& device = *mNode.findAncestor<Device>();
 
@@ -112,12 +119,16 @@ void TestRenderer::drawGui() {
 				mDefines.at("gUseVC") = false;
 				mDefines.at("gSampleDirectIllumination") = false;
 				mDefines.at("gSampleDirectIlluminationOnly") = false;
+				mDefines.at("gReSTIR_DI") = false;
 			}
 
 			if (mDefines.at("gUseVC")) {
 				mDefines.at("gSampleDirectIllumination") = false;
 				mDefines.at("gSampleDirectIlluminationOnly") = false;
 			}
+
+			if (!mDefines.at("gReSTIR_DI"))
+				mDefines.at("gReSTIR_DI_Reuse") = false;
 		}
 	}
 
@@ -131,7 +142,10 @@ void TestRenderer::drawGui() {
 		uint32_t one = 1;
 		if (ImGui::DragScalar("Max depth", ImGuiDataType_U32, &mPushConstants["mMaxDepth"].get<uint32_t>(), .2f, &one)) changed = true;
 		if (ImGui::DragScalar("Max null collisions", ImGuiDataType_U32, &mPushConstants["mMaxNullCollisions"].get<uint32_t>())) changed = true;
-		if (ImGui::SliderFloat("Environment sample p", &mPushConstants["mEnvironmentSampleProbability"].get<float>(), 0, 1)) changed = true;
+
+		if (!mLightTrace) {
+			if (ImGui::SliderFloat("Environment sample p", &mPushConstants["mEnvironmentSampleProbability"].get<float>(), 0, 1)) changed = true;
+		}
 
 		if (mDefines.at("gUseVC") || mLightTrace) {
 			if (ImGui::SliderFloat("Light subpath count", &mLightSubpathCount, 0, 2)) changed = true;
@@ -139,7 +153,10 @@ void TestRenderer::drawGui() {
 
 		if (mDefines.at("gReSTIR_DI")) {
 			if (ImGui::DragScalar("Candidate samples", ImGuiDataType_U32, &mPushConstants["mCandidateSamples"].get<uint32_t>())) changed = true;
+		}
 
+		if (mDefines.at("gReSTIR_DI_Reuse")) {
+			if (ImGui::DragFloat("Max M", &mPushConstants["mMaxM"].get<float>(), .01f)) changed = true;
 			if (ImGui::CollapsingHeader("Hash grid")) {
 				ImGui::Indent();
 				if (ImGui::DragScalar("Cell count", ImGuiDataType_U32, &mHashGridCellCount)) changed = true;
@@ -148,8 +165,22 @@ void TestRenderer::drawGui() {
 				ImGui::Unindent();
 			}
 		}
-
 		ImGui::PopItemWidth();
+
+		if (mDefines.at("gUseVC")) {
+			ImGui::Checkbox("Visualize light paths", &mVisualizeLightPaths);
+			if (mVisualizeLightPaths){
+				ImGui::PushItemWidth(40);
+				ImGui::Indent();
+				ImGui::DragScalar("Depth", ImGuiDataType_S32, &mRasterPushConstants["mDepth"].get<int32_t>());
+				ImGui::SliderFloat("% vertices", &mRasterPushConstants["mVertexPercent"].get<float>(), 0, 1);
+				ImGui::DragFloat("Line radius", &mRasterPushConstants["mLineRadius"].get<float>(), .01f);
+				ImGui::DragFloat("Line length", &mRasterPushConstants["mLineLength"].get<float>(), .5f, 0, .5);
+				ImGui::Unindent();
+				ImGui::PopItemWidth();
+			}
+		}
+
 		if (ImGui::Checkbox("Denoise ", &mDenoise)) changed = true;
 		if (ImGui::Checkbox("Tonemap", &mTonemap)) changed = true;
 	}
@@ -167,6 +198,86 @@ void TestRenderer::drawGui() {
 	}
 	ImGui::PopID();
 }
+
+GraphicsPipelineCache createRasterPipeline(Device& device, const vk::Extent2D& extent, const vk::Format format) {
+	GraphicsPipeline::GraphicsMetadata gmd;
+	gmd.mColorBlendState = GraphicsPipeline::ColorBlendState();
+	gmd.mColorBlendState->mAttachments = { vk::PipelineColorBlendAttachmentState(
+		false,
+		vk::BlendFactor::eZero,
+		vk::BlendFactor::eZero,
+		vk::BlendOp::eAdd,
+		vk::BlendFactor::eZero,
+		vk::BlendFactor::eZero,
+		vk::BlendOp::eAdd,
+		vk::ColorComponentFlags{vk::FlagTraits<vk::ColorComponentFlagBits>::allFlags}) };
+
+	gmd.mDynamicStates = { vk::DynamicState::eViewport, vk::DynamicState::eScissor };
+
+	gmd.mDynamicRenderingState = GraphicsPipeline::DynamicRenderingState();
+	gmd.mDynamicRenderingState->mColorFormats = { format };
+	gmd.mDynamicRenderingState->mDepthFormat = vk::Format::eD32Sfloat;
+
+	gmd.mViewports = { vk::Viewport(0, 0, extent.width, extent.height, 0, 1) };
+	gmd.mScissors = { vk::Rect2D({0,0}, extent) };
+
+	gmd.mVertexInputState   = vk::PipelineVertexInputStateCreateInfo();
+	gmd.mInputAssemblyState = vk::PipelineInputAssemblyStateCreateInfo({}, vk::PrimitiveTopology::eTriangleList);
+	gmd.mRasterizationState = vk::PipelineRasterizationStateCreateInfo(
+		{},    // flags
+		false, // depthClampEnable_
+		false, // rasterizerDiscardEnable_
+		vk::PolygonMode::eFill,
+		vk::CullModeFlagBits::eNone,
+		vk::FrontFace::eCounterClockwise,
+		false, // depthBiasEnable_
+		{}, // depthBiasConstantFactor_
+		{}, // depthBiasClamp_
+		{}, // depthBiasSlopeFactor_
+		{}  // lineWidth_
+	);
+	gmd.mMultisampleState   = vk::PipelineMultisampleStateCreateInfo();
+	gmd.mDepthStencilState  = vk::PipelineDepthStencilStateCreateInfo(
+		{},    // flags_
+		true,  // depthTestEnable_
+		true,  // depthWriteEnable_
+		vk::CompareOp::eGreater, // depthCompareOp_
+		false, // depthBoundsTestEnable_
+		false, // stencilTestEnable_
+		{},    // front_
+		{},    // back_
+		{},    // minDepthBounds_
+		{}     // maxDepthBounds_
+	);
+
+	const filesystem::path shaderPath = *device.mInstance.findArgument("shaderKernelPath");
+	const filesystem::path rasterShaderPath = shaderPath / "path_vis.slang";
+	const vector<string>& rasterArgs = {
+		"-matrix-layout-row-major",
+		"-O3",
+		"-Wno-30081",
+		"-capability", "spirv_1_5",
+	};
+
+	auto staticSampler = make_shared<vk::raii::Sampler>(*device, vk::SamplerCreateInfo({},
+		vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eLinear,
+		vk::SamplerAddressMode::eRepeat, vk::SamplerAddressMode::eRepeat, vk::SamplerAddressMode::eRepeat,
+		0, true, 8, false, vk::CompareOp::eAlways, 0, VK_LOD_CLAMP_NONE));
+	device.setDebugName(**staticSampler, "TestRenderer/Sampler (Raster)");
+	gmd.mImmutableSamplers["gScene.mStaticSampler"]  = { staticSampler };
+	gmd.mImmutableSamplers["gScene.mStaticSampler1"] = { staticSampler };
+	gmd.mBindingFlags["gScene.mVertexBuffers"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	gmd.mBindingFlags["gScene.mImages"]  = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	gmd.mBindingFlags["gScene.mImage2s"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	gmd.mBindingFlags["gScene.mImage1s"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	gmd.mBindingFlags["gScene.mVolumes"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+
+	return GraphicsPipelineCache({
+		{ vk::ShaderStageFlagBits::eVertex  , GraphicsPipelineCache::ShaderSourceInfo(rasterShaderPath, "LightVertexVS", "sm_6_6") },
+		{ vk::ShaderStageFlagBits::eFragment, GraphicsPipelineCache::ShaderSourceInfo(rasterShaderPath, "LightVertexFS", "sm_6_6") }
+	}, rasterArgs, gmd);
+}
+
 
 void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
 	ProfilerScope ps("TestRenderer::render", &commandBuffer);
@@ -248,7 +359,6 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 	descriptors[{ "gRenderParams.mPathStates", 0 }] = pathStates;
 	descriptors[{ "gRenderParams.mOutputAtomic", 0 }] = atomicOutput;
 
-	bool changed = false;
 	bool hasHeterogeneousMedia = false;
 
 	vector<ViewData> viewsBufferData;
@@ -262,6 +372,8 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 			renderTarget.clearColor(commandBuffer, vk::ClearColorValue(array<uint32_t, 4>{ 0, 0, 0, 0 }));
 			return;
 		}
+
+		bool changed = false;
 
 		if (scene->lastUpdate() > mLastSceneVersion) {
 			changed = true;
@@ -342,17 +454,26 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 		sphere[3] = length<float,3>(sceneData.mAabbMax - sphere.head<3>());
 		mPushConstants["mSceneSphere"] = sphere;
 
+		if (changed && mRandomPerFrame && mDenoise && denoiser && !denoiser->reprojection()) {
+			denoiser->resetAccumulation();
+		}
+
 		if (mRandomPerFrame)
 			mPushConstants["mRandomSeed"] = (mDenoise && denoiser) ? denoiser->accumulatedFrames() : (uint32_t)rand();
 		else
 			mPushConstants["mRandomSeed"] = 0u;
+
+		if (mDefines.at("gReSTIR_DI_Reuse") && mPrevHashGrid)
+			mPushConstants["mPrevHashGridValid"] = 1u;
+		else
+			mPushConstants["mPrevHashGridValid"] = 0u;
 	}
 
 	auto makeHashGrid = [&]<typename T>(const string& name, const uint32_t size, const uint cellCount) {
 		struct HashGridConstants {
 			uint mCellCount;
-			uint mCellPixelRadius;
-			uint mMinCellSize;
+			float mCellPixelRadius;
+			float mMinCellSize;
 			uint pad;
 			float3 mCameraPosition;
 			float mDistanceScale;
@@ -423,14 +544,32 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 		}
 	};
 
-
-	const uint32_t maxShadowRays = mDefines.at("gDeferShadowRays") ? max(1u, (2*extent.width*extent.height + mPushConstants["mLightSubpathCount"].get<uint32_t>())*(mPushConstants["mMaxDepth"].get<uint32_t>()-1)) : 1;
+	const uint32_t maxShadowRays = mDefines.at("gDeferShadowRays") ? max(1u, (extent.width*extent.height*2 + mPushConstants["mLightSubpathCount"].get<uint32_t>())*(mPushConstants["mMaxDepth"].get<uint32_t>()-1)) : 1;
 
 	auto lightVertexBuffer = mResourcePool.getBuffer<array<float4,3>>(commandBuffer.mDevice, "mLightVertices", mDefines.at("gUseVC") ? max(1u, mPushConstants["mLightSubpathCount"].get<uint32_t>()*(mPushConstants["mMaxDepth"].get<uint32_t>()-1)) : 1);
 	auto counterBuffer = mResourcePool.getBuffer<uint32_t>(commandBuffer.mDevice, "mCounters", 2, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst);
 	descriptors[{ "gRenderParams.mLightVertices", 0 }] = lightVertexBuffer;
 	descriptors[{ "gRenderParams.mCounters", 0 }] = counterBuffer;
 	descriptors[{ "gRenderParams.mShadowRays", 0 }] = mResourcePool.getBuffer<array<float4,4>>(commandBuffer.mDevice, "mShadowRays", max(1u, maxShadowRays));
+
+	const uint32_t hashGridSize = max(1u, extent.width*extent.height*(mPushConstants["mMaxDepth"].get<uint32_t>()-1));
+	Descriptors hashGrid = makeHashGrid.operator()<array<float4,3>>("mHashGrid", mDefines.at("gReSTIR_DI_Reuse") ? hashGridSize : 1, mHashGridCellCount);
+
+	// assign prev hashgrids
+	for (const char* d : {
+		"mChecksums",
+		"mCounters",
+		"mAppendDataIndices",
+		"mAppendData",
+		"mIndices",
+		"mActiveCellIndices",
+		"mData",
+		"mConstants" })
+		descriptors[{string("gRenderParams.mPrevHashGrid.")+d,0}] = (mPushConstants["mPrevHashGridValid"].get<uint32_t>() == 0 ? hashGrid : *mPrevHashGrid).at({string("gHashGrid.")+d,0});
+	if (mDefines.at("gReSTIR_DI_Reuse"))
+		mPrevHashGrid = hashGrid;
+	else
+		mPrevHashGrid.reset();
 
 	// setup shader defines
 
@@ -497,6 +636,8 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 				vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
 				vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 		}
+		if (mDefines.at("gReSTIR_DI_Reuse"))
+			clearHashGrid(hashGrid);
 
 		// light paths
 		if (mDefines.at("gUseVC") || mLightTrace) {
@@ -538,6 +679,9 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 			}
 		}
 
+		if (mDefines.at("gReSTIR_DI_Reuse"))
+			buildHashGrid(hashGrid, "float4[3]", hashGridSize, mHashGridCellCount);
+
 		if (mDefines.at("gDeferShadowRays")) {
 			ProfilerScope ps("Shadow rays", &commandBuffer);
 			if (!mDefines.at("gUseVC") && !mLightTrace) {
@@ -564,9 +708,6 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 
 	// run denoiser
 	if (mDenoise && denoiser && mRandomPerFrame) {
-		if (changed && !denoiser->reprojection())
-			denoiser->resetAccumulation();
-
 		processedOutput = denoiser->denoise(
 			commandBuffer,
 			outputImage,
@@ -605,6 +746,72 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 				mSelectionData.push_back(make_pair(selectionBuffer, ImGui::GetIO().KeyShift));
 				break;
 			}
+	}
+
+
+	if (mDefines.at("gUseVC") && mVisualizeLightPaths) {
+		if (!mRasterLightPathPipeline || renderTarget.image()->format() != mRasterLightPathPipeline.pipelineMetadata().mDynamicRenderingState->mColorFormats[0])
+			mRasterLightPathPipeline = createRasterPipeline(commandBuffer.mDevice, vk::Extent2D(renderTarget.extent().width, renderTarget.extent().height), renderTarget.image()->format());
+
+		Descriptors rasterDescriptors;
+		for (auto& [name, d] : scene->frameData().mDescriptors)
+			rasterDescriptors[{ "gScene." + name.first, name.second }] = d;
+		rasterDescriptors.erase({"gScene.mAccelerationStructure", 0});
+
+		for (auto d : {
+			"mViews",
+			"mViewInverseTransforms",
+			"mLightVertices",
+			"mCounters" }) {
+			rasterDescriptors[{string("gParams.")+d,0}] = descriptors.at({string("gRenderParams.")+d, 0});
+		}
+		rasterDescriptors[{"gParams.mDepth",0}] = ImageDescriptor{get<Image::View>(get<ImageDescriptor>(descriptors.at({"gRenderParams.mDepth",0}))), vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}};
+
+		const Image::View rasterDepthBuffer = mResourcePool.getImage(commandBuffer.mDevice, "mRasterDepthBuffer", Image::Metadata{
+				.mFormat = vk::Format::eD32Sfloat,
+				.mExtent = extent,
+				.mUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment|vk::ImageUsageFlagBits::eTransferDst });
+		auto lightPathPipeline = mRasterLightPathPipeline.get(commandBuffer.mDevice, { { "NO_SCENE_ACCELERATION_STRUCTURE", "1" } });
+		auto descriptorSets = lightPathPipeline->getDescriptorSets(rasterDescriptors);
+
+		// render light paths
+		{
+			renderTarget.barrier(commandBuffer, vk::ImageLayout::eColorAttachmentOptimal, vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::AccessFlagBits::eColorAttachmentWrite);
+			rasterDepthBuffer.barrier(commandBuffer, vk::ImageLayout::eDepthStencilAttachmentOptimal, vk::PipelineStageFlagBits::eEarlyFragmentTests, vk::AccessFlagBits::eDepthStencilAttachmentRead|vk::AccessFlagBits::eDepthStencilAttachmentWrite);
+
+			descriptorSets->transitionImages(commandBuffer);
+
+			vk::RenderingAttachmentInfo colorAttachment(
+				*renderTarget, vk::ImageLayout::eColorAttachmentOptimal,
+				vk::ResolveModeFlagBits::eNone,	{}, vk::ImageLayout::eUndefined,
+				vk::AttachmentLoadOp::eLoad,
+				vk::AttachmentStoreOp::eStore,
+				vk::ClearValue{});
+			vk::RenderingAttachmentInfo depthAttachment(
+				*rasterDepthBuffer, vk::ImageLayout::eDepthStencilAttachmentOptimal,
+				vk::ResolveModeFlagBits::eNone,	{}, vk::ImageLayout::eUndefined,
+				vk::AttachmentLoadOp::eClear,
+				vk::AttachmentStoreOp::eDontCare,
+				vk::ClearValue{vk::ClearDepthStencilValue{0,0}});
+			commandBuffer->beginRendering(vk::RenderingInfo(
+				vk::RenderingFlags{},
+				vk::Rect2D(vk::Offset2D(0,0), vk::Extent2D(extent.width, extent.height)),
+				1, 0, colorAttachment, &depthAttachment, nullptr));
+
+			commandBuffer->setViewport(0, vk::Viewport(0, 0, extent.width, extent.height, 0, 1));
+			commandBuffer->setScissor(0, vk::Rect2D(vk::Offset2D(0,0), vk::Extent2D(extent.width, extent.height)));
+
+			commandBuffer->bindPipeline(vk::PipelineBindPoint::eGraphics, ***lightPathPipeline);
+			descriptorSets->bind(commandBuffer);
+			lightPathPipeline->pushConstants(commandBuffer, mRasterPushConstants);
+			const uint32_t vertexCount = mPushConstants["mLightSubpathCount"].get<uint32_t>()*mPushConstants["mMaxDepth"].get<uint32_t>();
+			commandBuffer->draw(uint32_t(mRasterPushConstants["mVertexPercent"].get<float>() * vertexCount)*6, 1, 0, 0);
+
+			commandBuffer.trackResource(lightPathPipeline);
+			commandBuffer.trackResource(descriptorSets);
+
+			commandBuffer->endRendering();
+		}
 	}
 }
 
