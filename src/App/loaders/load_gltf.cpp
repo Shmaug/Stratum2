@@ -114,6 +114,16 @@ shared_ptr<Node> Scene::loadGltf(CommandBuffer& commandBuffer, const filesystem:
 			m.mMaterialData.setClearcoat((float)v.Get("clearcoatFactor").GetNumberAsDouble());
 		}
 
+		if (material.extensions.contains("KHR_materials_specular")) {
+			const auto& v = material.extensions.at("KHR_materials_specular");
+			if (v.Has("specularColorFactor")) {
+				auto& a = v.Get("specularColorFactor");
+				m.mMaterialData.setSpecular(luminance(double3(a.Get(0).GetNumberAsDouble(), a.Get(1).GetNumberAsDouble(), a.Get(2).GetNumberAsDouble()).cast<float>()));
+			}else if (v.Has("specularFactor")) {
+				m.mMaterialData.setSpecular((float)v.Get("specularFactor").GetNumberAsDouble());
+			}
+		}
+
 		m.mBumpImage = getImage(material.normalTexture.index, false);
 		m.mBumpStrength = 1;
 

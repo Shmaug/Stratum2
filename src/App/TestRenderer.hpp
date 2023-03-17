@@ -1,7 +1,6 @@
 #pragma once
 
-#include <Core/DeviceResourcePool.hpp>
-
+#include "GpuHashGrid.hpp"
 #include "Node.hpp"
 
 #include <Shaders/compat/transform.h>
@@ -27,15 +26,14 @@ private:
 	PushConstants mPushConstants;
 	PushConstants mRasterPushConstants;
 
-	uint32_t mHashGridCellCount = 100000;
-	float mHashGridCellSize = 0.1f;
-	float mHashGridCellPixelRadius = 0;
 	float mLightSubpathCount = 1;
 	bool mLightTrace = false;
 
 	unordered_map<string, bool> mDefines;
 
-	optional<Descriptors> mPrevHashGrid;
+	shared_ptr<vk::raii::Event> mPrevHashGridEvent;
+
+	GpuHashGrid mHashGrid;
 
 
 	bool mRandomPerFrame = true;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Scene.hpp"
+#include "GpuHashGrid.hpp"
 
 #include <Shaders/compat/scene.h>
 #include <Shaders/compat/vcm.h>
@@ -50,7 +51,10 @@ private:
 	bool mUseNormalMaps = true;
 	bool mUseAlphaTesting = false;
 	bool mUseLightVertexCache = true;
-	bool mLVCHashGridSampling = false;
+
+	GpuHashGrid mLightHashGrid;
+	GpuHashGrid mDIHashGrid;
+	GpuHashGrid mLVCHashGrid;
 
 	float mVmRadiusAlpha  = 0.01f;
 	float mVmRadiusFactor = 0.025f;

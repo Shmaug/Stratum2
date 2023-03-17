@@ -48,8 +48,6 @@ void Denoiser::drawGui() {
 		mResourcePool.clear();
 		mPrevVisibility = {};
 		mPrevDepth = {};
-		mPrevAccumColor = {};
-		mPrevAccumMoments = {};
 	}
 	if (ImGui::Button("Reload shaders")) {
 		Device& device = *mNode.findAncestor<Device>();
@@ -120,6 +118,8 @@ Image::View Denoiser::denoise(
 
 	Image::View accumColor, accumMoments;
 	array<Image::View,2> temp;
+	auto prevAccumColor   = mResourcePool.getLastImage("mAccumColor");
+	auto prevAccumMoments = mResourcePool.getLastImage("mAccumMoments");
 
 	{
 		ProfilerScope ps("Create images");
@@ -141,7 +141,7 @@ Image::View Denoiser::denoise(
 				.mFormat = radiance.image()->format(),
 				.mExtent = extent,
 				.mUsage = vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eTransferSrc|vk::ImageUsageFlagBits::eTransferDst,
-			});
+			}, 0);
 
 		accumColor  .clearColor(commandBuffer, vk::ClearColorValue{ array<float,4>{ 0.f, 0.f, 0.f, 0.f } });
 		accumMoments.clearColor(commandBuffer, vk::ClearColorValue{ array<float,4>{ 0.f, 0.f, 0.f, 0.f } });
@@ -159,7 +159,7 @@ Image::View Denoiser::denoise(
 	};
 
 	auto instanceIndexMap = mNode.findAncestor<Scene>()->frameData().mResourcePool.getLastBuffer<uint32_t>("mInstanceIndexMap");
-	if (!mResetAccumulation && instanceIndexMap && mPrevAccumColor && mPrevAccumMoments && mPrevVisibility && mPrevVisibility.extent() == visibility.extent()) {
+	if (!mResetAccumulation && instanceIndexMap && prevAccumColor && prevAccumMoments && mPrevVisibility && mPrevVisibility.extent() == visibility.extent()) {
 		Descriptors descriptors;
 		descriptors[{"gParams.mViews",0}]            = views;
 		descriptors[{"gParams.mInstanceIndexMap",0}] = instanceIndexMap;
@@ -174,8 +174,8 @@ Image::View Denoiser::denoise(
 		descriptors[{"gParams.mAccumMoments",0}]     = ImageDescriptor{ accumMoments     , vk::ImageLayout::eGeneral              , vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite, {} };
 		descriptors[{"gParams.mFilterImages", 0}]    = ImageDescriptor{ temp[0]          , vk::ImageLayout::eGeneral              , vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite, {} };
 		descriptors[{"gParams.mFilterImages", 1}]    = ImageDescriptor{ temp[1]          , vk::ImageLayout::eGeneral              , vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite, {} };
-		descriptors[{"gParams.mPrevAccumColor",0}]   = ImageDescriptor{ mPrevAccumColor  , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
-		descriptors[{"gParams.mPrevAccumMoments",0}] = ImageDescriptor{ mPrevAccumMoments, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{"gParams.mPrevAccumColor",0}]   = ImageDescriptor{ prevAccumColor   , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{"gParams.mPrevAccumMoments",0}] = ImageDescriptor{ prevAccumMoments , vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
 
 		output = accumColor;
 
@@ -238,8 +238,6 @@ Image::View Denoiser::denoise(
 
 	mPrevVisibility = visibility;
 	mPrevDepth = depth;
-	mPrevAccumColor   = accumColor;
-	mPrevAccumMoments = accumMoments;
 
 	return output;
 }

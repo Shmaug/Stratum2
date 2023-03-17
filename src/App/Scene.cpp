@@ -219,8 +219,15 @@ Material Scene::makeMetallicRoughnessMaterial(CommandBuffer& commandBuffer, cons
 		md.mFormat = vk::Format::eR8G8B8A8Unorm;
 		md.mUsage = vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage;
 		for (int i = 0; i < m.mImages.size(); i++) {
-			m.mImages[i] = make_shared<Image>(commandBuffer.mDevice, "PackedMaterialData[" + to_string(i) + "]", md);
-			descriptors[{ "gOutput", i }] = ImageDescriptor{ m.mImages[i], vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+			auto img = make_shared<Image>(commandBuffer.mDevice, "PackedMaterialData[" + to_string(i) + "]", md);
+			descriptors[{ "gOutput", i }] = ImageDescriptor{ img, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+			if (i == 1 && !emission.mImage)
+				continue;
+			if (i == 2 && !metallic_roughness.mImage)
+				continue;
+			if (i == 3 && !transmission.mImage)
+				continue;
+			m.mImages[i] = img;
 		}
 		if (baseColor.mImage) {
 			md.mLevels = 1;
@@ -251,7 +258,8 @@ Material Scene::makeMetallicRoughnessMaterial(CommandBuffer& commandBuffer, cons
 		mConvertPbrPipeline.get(commandBuffer.mDevice, defs)->dispatchTiled(commandBuffer, d.extent(), descriptors);
 
 		for (const Image::View& img : m.mImages)
-			img.image()->generateMipMaps(commandBuffer);
+			if (img)
+				img.image()->generateMipMaps(commandBuffer);
 
 		if (m.mAlphaMask) {
 			m.mMinAlpha = make_shared<Buffer>(commandBuffer.mDevice, "mMinAlpha", sizeof(uint32_t), vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
@@ -294,8 +302,13 @@ Material Scene::makeDiffuseSpecularMaterial(CommandBuffer& commandBuffer, const 
 		md.mFormat = vk::Format::eR8G8B8A8Unorm;
 		md.mUsage = vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eStorage;
 		for (int i = 0; i < m.mImages.size(); i++) {
-			m.mImages[i] = make_shared<Image>(commandBuffer.mDevice, "material data", md);
-			descriptors[{"gOutput", i}] = ImageDescriptor{ m.mImages[i], vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+			auto img = make_shared<Image>(commandBuffer.mDevice, "PackedMaterialData[" + to_string(i) + "]", md);
+			descriptors[{ "gOutput", i }] = ImageDescriptor{ img, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+			if (i == 1 && !emission.mImage)
+				continue;
+			if (i == 3 && !transmission.mImage)
+				continue;
+			m.mImages[i] = img;
 		}
 		if (diffuse.mImage) {
 			md.mLevels = 1;
@@ -327,7 +340,8 @@ Material Scene::makeDiffuseSpecularMaterial(CommandBuffer& commandBuffer, const 
 		mConvertDiffuseSpecularPipeline.get(commandBuffer.mDevice, defs)->dispatchTiled(commandBuffer, d.extent(), descriptors);
 
 		for (const Image::View& img : m.mImages)
-			img.image()->generateMipMaps(commandBuffer);
+			if (img)
+				img.image()->generateMipMaps(commandBuffer);
 	}
 	return m;
 }

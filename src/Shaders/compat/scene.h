@@ -10,7 +10,7 @@ STM_NAMESPACE_BEGIN
 #define BVH_FLAG_SPHERES BIT(1)
 #define BVH_FLAG_VOLUME BIT(2)
 
-#define gVertexBufferCount 1024
+#define gVertexBufferCount 2048
 #define gImageCount 2048
 #define gVolumeCount 8
 
@@ -199,6 +199,6 @@ struct ShadingData {
 
 STM_NAMESPACE_END
 
-#ifdef __SLANG_COMPILER__
+#if defined(__SLANG_COMPILER__) && !defined(NO_SCENE_HLSLI)
 #include "../common/scene.hlsli"
 #endif

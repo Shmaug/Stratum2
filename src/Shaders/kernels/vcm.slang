@@ -1,6 +1,6 @@
 // Based on https://github.com/SmallVCM/SmallVCM/blob/master/src/vertexcm.hxx
 
-#include "common/path.hlsli"
+#include "common/vcm.hlsli"
 
 static const AbstractCamera gCamera = { 0 };
 
@@ -359,13 +359,15 @@ extension VertexCM {
             if (gPushConstants.reservoirHistoryValid()) {
 				const float2 jitter = mRng.nextFloat().xy * 2 - 1;
                 const float3x3 frame = makeOrthonormal(aCameraState.mVertex.mShadingData.getGeometryNormal());
-                const float3 queryPos = aCameraState.mVertex.mShadingData.mPosition + gPushConstants.mHashGridJitterRadius * (frame[0] * jitter.x + frame[1] * jitter.y);
-                const float cellSize = gRenderParams.mPrevDirectIlluminationReservoirs.GetCellSize(queryPos);
-				const uint cellIndex = gRenderParams.mPrevDirectIlluminationReservoirs.FindCellIndex<false>(queryPos, cellSize);
+                const float cellSize = gRenderParams.mPrevDirectIlluminationReservoirs.GetCellSize(aCameraState.mVertex.mShadingData.mPosition);
+                const float3 queryPos = aCameraState.mVertex.mShadingData.mPosition + cellSize * (frame[0] * jitter.x + frame[1] * jitter.y);
+				const uint cellIndex = gRenderParams.mPrevDirectIlluminationReservoirs.FindCellIndex<false>(queryPos);
                 if (cellIndex != -1) {
-					const uint2 range = gRenderParams.mPrevDirectIlluminationReservoirs.GetCellDataRange(cellIndex);
-                    if (range.y > range.x)
-                        reservoir.Reuse(aCameraState, aCameraBsdf, gRenderParams.mPrevDirectIlluminationReservoirs.mData[range.x + mRng.next().x % (range.y - range.x)], mRng.nextFloat().x);
+					const uint count = gRenderParams.mPrevDirectIlluminationReservoirs.GetCellDataCount(cellIndex);
+                    if (count > 0) {
+						const uint offset = gRenderParams.mPrevDirectIlluminationReservoirs.GetCellDataOffset(cellIndex);
+                        reservoir.Reuse(aCameraState, aCameraBsdf, gRenderParams.mPrevDirectIlluminationReservoirs.Get(offset + mRng.next().x % count), mRng.nextFloat().x);
+					}
                 }
 			}
 
@@ -696,13 +698,15 @@ extension VertexCM {
             if (gPushConstants.reservoirHistoryValid()) {
                 const float2 jitter = mRng.nextFloat().xy * 2 - 1;
                 const float3x3 frame = makeOrthonormal(aCameraState.mVertex.mShadingData.getGeometryNormal());
-                const float3 queryPos = aCameraState.mVertex.mShadingData.mPosition + gPushConstants.mHashGridJitterRadius * (frame[0] * jitter.x + frame[1] * jitter.y);
-                const float cellSize = gRenderParams.mPrevLVCReservoirs.GetCellSize(queryPos);
-                const uint cellIndex = gRenderParams.mPrevLVCReservoirs.FindCellIndex<false>(queryPos, cellSize);
+                const float cellSize = gRenderParams.mPrevLVCReservoirs.GetCellSize(aCameraState.mVertex.mShadingData.mPosition);
+                const float3 queryPos = aCameraState.mVertex.mShadingData.mPosition + cellSize * (frame[0] * jitter.x + frame[1] * jitter.y);
+                const uint cellIndex = gRenderParams.mPrevLVCReservoirs.FindCellIndex<false>(queryPos);
                 if (cellIndex != -1) {
-                    const uint2 range = gRenderParams.mPrevLVCReservoirs.GetCellDataRange(cellIndex);
-                    if (range.y > range.x)
-                        reservoir.Reuse(aCameraState, aCameraBsdf, gRenderParams.mPrevLVCReservoirs.mData[range.x + mRng.next().x % (range.y - range.x)], mRng.nextFloat().x);
+                    const uint count = gRenderParams.mPrevLVCReservoirs.GetCellDataCount(cellIndex);
+                    if (count > 0) {
+						const uint offset = gRenderParams.mPrevLVCReservoirs.GetCellDataOffset(cellIndex);
+                        reservoir.Reuse(aCameraState, aCameraBsdf, gRenderParams.mPrevLVCReservoirs.Get(offset + mRng.next().x % count), mRng.nextFloat().x);
+					}
                 }
             }
 
@@ -804,20 +808,26 @@ extension VertexCM {
 			if (cellIndex == -1)
 				continue;
 
-            uint2 range = gRenderParams.mLightHashGrid.GetCellDataRange(cellIndex);
-            float w = 1;
-            if (range.y - range.x > 128) {
-                w = float(range.y - range.x) / 128;
-                range.y = range.x + 128;
-			}
-			for (; range.x < range.y; range.x++) {
-				LightVertex particle = VcmVertex(gRenderParams.mLightVertices[gRenderParams.mLightHashGrid.mData[range.x]]);
+            uint count = gRenderParams.mLightHashGrid.GetCellDataCount(cellIndex);
+			if (count > 0) {
+				const uint offset = gRenderParams.mLightHashGrid.GetCellDataOffset(cellIndex);
+				for (uint i = 0; i < count; i++) {
+					uint idx = i;
+					float w = 1;
+					if (count > 64) {
+						if (i >= 64)
+							break;
+						w = float(count) / 64;
+						idx = mRng.next().x % count;
+					}
+					LightVertex particle = VcmVertex(gRenderParams.mLightVertices[gRenderParams.mLightHashGrid.Get(offset + idx)]);
 
-				const float3 toParticle = particle.mShadingData.mPosition - queryPos;
-				const float distSqr     = dot(toParticle, toParticle);
+					const float3 toParticle = particle.mShadingData.mPosition - queryPos;
+					const float distSqr     = dot(toParticle, toParticle);
 
-				if (distSqr <= mergeRadiusSqr)
-					ProcessVertex(aCameraState, aCameraBsdf, particle, w);
+					if (distSqr <= mergeRadiusSqr)
+						ProcessVertex(aCameraState, aCameraBsdf, particle, w);
+				}
 			}
 		}
 	}
@@ -1109,20 +1119,20 @@ extension VertexCM {
     // For regular VC: uses GetLightVertexIndex to find index in mLightPathLengths
     // For LVC VC: atomically appends light vertices to mLightPathLengths
     void StoreLightVertex(const SubPathState aLightState) {
-        uint idx;
-        if (gUseLVC) {
-            if (all(aLightState.mVertex.mThroughput <= 0))
-            	return;
+		uint idx;
+		if (gUseLVC || !gUseVC) {
+			if (all(aLightState.mVertex.mThroughput <= 0))
+				return;
 			// append to mLightVertices
-            InterlockedAdd(gRenderParams.mLightPathLengths[0], 1, idx);
-        } else {
+			InterlockedAdd(gRenderParams.mLightPathLengths[0], 1, idx);
+		} else {
 			// append to path's vertex list
 			const uint storedVertices = gRenderParams.mLightPathLengths[mPathIndex];
 			gRenderParams.mLightPathLengths[mPathIndex] = storedVertices + 1;
-            idx = GetLightVertexIndex(mPathIndex, storedVertices);
-        }
+			idx = GetLightVertexIndex(mPathIndex, storedVertices);
+		}
 
-        gRenderParams.mLightVertices[idx] = PackedVcmVertex(aLightState.mVertex, aLightState.mInstancePrimitiveIndex);
+		gRenderParams.mLightVertices[idx] = PackedVcmVertex(aLightState.mVertex, aLightState.mInstancePrimitiveIndex);
         if (gUseVM) {
             if (any(aLightState.mVertex.mThroughput > 0))
                 gRenderParams.mLightHashGrid.Append(

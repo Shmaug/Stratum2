@@ -34,13 +34,8 @@ struct VcmPushConstants {
 
     uint mRandomSeed;
     uint mDebugPathLengths;
-    uint mLVCHashGridSampleCount;
+    uint pad0;
     uint pad1;
-
-    float mHashGridCellPixelRadius;
-    float mHashGridMinCellSize;
-	float mHashGridJitterRadius;
-    uint mHashGridCellCount;
 
     float mDIReservoirMaxM;
     float mLVCReservoirMaxM;

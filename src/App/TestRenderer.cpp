@@ -31,6 +31,7 @@ TestRenderer::TestRenderer(Node& node) : mNode(node) {
 		{ "gSampleDirectIlluminationOnly", false },
 		{ "gReSTIR_DI", false },
 		{ "gReSTIR_DI_Reuse", false },
+		{ "gReSTIR_DI_Reuse_Visibility", false },
 		{ "gUseVC", false },
 	};
 
@@ -47,6 +48,8 @@ TestRenderer::TestRenderer(Node& node) : mNode(node) {
     mRasterPushConstants["mVertexPercent"] = .1f;
 
 	Device& device = *mNode.findAncestor<Device>();
+
+	mHashGrid = GpuHashGrid(device, sizeof(float4)*8, 100000, 0.5f);
 
 	mStaticSampler = make_shared<vk::raii::Sampler>(*device, vk::SamplerCreateInfo({},
 		vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eLinear,
@@ -81,8 +84,6 @@ void TestRenderer::createPipelines(Device& device) {
 	mPipelines.emplace("RenderIteration",        ComputePipelineCache(shaderPath / "testrenderer.slang", "RenderIteration"    , "sm_6_6", args, md));
 	mPipelines.emplace("ProcessShadowRays",      ComputePipelineCache(shaderPath / "testrenderer.slang", "ProcessShadowRays"  , "sm_6_6", args, md));
 	mPipelines.emplace("ProcessAtomicOutput",    ComputePipelineCache(shaderPath / "testrenderer.slang", "ProcessAtomicOutput", "sm_6_6", args, md));
-	mPipelines.emplace("HashGridComputeIndices", ComputePipelineCache(shaderPath / "hashgrid.slang", "ComputeIndices", "sm_6_6", { "-O3", "-matrix-layout-row-major", "-capability", "spirv_1_5" }));
-	mPipelines.emplace("HashGridSwizzle",        ComputePipelineCache(shaderPath / "hashgrid.slang", "Swizzle"       , "sm_6_6", { "-O3", "-matrix-layout-row-major", "-capability", "spirv_1_5" }));
 }
 
 void TestRenderer::drawGui() {
@@ -129,6 +130,8 @@ void TestRenderer::drawGui() {
 
 			if (!mDefines.at("gReSTIR_DI"))
 				mDefines.at("gReSTIR_DI_Reuse") = false;
+			if (!mDefines.at("gReSTIR_DI_Reuse"))
+				mDefines.at("gReSTIR_DI_Reuse_Visibility") = false;
 		}
 	}
 
@@ -159,9 +162,9 @@ void TestRenderer::drawGui() {
 			if (ImGui::DragFloat("Max M", &mPushConstants["mMaxM"].get<float>(), .01f)) changed = true;
 			if (ImGui::CollapsingHeader("Hash grid")) {
 				ImGui::Indent();
-				if (ImGui::DragScalar("Cell count", ImGuiDataType_U32, &mHashGridCellCount)) changed = true;
-				if (ImGui::DragFloat("Min cell size", &mHashGridCellSize, .01f)) changed = true;
-				if (ImGui::DragFloat("Cell pixel radius", &mHashGridCellPixelRadius, .5f, 0, 1000)) changed = true;
+				if (ImGui::DragScalar("Cell count", ImGuiDataType_U32, &mHashGrid.mCellCount)) changed = true;
+				if (ImGui::DragFloat("Min cell size", &mHashGrid.mCellSize, .01f)) changed = true;
+				if (ImGui::DragFloat("Cell pixel radius", &mHashGrid.mCellPixelRadius, .5f, 0, 1000)) changed = true;
 				ImGui::Unindent();
 			}
 		}
@@ -278,7 +281,6 @@ GraphicsPipelineCache createRasterPipeline(Device& device, const vk::Extent2D& e
 	}, rasterArgs, gmd);
 }
 
-
 void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
 	ProfilerScope ps("TestRenderer::render", &commandBuffer);
 
@@ -322,17 +324,17 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 		.mFormat = vk::Format::eR32G32B32A32Sfloat,
 		.mExtent = extent,
 		.mUsage = vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eTransferSrc,
-	});
+	}, 0);
 	const Image::View albedoImage = mResourcePool.getImage(commandBuffer.mDevice, "mAlbedo", Image::Metadata{
 		.mFormat = vk::Format::eR32G32B32A32Sfloat,
 		.mExtent = extent,
 		.mUsage = vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eTransferSrc,
-	});
+	}, 0);
 	const Image::View prevUVsImage = mResourcePool.getImage(commandBuffer.mDevice, "mPrevUVs", Image::Metadata{
 		.mFormat = vk::Format::eR32G32Sfloat,
 		.mExtent = extent,
 		.mUsage = vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eTransferSrc,
-	});
+	}, 0);
 	const Image::View visibilityImage = mResourcePool.getImage(commandBuffer.mDevice, "mVisibility", Image::Metadata{
 		.mFormat = vk::Format::eR32G32Uint,
 		.mExtent = extent,
@@ -348,8 +350,8 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 
 	Descriptors descriptors;
 
-	auto pathStates   = mResourcePool.getBuffer<float4x4>(commandBuffer.mDevice, "mPathStates", mDefines.at("gMultiDispatch") ? extent.width*extent.height : 1);
-	auto atomicOutput = mResourcePool.getBuffer<uint4>(commandBuffer.mDevice, "mOutputAtomic", (mDefines.at("gDeferShadowRays")||mDefines.at("gUseVC")||mLightTrace) ? extent.width*extent.height : 1, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst);
+	auto pathStates   = mResourcePool.getBuffer<float4x4>(commandBuffer.mDevice, "mPathStates", mDefines.at("gMultiDispatch") ? extent.width*extent.height : 1, vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal, 0);
+	auto atomicOutput = mResourcePool.getBuffer<uint4>(commandBuffer.mDevice, "mOutputAtomic", (mDefines.at("gDeferShadowRays")||mDefines.at("gUseVC")||mLightTrace) ? extent.width*extent.height : 1, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal, 0);
 
 	descriptors[{ "gRenderParams.mOutput", 0 }]     = ImageDescriptor{ outputImage    , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 	descriptors[{ "gRenderParams.mAlbedo", 0 }]     = ImageDescriptor{ albedoImage    , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
@@ -359,6 +361,7 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 	descriptors[{ "gRenderParams.mPathStates", 0 }] = pathStates;
 	descriptors[{ "gRenderParams.mOutputAtomic", 0 }] = atomicOutput;
 
+	bool changed = false;
 	bool hasHeterogeneousMedia = false;
 
 	vector<ViewData> viewsBufferData;
@@ -373,7 +376,6 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 			return;
 		}
 
-		bool changed = false;
 
 		if (scene->lastUpdate() > mLastSceneVersion) {
 			changed = true;
@@ -442,10 +444,14 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 		}
 
 		descriptors[{ "gRenderParams.mViewMediumIndices", 0 }] = mResourcePool.uploadData<uint>(commandBuffer, "mViewMediumIndices", viewMediumIndices);
+	}
+
+	{
+		const Scene::FrameData& sceneData = scene->frameData();
 
 		mPushConstants["mOutputExtent"] = uint2(renderTarget.extent().width, renderTarget.extent().height);
 		mPushConstants["mLightSubpathCount"] = max(1u, uint32_t(renderTarget.extent().width * renderTarget.extent().height * mLightSubpathCount));
-		mPushConstants["mViewCount"] = (uint32_t)views.size();
+		mPushConstants["mViewCount"] = (uint32_t)viewsBufferData.size();
 		mPushConstants["mEnvironmentMaterialAddress"] = sceneData.mEnvironmentMaterialAddress;
 		mPushConstants["mLightCount"] = sceneData.mLightCount;
 		mPushConstants["mVolumeInstanceCount"] = (uint32_t)sceneData.mInstanceVolumeInfo.size();
@@ -463,113 +469,31 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 		else
 			mPushConstants["mRandomSeed"] = 0u;
 
-		if (mDefines.at("gReSTIR_DI_Reuse") && mPrevHashGrid)
-			mPushConstants["mPrevHashGridValid"] = 1u;
-		else
+		if (!mHashGrid.mResourcePool.getLastBuffer<byte>("mHashGrid.mChecksums"))
 			mPushConstants["mPrevHashGridValid"] = 0u;
+		else
+			mPushConstants["mPrevHashGridValid"] = 1u;
 	}
 
-	auto makeHashGrid = [&]<typename T>(const string& name, const uint32_t size, const uint cellCount) {
-		struct HashGridConstants {
-			uint mCellCount;
-			float mCellPixelRadius;
-			float mMinCellSize;
-			uint pad;
-			float3 mCameraPosition;
-			float mDistanceScale;
-		};
-		HashGridConstants constants;
-		constants.mCellCount = cellCount;
-		constants.mCellPixelRadius = mHashGridCellPixelRadius;
-		constants.mMinCellSize = mHashGridCellSize;
-		constants.mCameraPosition = viewTransformsBufferData[0].transformPoint(float3::Zero());
-		constants.mDistanceScale = tan(constants.mCellPixelRadius * viewsBufferData[0].mProjection.mVerticalFoV * max(1.0f / extent.height, extent.height / (float)pow2(extent.width)));
+	const uint32_t maxShadowRays = mDefines.at("gDeferShadowRays") ? (extent.width*extent.height*2 + (mLightTrace || mDefines.at("gUseVC") ? mPushConstants["mLightSubpathCount"].get<uint32_t>() : 0))*(mPushConstants["mMaxDepth"].get<uint32_t>()-1) : 0;
 
-		const unordered_map<string, Buffer::View<byte>> buffers {
-			{ "mChecksums"        , mResourcePool.getBuffer<uint32_t>          (commandBuffer.mDevice, name + ".mChecksums", cellCount, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst) },
-			{ "mCounters"         , mResourcePool.getBuffer<uint32_t>          (commandBuffer.mDevice, name + ".mCounters" , cellCount+3, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst) },
-			{ "mAppendDataIndices", mResourcePool.getBuffer<uint2>             (commandBuffer.mDevice, name + ".mAppendDataIndices", size) },
-			{ "mAppendData"       , mResourcePool.getBuffer<T>                 (commandBuffer.mDevice, name + ".mAppendData", size) },
-			{ "mIndices"          , mResourcePool.getBuffer<uint32_t>          (commandBuffer.mDevice, name + ".mIndices", cellCount) },
-			{ "mActiveCellIndices", mResourcePool.getBuffer<uint32_t>          (commandBuffer.mDevice, name + ".mActiveCellIndices", cellCount) },
-			{ "mData"             , mResourcePool.getBuffer<T>                 (commandBuffer.mDevice, name + ".mData", size) },
-			{ "mConstants"        , mResourcePool.uploadData<HashGridConstants>(commandBuffer        , name + ".mConstants", constants, vk::BufferUsageFlagBits::eUniformBuffer|vk::BufferUsageFlagBits::eTransferDst) },
-		};
-
-		Descriptors hashGridDescriptors;
-		for (const auto&[bufferName, buf] : buffers) {
-			descriptors[{"gRenderParams." + name + "." + bufferName, 0 }] = buf;
-			hashGridDescriptors[{ "gHashGrid." + bufferName, 0 }] = buf;
-		}
-		return hashGridDescriptors;
-	};
-	auto clearHashGrid = [&](const Descriptors& hashGridDescriptors) {
-		get<BufferDescriptor>(hashGridDescriptors.at({ "gHashGrid.mChecksums", 0 })).fill(commandBuffer, 0);
-		get<BufferDescriptor>(hashGridDescriptors.at({ "gHashGrid.mCounters", 0 })).fill(commandBuffer, 0);
-
-		Buffer::barriers(commandBuffer, {
-			get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mChecksums",0})),
-			get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mCounters",0})) },
-			vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
-			vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
-	};
-	auto buildHashGrid = [&](const Descriptors& hashGridDescriptors, const string& dataTypeStr, const uint32_t size, const uint cellCount) {
-		auto computeIndicesPipeline = mPipelines.at("HashGridComputeIndices").get(commandBuffer.mDevice, { { "DataType", dataTypeStr } });
-		const auto hashGridDescriptorSets = computeIndicesPipeline->getDescriptorSets(hashGridDescriptors);
-
-		{
-			get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mCounters",0})).barrier(
-				commandBuffer,
-				vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
-				vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
-
-			computeIndicesPipeline->dispatchTiled(commandBuffer, vk::Extent3D{cellCount%1024, cellCount/1024, 1}, hashGridDescriptorSets);
-		}
-
-		{
-			Buffer::barriers(commandBuffer, {
-				get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mIndices",0})),
-				get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mAppendData",0})),
-				get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mAppendDataIndices",0})) },
-				vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
-				vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
-
-			auto swizzlePipeline = mPipelines.at("HashGridSwizzle").get(commandBuffer.mDevice, { { "DataType", dataTypeStr } }, computeIndicesPipeline->descriptorSetLayouts());
-			swizzlePipeline->dispatchTiled(commandBuffer, vk::Extent3D{size%1024, size/1024, 1}, hashGridDescriptorSets);
-
-			get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mData",0})).barrier(
-				commandBuffer,
-				vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
-				vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
-		}
-	};
-
-	const uint32_t maxShadowRays = mDefines.at("gDeferShadowRays") ? max(1u, (extent.width*extent.height*2 + mPushConstants["mLightSubpathCount"].get<uint32_t>())*(mPushConstants["mMaxDepth"].get<uint32_t>()-1)) : 1;
-
-	auto lightVertexBuffer = mResourcePool.getBuffer<array<float4,3>>(commandBuffer.mDevice, "mLightVertices", mDefines.at("gUseVC") ? max(1u, mPushConstants["mLightSubpathCount"].get<uint32_t>()*(mPushConstants["mMaxDepth"].get<uint32_t>()-1)) : 1);
-	auto counterBuffer = mResourcePool.getBuffer<uint32_t>(commandBuffer.mDevice, "mCounters", 2, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst);
+	auto lightVertexBuffer = mResourcePool.getBuffer<array<float4,3>>(commandBuffer.mDevice, "mLightVertices", mDefines.at("gUseVC") ? max(1u, mPushConstants["mLightSubpathCount"].get<uint32_t>()*(mPushConstants["mMaxDepth"].get<uint32_t>()-1)) : 1, vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal, 0);
+	auto counterBuffer = mResourcePool.getBuffer<uint32_t>(commandBuffer.mDevice, "mCounters", 2, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal, 0);
 	descriptors[{ "gRenderParams.mLightVertices", 0 }] = lightVertexBuffer;
 	descriptors[{ "gRenderParams.mCounters", 0 }] = counterBuffer;
-	descriptors[{ "gRenderParams.mShadowRays", 0 }] = mResourcePool.getBuffer<array<float4,4>>(commandBuffer.mDevice, "mShadowRays", max(1u, maxShadowRays));
+	descriptors[{ "gRenderParams.mShadowRays", 0 }] = mResourcePool.getBuffer<array<float4,4>>(commandBuffer.mDevice, "mShadowRays", max(1u, maxShadowRays), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal, 0);
 
-	const uint32_t hashGridSize = max(1u, extent.width*extent.height*(mPushConstants["mMaxDepth"].get<uint32_t>()-1));
-	Descriptors hashGrid = makeHashGrid.operator()<array<float4,3>>("mHashGrid", mDefines.at("gReSTIR_DI_Reuse") ? hashGridSize : 1, mHashGridCellCount);
+	mHashGrid.mSize = mDefines.at("gReSTIR_DI_Reuse") ? max(1u, extent.width*extent.height*(mPushConstants["mMaxDepth"].get<uint32_t>()-1)) : 1;
+	const auto hashGrid = mHashGrid.init(commandBuffer, descriptors, "mHashGrid", GpuHashGrid::Metadata{
+			.mCameraPosition = viewTransformsBufferData[0].transformPoint(float3::Zero()),
+			.mVerticalFoV = viewsBufferData[0].mProjection.mVerticalFoV,
+			.mImageExtent = { extent.width, extent.height },
+		}, "mPrevHashGrid");
 
-	// assign prev hashgrids
-	for (const char* d : {
-		"mChecksums",
-		"mCounters",
-		"mAppendDataIndices",
-		"mAppendData",
-		"mIndices",
-		"mActiveCellIndices",
-		"mData",
-		"mConstants" })
-		descriptors[{string("gRenderParams.mPrevHashGrid.")+d,0}] = (mPushConstants["mPrevHashGridValid"].get<uint32_t>() == 0 ? hashGrid : *mPrevHashGrid).at({string("gHashGrid.")+d,0});
-	if (mDefines.at("gReSTIR_DI_Reuse"))
-		mPrevHashGrid = hashGrid;
-	else
-		mPrevHashGrid.reset();
+	if (!mDefines.at("gReSTIR_DI_Reuse")) {
+		mHashGrid.mResourcePool.clear();
+		mPrevHashGridEvent.reset();
+	}
 
 	// setup shader defines
 
@@ -636,8 +560,6 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 				vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
 				vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 		}
-		if (mDefines.at("gReSTIR_DI_Reuse"))
-			clearHashGrid(hashGrid);
 
 		// light paths
 		if (mDefines.at("gUseVC") || mLightTrace) {
@@ -668,6 +590,24 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 		if (!mLightTrace) {
 			ProfilerScope ps("View paths", &commandBuffer);
 
+			if (mDefines.at("gReSTIR_DI_Reuse")) {
+				if (mPrevHashGridEvent) {
+					vector<vk::BufferMemoryBarrier> barriers;
+					for (const auto&[id, buf] : hashGrid)
+						barriers.emplace_back(vk::BufferMemoryBarrier{
+							vk::AccessFlagBits::eShaderWrite,
+							vk::AccessFlagBits::eShaderRead,
+							VK_QUEUE_FAMILY_IGNORED,
+							VK_QUEUE_FAMILY_IGNORED,
+							**get<BufferDescriptor>(buf).buffer(),
+							get<BufferDescriptor>(buf).offset(),
+							get<BufferDescriptor>(buf).size() });
+					commandBuffer->waitEvents(**mPrevHashGridEvent, vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader, {}, barriers, {});
+					commandBuffer.trackVulkanResource(mPrevHashGridEvent);
+				}
+				mHashGrid.clear(commandBuffer, hashGrid);
+			}
+
 			renderPipeline->dispatchTiled(commandBuffer, extent, descriptorSets, {}, mPushConstants);
 			if (mDefines.at("gMultiDispatch")) {
 				for (uint32_t i = 1; i < mPushConstants["mMaxDepth"].get<uint32_t>(); i++) {
@@ -677,10 +617,15 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 					renderIterationPipeline->dispatchTiled(commandBuffer, extent, descriptorSets, {}, mPushConstants);
 				}
 			}
-		}
 
-		if (mDefines.at("gReSTIR_DI_Reuse"))
-			buildHashGrid(hashGrid, "float4[3]", hashGridSize, mHashGridCellCount);
+			if (mDefines.at("gReSTIR_DI_Reuse")) {
+				mHashGrid.build(commandBuffer, hashGrid);
+
+				mPrevHashGridEvent = make_shared<vk::raii::Event>(*commandBuffer.mDevice, vk::EventCreateInfo{ vk::EventCreateFlagBits::eDeviceOnly });
+				commandBuffer->setEvent(**mPrevHashGridEvent, vk::PipelineStageFlagBits::eComputeShader);
+				commandBuffer.trackVulkanResource(mPrevHashGridEvent);
+			}
+		}
 
 		if (mDefines.at("gDeferShadowRays")) {
 			ProfilerScope ps("Shadow rays", &commandBuffer);

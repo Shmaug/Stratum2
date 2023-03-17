@@ -3,35 +3,42 @@
 #include "rng.hlsli"
 
 struct HashGridConstants {
-    uint mCellCount;
-    float mCellPixelRadius;
-    float mMinCellSize;
-    uint pad;
-    float3 mCameraPosition;
-    float mDistanceScale;
+	float mCellPixelRadius;
+	float mMinCellSize;
+	uint mCellCount;
+	uint pad;
+	float3 mCameraPosition;
+	float mDistanceScale;
 };
 
 struct HashGrid<T> {
 	RWStructuredBuffer<uint> mChecksums;
-    // mCounters[cellIndex] = number of items in cell
-    // mCounters[cellCount] = number of appended items
-    // mCounters[cellCount+1] = prefix sum counter
-    // mCounters[cellCount+2] = number of non-empty cells
-	RWStructuredBuffer<uint> mCounters;
+    // mCellCounters[cellIndex] = number of items in cell
+	RWStructuredBuffer<uint> mCellCounters;
+    // mOtherCounters[0] = number of appended items
+    // mOtherCounters[1] = prefix sum counter
+	RWStructuredBuffer<uint> mOtherCounters;
 
 	// stores (cellIndex, indexInCell) in append-order.
 	RWStructuredBuffer<uint2> mAppendDataIndices;
 	RWStructuredBuffer<T> mAppendData;
 
-	// mIndices[cellIndex] = offset in mData
+    // mIndices[cellIndex] = offset in mDataIndices
 	RWStructuredBuffer<uint> mIndices;
-	RWStructuredBuffer<T> mData;
-
-    RWStructuredBuffer<uint> mActiveCellIndices;
+	RWStructuredBuffer<uint> mDataIndices;
 
     ConstantBuffer<HashGridConstants> mConstants;
 
-    uint GetCurrentSize() { return mCounters[mConstants.mCellCount]; }
+    uint GetCurrentElementCount() { return mOtherCounters[0]; }
+
+    uint GetCellDataOffset(const uint aCellIndex) { return mIndices[aCellIndex]; }
+    uint GetCellDataCount (const uint aCellIndex) { return mCellCounters[aCellIndex]; }
+
+	// aIndex is GetCellDataOffset(cellIndex) + offset, where offset is [ 0, GetCellDataCount(cellIndex) )
+    T Get(const uint aIndex) {
+        return mAppendData[mDataIndices[aIndex]];
+	}
+
 
     float GetCellSize(const float3 aPosition) {
         if (mConstants.mCellPixelRadius <= 0)
@@ -40,11 +47,6 @@ struct HashGrid<T> {
         const float step = cameraDistance * mConstants.mDistanceScale;
 		return mConstants.mMinCellSize * (1 << uint(log2(step / mConstants.mMinCellSize)));
 	}
-
-	uint2 GetCellDataRange(const uint cellIndex) {
-        const uint start = mIndices[cellIndex];
-        return uint2(start, start + mCounters[cellIndex]);
-    }
 
     uint FindCellIndex<let bInsert : bool>(const float3 aPosition, float aCellSize = 0, const int3 aOffset = 0) {
         if (aCellSize == 0) aCellSize = GetCellSize(aPosition);
@@ -81,18 +83,11 @@ struct HashGrid<T> {
 
 		// append item to cell by incrementing cell counter
 		uint indexInCell;
-		InterlockedAdd(mCounters[cellIndex], 1, indexInCell);
-
-        // keep track of non-empty cells
-        if (indexInCell == 0) {
-            uint count;
-            InterlockedAdd(mCounters[mConstants.mCellCount + 2], 1, count);
-            mActiveCellIndices[count] = cellIndex;
-        }
+		InterlockedAdd(mCellCounters[cellIndex], 1, indexInCell);
 
 		// store payload
 		uint appendIndex;
-		InterlockedAdd(mCounters[mConstants.mCellCount], 1, appendIndex);
+		InterlockedAdd(mOtherCounters[0], 1, appendIndex);
 		mAppendDataIndices[appendIndex] = uint2(cellIndex, indexInCell);
         mAppendData[appendIndex] = data;
         return appendIndex;
@@ -104,19 +99,19 @@ struct HashGrid<T> {
         if (aCellIndex >= mConstants.mCellCount) return;
 
         uint offset;
-        InterlockedAdd(mCounters[mConstants.mCellCount + 1], mCounters[aCellIndex], offset);
+        InterlockedAdd(mOtherCounters[1], mCellCounters[aCellIndex], offset);
 
 		mIndices[aCellIndex] = offset;
 	}
 
 	// Sort items from append order into cells. Should be called with 1 thread per item.
     void Swizzle(const uint aAppendIndex) {
-        if (aAppendIndex >= GetCurrentSize()) return;
+        if (aAppendIndex >= GetCurrentElementCount()) return;
 
 		const uint2 data = mAppendDataIndices[aAppendIndex];
 		const uint cellIndex   = data[0];
 		const uint indexInCell = data[1];
 
-        mData[mIndices[cellIndex] + indexInCell] = mAppendData[aAppendIndex];
+        mDataIndices[GetCellDataOffset(cellIndex) + indexInCell] = aAppendIndex;
 	}
 };

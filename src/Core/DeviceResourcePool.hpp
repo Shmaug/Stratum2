@@ -52,6 +52,7 @@ public:
 		if (images_it == mImages.end()) return {};
 		const list<Image::View>& images = images_it->second;
 
+		// find newest resource
 		Image::View img;
 		uint32_t frame = 0;
 		for (const Image::View& i : images) {
@@ -68,6 +69,7 @@ public:
 		if (buffers_it == mBuffers.end()) return {};
 		const list<Buffer::View<byte>>& buffers = buffers_it->second;
 
+		// find newest resource
 		Buffer::View<T> buf;
 		uint32_t frame = 0;
 		for (const Buffer::View<byte>& b : buffers) {

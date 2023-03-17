@@ -69,6 +69,7 @@ struct RenderParams {
     RWStructuredBuffer<uint> mLightPathLengths;
 
     ConstantBuffer<VcmConstants> mVcmConstants;
+
     HashGrid<uint> mLightHashGrid;
 
     HashGrid<DirectIlluminationReservoir> mDirectIlluminationReservoirs;

@@ -22,19 +22,18 @@ VCM::VCM(Node& node) : mNode(node) {
 	Device& device = *mNode.findAncestor<Device>();
 	createPipelines(device);
 
+	mLightHashGrid = GpuHashGrid(device, sizeof(uint32_t), 100000, 0.1f);
+	mDIHashGrid  = GpuHashGrid(device, sizeof(DirectIlluminationReservoir), 100000, 0.1f);
+	mLVCHashGrid = GpuHashGrid(device, sizeof(LVCReservoir), 100000, 0.1f);
+
 	mPushConstants.mMinPathLength = 0;
 	mPushConstants.mMaxPathLength = 6;
 	mPushConstants.mEnvironmentSampleProbability = 0.5f;
-	mPushConstants.mHashGridCellCount = 65536;
-	mPushConstants.mHashGridCellPixelRadius = 0;
-	mPushConstants.mHashGridMinCellSize = .1f;
-	mPushConstants.mHashGridJitterRadius = 0.05f;
 	mPushConstants.mLightImageQuantization = 16384;
 	mPushConstants.mDIReservoirSampleCount = 32;
 	mPushConstants.mDIReservoirMaxM = 3;
 	mPushConstants.mLVCReservoirSampleCount = 8;
 	mPushConstants.mLVCReservoirMaxM = 3;
-	mPushConstants.mLVCHashGridSampleCount = 8;
 
 	// initialize constants
 	if (auto arg = device.mInstance.findArgument("minPathLength"); arg) mPushConstants.mMinPathLength = atoi(arg->c_str());
@@ -194,11 +193,6 @@ void VCM::drawGui() {
 			}
 
 			if (mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache) {
-				if (ImGui::Checkbox("Cell resampling", &mLVCHashGridSampling)) changed = true;
-				if (mLVCHashGridSampling) {
-					if (ImGui::DragScalar("Cell RIS samples", ImGuiDataType_U32, &mPushConstants.mLVCHashGridSampleCount, 1, &one)) changed = true;
-				}
-
 				if (ImGui::CheckboxFlags("LVC reservoir resampling", reinterpret_cast<uint32_t*>(&mLVCReservoirFlags), (uint32_t)VcmReservoirFlags::eRIS)) changed = true;
 				if (mLVCReservoirFlags & VcmReservoirFlags::eRIS) {
 					ImGui::Indent();
@@ -229,16 +223,20 @@ void VCM::drawGui() {
 		}
 
 		// hash grid
-		if (mAlgorithm == VcmAlgorithmType::kPpm || mAlgorithm == VcmAlgorithmType::kBpm || mAlgorithm == VcmAlgorithmType::kVcm ||
-			(mAlgorithm != VcmAlgorithmType::kLightTrace && (mDIReservoirFlags & VcmReservoirFlags::eReuse)) ||
-			(mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache && ((mLVCReservoirFlags & VcmReservoirFlags::eReuse) || mLVCHashGridSampling))) {
-			if (ImGui::DragScalar("Hash grid cells", ImGuiDataType_U32, &mPushConstants.mHashGridCellCount)) changed = true;
-			if (ImGui::DragFloat("Hash grid min cell size", &mPushConstants.mHashGridMinCellSize, .01f, 1e-4f, 1000)) changed = true;
-			if (ImGui::DragFloat("Hash grid cell pixel radius", &mPushConstants.mHashGridCellPixelRadius, .5f, 0, 1000)) changed = true;
+		if (mAlgorithm == VcmAlgorithmType::kPpm || mAlgorithm == VcmAlgorithmType::kBpm || mAlgorithm == VcmAlgorithmType::kVcm) {
+			if (ImGui::DragScalar("Photon hash grid cells", ImGuiDataType_U32, &mLightHashGrid.mCellCount)) changed = true;
+			if (ImGui::DragFloat("Photon hash grid min cell size", &mLightHashGrid.mCellSize, .01f, 1e-4f, 1000)) changed = true;
+			if (ImGui::DragFloat("Photon hash grid cell pixel radius", &mLightHashGrid.mCellPixelRadius, .5f, 0, 1000)) changed = true;
 		}
-		if ((mAlgorithm != VcmAlgorithmType::kLightTrace && (mDIReservoirFlags & VcmReservoirFlags::eReuse)) ||
-			(mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache && (mLVCReservoirFlags & VcmReservoirFlags::eReuse))) {
-			if (ImGui::DragFloat("Hash grid jitter radius", &mPushConstants.mHashGridJitterRadius, .005f)) changed = true;
+		if (mAlgorithm != VcmAlgorithmType::kLightTrace && (mDIReservoirFlags & VcmReservoirFlags::eReuse))  {
+			if (ImGui::DragScalar("DI hash grid cells", ImGuiDataType_U32, &mDIHashGrid.mCellCount)) changed = true;
+			if (ImGui::DragFloat("DI hash grid min cell size", &mDIHashGrid.mCellSize, .01f, 1e-4f, 1000)) changed = true;
+			if (ImGui::DragFloat("DI hash grid cell pixel radius", &mDIHashGrid.mCellPixelRadius, .5f, 0, 1000)) changed = true;
+		}
+		if (mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache && (mLVCReservoirFlags & VcmReservoirFlags::eReuse)) {
+			if (ImGui::DragScalar("LVC hash grid cells", ImGuiDataType_U32, &mLVCHashGrid.mCellCount)) changed = true;
+			if (ImGui::DragFloat("LVC hash grid min cell size", &mLVCHashGrid.mCellSize, .01f, 1e-4f, 1000)) changed = true;
+			if (ImGui::DragFloat("LVC hash grid cell pixel radius", &mLVCHashGrid.mCellPixelRadius, .5f, 0, 1000)) changed = true;
 		}
 
 		if (mAlgorithm == VcmAlgorithmType::kPpm || mAlgorithm == VcmAlgorithmType::kBpm || mAlgorithm == VcmAlgorithmType::kVcm) {
@@ -386,82 +384,6 @@ void VCM::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) 
 	const uint32_t maxLightVertices  = mPushConstants.mLightSubPathCount*mPushConstants.mMaxPathLength;
 	const uint32_t maxCameraVertices = mPushConstants.mLightSubPathCount*mPushConstants.mMaxPathLength;
 
-	auto makeHashGrid = [&]<typename T>(const string& name, const uint32_t size, const uint cellCount) {
-		struct HashGridConstants {
-			uint mCellCount;
-			float mCellPixelRadius;
-			float mMinCellSize;
-			uint pad;
-			float3 mCameraPosition;
-			float mDistanceScale;
-		};
-		HashGridConstants constants;
-		constants.mCellCount = cellCount;
-		constants.mCellPixelRadius = mPushConstants.mHashGridCellPixelRadius;
-		constants.mMinCellSize = mPushConstants.mHashGridMinCellSize;
-		constants.mCameraPosition = viewTransforms[0].transformPoint(float3::Zero());
-		constants.mDistanceScale = tan(constants.mCellPixelRadius * views[0].mProjection.mVerticalFoV * max(1.0f / extent.height, extent.height / (float)pow2(extent.width)));
-
-		const unordered_map<string, Buffer::View<byte>> buffers {
-			{ "mChecksums"        , mResourcePool.getBuffer<uint32_t>          (commandBuffer.mDevice, name + ".mChecksums", cellCount, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst) },
-			{ "mCounters"         , mResourcePool.getBuffer<uint32_t>          (commandBuffer.mDevice, name + ".mCounters" , cellCount+3, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst) },
-			{ "mAppendDataIndices", mResourcePool.getBuffer<uint2>             (commandBuffer.mDevice, name + ".mAppendDataIndices", size) },
-			{ "mAppendData"       , mResourcePool.getBuffer<T>                 (commandBuffer.mDevice, name + ".mAppendData", size) },
-			{ "mIndices"          , mResourcePool.getBuffer<uint32_t>          (commandBuffer.mDevice, name + ".mIndices", cellCount) },
-			{ "mActiveCellIndices", mResourcePool.getBuffer<uint32_t>          (commandBuffer.mDevice, name + ".mActiveCellIndices", cellCount) },
-			{ "mData"             , mResourcePool.getBuffer<T>                 (commandBuffer.mDevice, name + ".mData", size) },
-			{ "mConstants"        , mResourcePool.uploadData<HashGridConstants>(commandBuffer        , name + ".mConstants", constants, vk::BufferUsageFlagBits::eUniformBuffer|vk::BufferUsageFlagBits::eTransferDst) },
-		};
-
-		Descriptors hashGridDescriptors;
-		for (const auto&[bufferName, buf] : buffers) {
-			descriptors[{"gRenderParams." + name + "." + bufferName, 0 }] = buf;
-			hashGridDescriptors[{ "gHashGrid." + bufferName, 0 }] = buf;
-		}
-		return hashGridDescriptors;
-	};
-	auto clearHashGrid = [&](const Descriptors& hashGridDescriptors) {
-		get<BufferDescriptor>(hashGridDescriptors.at({ "gHashGrid.mChecksums", 0 })).fill(commandBuffer, 0);
-		get<BufferDescriptor>(hashGridDescriptors.at({ "gHashGrid.mCounters", 0 })).fill(commandBuffer, 0);
-
-		Buffer::barriers(commandBuffer, {
-			get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mChecksums",0})),
-			get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mCounters",0})) },
-			vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
-			vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
-	};
-	auto buildHashGrid = [&](const Descriptors& hashGridDescriptors, const string& dataTypeStr, const uint32_t size, const uint cellCount) {
-		auto computeIndicesPipeline = mRenderPipelines[eHashGridComputeIndices].get(commandBuffer.mDevice, { { "DataType", dataTypeStr } });
-		const auto hashGridDescriptorSets = computeIndicesPipeline->getDescriptorSets(hashGridDescriptors);
-
-		{
-			get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mCounters",0})).barrier(
-				commandBuffer,
-				vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
-				vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
-
-			computeIndicesPipeline->dispatchTiled(commandBuffer, vk::Extent3D{cellCount%1024, cellCount/1024, 1}, hashGridDescriptorSets);
-		}
-
-		{
-			Buffer::barriers(commandBuffer, {
-				get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mIndices",0})),
-				get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mAppendData",0})),
-				get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mAppendDataIndices",0})) },
-				vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
-				vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
-
-			auto swizzlePipeline = mRenderPipelines[eHashGridSwizzle].get(commandBuffer.mDevice, { { "DataType", dataTypeStr } }, computeIndicesPipeline->descriptorSetLayouts());
-			swizzlePipeline->dispatchTiled(commandBuffer, vk::Extent3D{size%1024, size/1024, 1}, hashGridDescriptorSets);
-
-			get<BufferDescriptor>(hashGridDescriptors.at({"gHashGrid.mData",0})).barrier(
-				commandBuffer,
-				vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
-				vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead);
-		}
-	};
-
-
 	// specify defines
 	bool useVC = false;
 	bool useVM = false;
@@ -496,8 +418,6 @@ void VCM::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) 
 		useVC = true;
 		if (mUseLightVertexCache) {
 			defines["gUseLVC"] = "true";
-			if (mLVCHashGridSampling)
-				defines["gLVCHashGridSampling"] = "true";
 		}
 		break;
 	case VcmAlgorithmType::kVcm:
@@ -512,7 +432,7 @@ void VCM::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) 
 	}
 
 
-	Descriptors lightHashGrid, diReservoirHashGrid, lvcReservoirHashGrid;
+	GpuHashGrid::FrameData lightHashGrid, diReservoirHashGrid, lvcReservoirHashGrid;
 
 	// update values, allocate data
 	{
@@ -566,25 +486,18 @@ void VCM::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) 
 		descriptors[{"gRenderParams.mLightVertices",0}]    = mResourcePool.getBuffer<PackedVcmVertex>(commandBuffer.mDevice, "mLightVertices", maxLightVertices);
 		descriptors[{"gRenderParams.mLightPathLengths",0}] = mResourcePool.getBuffer<uint32_t>       (commandBuffer.mDevice, "mLightPathLengths", mPushConstants.mLightSubPathCount, vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
 
-		lightHashGrid        = makeHashGrid.operator()<uint32_t>("mLightHashGrid", mPushConstants.mHashGridCellCount, maxLightVertices);
-		diReservoirHashGrid  = makeHashGrid.operator()<DirectIlluminationReservoir>("mDirectIlluminationReservoirs", mPushConstants.mHashGridCellCount, maxCameraVertices);
-		lvcReservoirHashGrid = makeHashGrid.operator()<LVCReservoir>("mLVCReservoirs", mPushConstants.mHashGridCellCount, maxCameraVertices);
+		mLightHashGrid.mSize = maxLightVertices;
+		mDIHashGrid.mSize = maxCameraVertices;
+		mLVCHashGrid.mSize = maxCameraVertices;
 
-		// assign prev hashgrids
-		auto assignPrevHashgrid = [&](const string& name) {
-			for (const char* d : {
-				"mChecksums",
-				"mCounters",
-				"mAppendDataIndices",
-				"mAppendData",
-				"mIndices",
-				"mActiveCellIndices",
-				"mData",
-				"mConstants" })
-				descriptors[{"gRenderParams.mPrev"+name+"."+d,0}] = (mPrevDescriptors.empty() ? descriptors : mPrevDescriptors).at({"gRenderParams.m"+name+"."+d,0});
+		GpuHashGrid::Metadata md{
+			.mCameraPosition = viewTransforms[0].transformPoint(float3::Zero()),
+			.mVerticalFoV = views[0].mProjection.mVerticalFoV,
+			.mImageExtent = mPushConstants.mOutputExtent,
 		};
-		assignPrevHashgrid("DirectIlluminationReservoirs");
-		assignPrevHashgrid("LVCReservoirs");
+		lightHashGrid        = mLightHashGrid.init(commandBuffer, descriptors, "mLightHashGrid", md);
+		diReservoirHashGrid  = mDIHashGrid.init(commandBuffer, descriptors, "mDirectIlluminationReservoirs", md, "mPrevDirectIlluminationReservoirs");
+		lvcReservoirHashGrid = mLVCHashGrid.init(commandBuffer, descriptors, "mLVCReservoirs", md, "mPrevLVCReservoirs");
 	}
 
 	mPrevDescriptors = descriptors;
@@ -630,13 +543,12 @@ void VCM::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) 
 	{
 		// clearing things
 		{
-			if (useVM || (mLVCHashGridSampling && mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache))
-				clearHashGrid(lightHashGrid);
-
+			if (useVM)
+				mLightHashGrid.clear(commandBuffer, lightHashGrid);
 			if ((mDIReservoirFlags & VcmReservoirFlags::eReuse) && mAlgorithm != VcmAlgorithmType::kPpm && mAlgorithm != VcmAlgorithmType::kLightTrace)
-				clearHashGrid(diReservoirHashGrid);
+				mDIHashGrid.clear(commandBuffer, diReservoirHashGrid);
 			if ((mLVCReservoirFlags & VcmReservoirFlags::eReuse) && mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache)
-				clearHashGrid(lvcReservoirHashGrid);
+				mLVCHashGrid.clear(commandBuffer, lvcReservoirHashGrid);
 
 			// clear light image
 			if (mAlgorithm != VcmAlgorithmType::kPathTrace) {
@@ -671,8 +583,8 @@ void VCM::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) 
 				vk::MemoryBarrier(vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead), {}, {});
 
 			// Build hash grid over light vertices
-			if (useVM || (mLVCHashGridSampling && mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache))
-				buildHashGrid(lightHashGrid, "uint", maxLightVertices, mPushConstants.mHashGridCellCount);
+			if (useVM)
+				mLightHashGrid.build(commandBuffer, lightHashGrid);
 		}
 
 		// generate camera paths
@@ -683,9 +595,9 @@ void VCM::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) 
 
 		// build hashgrids
 		if ((mDIReservoirFlags & VcmReservoirFlags::eReuse) && mAlgorithm != VcmAlgorithmType::kPpm && mAlgorithm != VcmAlgorithmType::kLightTrace)
-			buildHashGrid(diReservoirHashGrid, "float4[3]", maxLightVertices, mPushConstants.mHashGridCellCount);
+			mDIHashGrid.build(commandBuffer, diReservoirHashGrid);
 		if ((mLVCReservoirFlags & VcmReservoirFlags::eReuse) && mAlgorithm == VcmAlgorithmType::kBpt && mUseLightVertexCache)
-			buildHashGrid(lvcReservoirHashGrid, "float4[8]", maxLightVertices, mPushConstants.mHashGridCellCount);
+			mLVCHashGrid.build(commandBuffer, lvcReservoirHashGrid);
 	}
 
 	const Image::View& outputImage = get<Image::View>(get<ImageDescriptor>(descriptors.at({"gRenderParams.mOutput",0})));

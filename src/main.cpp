@@ -67,7 +67,10 @@ struct App {
 		mInstance = mRootNode->makeComponent<Instance>(args);
 
 		const shared_ptr<Node> deviceNode = mRootNode->addChild("Device");
-		mWindow = deviceNode->makeComponent<Window>(*mInstance, "Stratum2", vk::Extent2D{ 1600, 900 });
+		vk::Extent2D windowSize{ 1600, 900 };
+		if (auto arg = mInstance->findArgument("width"); arg) windowSize.width = stoi(*arg);
+		if (auto arg = mInstance->findArgument("height"); arg) windowSize.height = stoi(*arg);
+		mWindow = deviceNode->makeComponent<Window>(*mInstance, "Stratum2", windowSize);
 
 		vk::raii::PhysicalDevice physicalDevice = nullptr;
 		tie(physicalDevice, mPresentQueueFamily) = mWindow->findPhysicalDevice();
@@ -75,8 +78,11 @@ struct App {
 		mDevice       = deviceNode->makeComponent<Device>(*mInstance, physicalDevice);
 		mPresentQueue = vk::raii::Queue(**mDevice, mPresentQueueFamily, 0);
 
+		uint32_t minImages = 2;
+		if (auto arg = mInstance->findArgument("minImages"); arg) minImages = stoi(*arg);
+
 		auto swapchainNode = deviceNode->addChild("Swapchain");
-		mSwapchain = swapchainNode->makeComponent<Swapchain>(*mDevice, "Swapchain", *mWindow, 3);
+		mSwapchain = swapchainNode->makeComponent<Swapchain>(*mDevice, "Swapchain", *mWindow, 1);
 		mSemaphores.resize(mSwapchain->imageCount());
 		for (auto& s : mSemaphores) {
 			s = make_shared<vk::raii::Semaphore>(**mDevice, vk::SemaphoreCreateInfo());

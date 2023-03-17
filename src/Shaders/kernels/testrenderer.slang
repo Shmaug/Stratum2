@@ -38,7 +38,6 @@ struct PushConstants {
 #include "common/lights.hlsli"
 #include "common/hashgrid.hlsli"
 
-
 struct PackedLightVertex {
     float3 mLocalPosition;
     uint mInstancePrimitiveIndex;
@@ -129,20 +128,24 @@ struct ShadowRay {
     }
 };
 
+struct PackedReservoirSample<T> {
+    T mSample;
+    float mCachedTargetPdf;
+    float W;
+    float M;
+    uint pad;
+};
+
 struct HashGridData {
     float3 mLocalPosition;
     uint mInstancePrimitiveIndex;
-
-    float4 mDI_Sample;
-
-    float mDI_CachedTargetPdf;
-    float mDI_W;
-    float mDI_M;
-    uint mPackedLocalDirIn;
+    PackedReservoirSample<float4> mDIReservoir;
+    float3 mLocalDirIn;
+    float pad;
+    PackedReservoirSample<PackedLightVertex> mLVC_Sample;
 
     uint getInstanceIndex()  { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
     uint getPrimitiveIndex() { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
-    float3 getLocalDirIn() { return unpackNormal(mPackedLocalDirIn); }
     ShadingData getShadingData() {
         const uint instanceIndex = getInstanceIndex();
         ShadingData sd = gScene.makeShadingData(gScene.mInstances[instanceIndex], gScene.mInstanceTransforms[instanceIndex], mLocalPosition, getPrimitiveIndex());
@@ -151,8 +154,7 @@ struct HashGridData {
 	}
 };
 
-#define gQuantizationFactor 16384
-#define gMisVmWeightFactor 0
+#define gRadianceQuantizationFactor 16384
 
 struct RenderParams {
     StructuredBuffer<ViewData> mViews;
@@ -219,8 +221,8 @@ struct RenderParams {
     }
 
     void AddRadianceInterlocked(const uint2 index, const float3 radiance) {
-        const uint idx = index.y * gPushConstants.mOutputExtent.x + index.x;
-        const int3 ri = int3(max(0,radiance) * gQuantizationFactor);
+		const uint idx = index.y * gPushConstants.mOutputExtent.x + index.x;
+		const int3 ri = int3(max(0, radiance) * gRadianceQuantizationFactor);
         uint3 p;
         InterlockedAdd(mOutputAtomic[idx][0], ri[0], p[0]);
         InterlockedAdd(mOutputAtomic[idx][1], ri[1], p[1]);
@@ -273,9 +275,11 @@ float mis(const float a, const float b) {
     return a2 / (a2 + mis(b));
 }
 
+#define gMisVmWeightFactor 0
 
 static PathState sPathState;
 static uint2 sPixelIndex;
+
 
 
 void TraceConnectionRay(const float3 rayOrigin, const float3 rayDirection, const float rayDistance, float3 contrib, const float weight, const uint viewVertices, const uint lightVertices) {
@@ -311,6 +315,9 @@ float AdjustIntersectionDistance(const float d) {
     return max(d * 0.99, d - 1e-2);
 }
 
+// ---------------------------------------------------------------------------------------------------------
+// ------------------------------------ Bidirectional vertex connection ------------------------------------
+// ---------------------------------------------------------------------------------------------------------
 
 void StoreLightVertex(const ShadingData shadingData, const float3 localDirIn) {
     PackedLightVertex v;
@@ -424,6 +431,9 @@ void ConnectToLightSubpath(const Interaction bsdf, const ShadingData shadingData
     TraceConnectionRay(rayOrigin, r.mDirectionToLight, AdjustIntersectionDistance(r.mDistanceToLight), contrib, misWeight, sPathState.mPathLength+1, r.mSubpathLength+1);
 }
 
+// ---------------------------------------------------------------------------------------------------------
+// --------------------------------------------- Light tracing ---------------------------------------------
+// ---------------------------------------------------------------------------------------------------------
 
 void ConnectToCamera(const Interaction bsdf, const ShadingData shadingData, const float3 localDirIn) {
 	float2 pixelCoord;
@@ -512,6 +522,9 @@ void ConnectToCamera(const Interaction bsdf, const ShadingData shadingData, cons
     #endif
 }
 
+// ---------------------------------------------------------------------------------------------------------
+// ------------------------------ Direct illumination / Next Event Estimation ------------------------------
+// ---------------------------------------------------------------------------------------------------------
 
 float ComputeMIS_DI(const IlluminationSampleRecord r, const ReflectanceEvalRecord f, const float directPdfW, const float cosOut, const float AtoW) {
     #ifdef gUseVC
@@ -551,7 +564,7 @@ float ComputeMIS_DI(const IlluminationSampleRecord r, const ReflectanceEvalRecor
 	#endif
 }
 
-struct ReservoirSampleData {
+struct ReservoirSampleDataDI {
     float4 mSample;
 	float mSourcePdf;
     float mCachedMisWeight;
@@ -575,7 +588,7 @@ struct ReservoirSampleData {
 
 			ReflectanceEvalRecord f = bsdf.evaluateReflectance<false>(localDirIn, localDirOut);
 			if (!isMedium)
-						f.mReflectance *= shadingData.shadingNormalCorrection<false>(localDirIn, localDirOut);
+				f.mReflectance *= shadingData.shadingNormalCorrection<false>(localDirIn, localDirOut);
 			const float contProb = bsdf.continuationProb();
 			f.mFwdPdfW *= contProb;
 			f.mRevPdfW *= contProb;
@@ -587,65 +600,78 @@ struct ReservoirSampleData {
 			mCachedMisWeight = ComputeMIS_DI(r, f, mSourcePdf * AtoW, isMedium ? 1 : abs(localDirOut.z), AtoW);
 
 			const float3 rayOrigin = isMedium ?
-			shadingData.mPosition :
-			rayOffset(shadingData.mPosition, shadingData.getGeometryNormal(), r.mDirectionToLight);
+				shadingData.mPosition :
+				rayOffset(shadingData.mPosition, shadingData.getGeometryNormal(), r.mDirectionToLight);
 			mVisibilityRay = makeRay(rayOrigin, r.mDirectionToLight, 0, AdjustIntersectionDistance(r.mDistanceToLight));
        }
     }
 };
 
-void ReservoirReuseDI(const Interaction bsdf, const ShadingData shadingData, const float3 localDirIn, const HashGridData q, inout ReservoirSampleData currentSample, inout float integrationWeight) {
-	if (q.mDI_M <= 0)
-		return;
-
-	// target pdfs
-
-    // currentSample in q's domain
-    ReservoirSampleData currentSample_q;
-    {
-		ShadingData sd_i = q.getShadingData();
-		if (gHasMedia && sd_i.isMedium()) {
-			currentSample_q = ReservoirSampleData(Medium(shadingData.getMaterialAddress()), sd_i, q.getLocalDirIn(), currentSample.mSample);
-		} else {
-			gScene.ApplyNormalMap(sd_i);
-			currentSample_q = ReservoirSampleData(gScene.LoadMaterial(sd_i), sd_i, q.getLocalDirIn(), currentSample.mSample);
-		}
-    }
-
-	// resampling MIS weights
-
-    const float M = gPushConstants.mCandidateSamples;
-    const float m0 = mis(currentSample.mTargetPdf * M, currentSample_q.mTargetPdf * q.mDI_M);
-
+void ReservoirReuse(const Interaction bsdf, const ShadingData shadingData, const float3 localDirIn, const HashGridData qd, const PackedReservoirSample<float4> q, inout ReservoirSampleDataDI currentSample, inout float integrationWeight, inout float M) {
     // q's sample in the current domain
-    const ReservoirSampleData newSample = ReservoirSampleData(bsdf, shadingData, localDirIn, q.mDI_Sample);
-    const float m1 = mis(q.mDI_CachedTargetPdf * q.mDI_M, newSample.mTargetPdf * M);
+    ReservoirSampleDataDI newSample = ReservoirSampleDataDI(bsdf, shadingData, localDirIn, q.mSample);
+	#ifdef gReSTIR_DI_Reuse_Visibility
+	if (newSample.mTargetPdf > 0) {
+		float transDirPdf, transNeePdf;
+		gScene.traceVisibilityRay(newSample.mVisibilityRay, sPathState.mRng, sPathState.mCurrentMedium, newSample.mCachedContribution, transDirPdf, transNeePdf);
+    }
+	#endif
+
+	// target pdf in q's domain of currentSample
+	float phat_q = 0;
+	{
+        ShadingData sd_q = qd.getShadingData();
+        ReservoirSampleDataDI currentSample_q;
+        if (gHasMedia && sd_q.isMedium()) {
+            currentSample_q = ReservoirSampleDataDI(Medium(sd_q.getMaterialAddress()), sd_q, qd.mLocalDirIn, currentSample.mSample);
+		} else {
+            gScene.ApplyNormalMap(sd_q);
+            currentSample_q = ReservoirSampleDataDI(gScene.LoadMaterial(sd_q)        , sd_q, qd.mLocalDirIn, currentSample.mSample);
+		}
+
+		if (currentSample_q.mTargetPdf > 0) {
+			#ifdef gReSTIR_DI_Reuse_Visibility
+			// note: this ray should really be traced through the previous frame's acceleration structure
+			float transDirPdf, transNeePdf;
+			gScene.traceVisibilityRay(currentSample_q.mVisibilityRay, sPathState.mRng, sPathState.mCurrentMedium, currentSample_q.mCachedContribution, transDirPdf, transNeePdf);
+			#endif
+			phat_q = currentSample_q.mTargetPdf;
+		}
+	}
+
+    // Resampling MIS weights
+
+    const float m0 = mis(M*currentSample.mTargetPdf, q.M * phat_q);
+    const float m1 = mis(q.M * q.mCachedTargetPdf  , M * newSample.mTargetPdf);
 
 	// RIS weights
 
-	const float shiftJacobian = 1;
-
     const float w0 = m0 * currentSample.mTargetPdf * integrationWeight;
-    const float w1 = m1 * newSample.mTargetPdf * q.mDI_W * shiftJacobian;
+    const float w1 = m1 * newSample.mTargetPdf * q.W;
+
+	M += q.M;
 
 	// create new reservoir from current and new reservoirs
 
 	const float totalWeight = w0 + w1;
     if (sPathState.mRng.nextFloat().x * totalWeight <= w1) {
         currentSample = newSample;
-	}
+    }
 
-    integrationWeight = totalWeight / currentSample.mTargetPdf;
+	if (currentSample.mTargetPdf > 0)
+		integrationWeight = totalWeight / currentSample.mTargetPdf;
+	else
+		integrationWeight = 0;
 }
 
-ReservoirSampleData SampleIlluminationReSTIR(const Interaction bsdf, const ShadingData shadingData, const float3 localDirIn, out float integrationWeight) {
-	ReservoirSampleData sample;
+ReservoirSampleDataDI SampleIlluminationReSTIR(const Interaction bsdf, const ShadingData shadingData, const float3 localDirIn, out float integrationWeight) {
+	ReservoirSampleDataDI sample;
 	float wsum = 0;
 
 	// initial ris
 
     for (uint i = 0; i < gPushConstants.mCandidateSamples; i++) {
-        const ReservoirSampleData xi = ReservoirSampleData(bsdf, shadingData, localDirIn, sPathState.mRng.nextFloat());
+        const ReservoirSampleDataDI xi = ReservoirSampleDataDI(bsdf, shadingData, localDirIn, sPathState.mRng.nextFloat());
         if (xi.mTargetPdf <= 0)
             continue;
 
@@ -653,26 +679,33 @@ ReservoirSampleData SampleIlluminationReSTIR(const Interaction bsdf, const Shadi
         if (sPathState.mRng.nextFloat().x <= xi.mRISWeight / wsum)
             sample = xi;
     }
-
-    integrationWeight = wsum / (gPushConstants.mCandidateSamples * sample.mTargetPdf);
+	if (sample.mTargetPdf > 0)
+    	integrationWeight = wsum / (gPushConstants.mCandidateSamples*sample.mTargetPdf);
+	else
+		integrationWeight = 0;
 
 	// reuse
 
 	#ifdef gReSTIR_DI_Reuse
 
-	// TODO: trace visibility ray, zero integrationWeight if occluded
+	#ifdef gReSTIR_DI_Reuse_Visibility
+    float transDirPdf, transNeePdf;
+    gScene.traceVisibilityRay(sample.mVisibilityRay, sPathState.mRng, sPathState.mCurrentMedium, sample.mCachedContribution, transDirPdf, transNeePdf);
+	if (all(sample.mCachedContribution <= 0) || transNeePdf <= 0)
+		integrationWeight = 0;
+	#endif
 
-    float Mq = 0;
-    if (gPushConstants.mPrevHashGridValid) {
-		const float3 queryPos = shadingData.mPosition;
-        const float cellSize = gRenderParams.mPrevHashGrid.GetCellSize(queryPos);
-        const uint cellIndex = gRenderParams.mPrevHashGrid.FindCellIndex<false>(queryPos, cellSize);
+	float M = gPushConstants.mCandidateSamples;
+    if (gPushConstants.mPrevHashGridValid != 0) {
+        const float2 discRng = sPathState.mRng.nextFloat().xy;
+        const float2 disc = sampleConcentricDisc(discRng.x, discRng.y) * gRenderParams.mPrevHashGrid.GetCellSize(shadingData.mPosition);
+        const uint cellIndex = gRenderParams.mPrevHashGrid.FindCellIndex<false>(shadingData.mPosition + shadingData.toWorld(float3(disc, 0)));
         if (cellIndex != -1) {
-			const uint2 range = gRenderParams.mPrevHashGrid.GetCellDataRange(cellIndex);
-            if (range.y > range.x) {
-                const HashGridData q = gRenderParams.mPrevHashGrid.mData[range.x + sPathState.mRng.next().x % (range.y - range.x)];
-                Mq = q.mDI_M;
-                ReservoirReuseDI(bsdf, shadingData, localDirIn, q, sample, integrationWeight);
+			const uint count  = gRenderParams.mPrevHashGrid.GetCellDataCount(cellIndex);
+            if (count > 0) {
+                const uint offset = gRenderParams.mPrevHashGrid.GetCellDataOffset(cellIndex);
+                const HashGridData hashGridData = gRenderParams.mPrevHashGrid.Get(offset + sPathState.mRng.next().x % count);
+                ReservoirReuse(bsdf, shadingData, localDirIn, hashGridData, hashGridData.mDIReservoir, sample, integrationWeight, M);
             }
         }
 	}
@@ -682,11 +715,12 @@ ReservoirSampleData SampleIlluminationReSTIR(const Interaction bsdf, const Shadi
         HashGridData d;
         d.mLocalPosition = gScene.mInstanceInverseTransforms[sPathState.getInstanceIndex()].transformPoint(shadingData.mPosition);
         d.mInstancePrimitiveIndex = sPathState.mInstancePrimitiveIndex;
-        d.mDI_Sample = sample.mSample;
-        d.mDI_CachedTargetPdf = sample.mTargetPdf;
-        d.mDI_W = integrationWeight;
-        d.mDI_M = min(gPushConstants.mMaxM * gPushConstants.mCandidateSamples, gPushConstants.mCandidateSamples + Mq);
-        gRenderParams.mHashGrid.Append(shadingData.mPosition, d, gRenderParams.mHashGrid.GetCellSize(shadingData.mPosition));
+        d.mDIReservoir.mSample          = sample.mSample;
+        d.mDIReservoir.mCachedTargetPdf = sample.mTargetPdf;
+        d.mDIReservoir.W = integrationWeight;
+        d.mDIReservoir.M = min(M, gPushConstants.mMaxM * gPushConstants.mCandidateSamples);
+        d.mLocalDirIn = localDirIn;
+		gRenderParams.mHashGrid.Append(shadingData.mPosition, d);
 	}
 	#endif
 
@@ -697,7 +731,7 @@ ReservoirSampleData SampleIlluminationReSTIR(const Interaction bsdf, const Shadi
 
 void ConnectToLight(const Interaction bsdf, const ShadingData shadingData, const float3 localDirIn) {
     float integrationWeight;
-    const ReservoirSampleData r = SampleIlluminationReSTIR(bsdf, shadingData, localDirIn, integrationWeight);
+    const ReservoirSampleDataDI r = SampleIlluminationReSTIR(bsdf, shadingData, localDirIn, integrationWeight);
 
     if (integrationWeight <= 0)
 		return;
@@ -707,7 +741,11 @@ void ConnectToLight(const Interaction bsdf, const ShadingData shadingData, const
 
     const float3 contrib = (sPathState.mThroughput * r.mCachedContribution) * integrationWeight;
 
+	#ifdef gReSTIR_DI_Reuse_Visibility
+    gRenderParams.AddRadiance(sPixelIndex, contrib, r.mCachedMisWeight, sPathState.mPathLength + 1, 1);
+	#else
     TraceConnectionRay(r.mVisibilityRay.Origin, r.mVisibilityRay.Direction, r.mVisibilityRay.TMax, contrib, r.mCachedMisWeight, sPathState.mPathLength + 1, 1);
+	#endif
 }
 
 #else
@@ -749,6 +787,10 @@ void ConnectToLight(const Interaction bsdf, const ShadingData shadingData, const
 #endif
 
 
+// ---------------------------------------------------------------------------------------------------------
+// ------------------------------ Direct illumination / Next Event Estimation ------------------------------
+// ---------------------------------------------------------------------------------------------------------
+
 void AddEmission(const float3 emission, const float directPdfA, const float emissionPdfW, const float WtoA) {
 	float w = 1;
 	if (sPathState.mPathLength > 1 && !sPathState.isSpecular) {
@@ -771,6 +813,11 @@ void AddEmission(const float3 emission, const float directPdfA, const float emis
 		0);
 }
 
+
+
+// ---------------------------------------------------------------------------------------------------------
+// --------------------------------------------- Path tracing ----------------------------------------------
+// ---------------------------------------------------------------------------------------------------------
 
 bool ProcessInteraction<let bFromLight : bool>(const Interaction bsdf, const IntersectionResult isect) {
     const bool isMedium = gHasMedia && isect.mShadingData.isMedium();
@@ -829,7 +876,7 @@ bool ProcessInteraction<let bFromLight : bool>(const Interaction bsdf, const Int
 		if (bFromLight) {
             #ifdef gUseVC
 				if (sPathState.mPathLength + 2 <= gPushConstants.mMaxDepth)
-					StoreLightVertex(isect, localDirIn);
+					StoreLightVertex(isect.mShadingData, localDirIn);
 			#endif
                 ConnectToCamera(bsdf, isect.mShadingData, localDirIn);
         } else {
@@ -1131,8 +1178,8 @@ void ProcessAtomicOutput(uint3 index: SV_DispatchThreadID) {
     if (any(index.xy >= gPushConstants.mOutputExtent)) return;
     uint4 c = gRenderParams.mOutputAtomic[index.y * gPushConstants.mOutputExtent.x + index.x];
     if (gClearImage) {
-        gRenderParams.mOutput[index.xy] = float4(c.rgb / float(gQuantizationFactor), 1);
+        gRenderParams.mOutput[index.xy] = float4(c.rgb / float(gRadianceQuantizationFactor), 1);
     } else {
-        gRenderParams.mOutput[index.xy].rgb += c.rgb / float(gQuantizationFactor);
+        gRenderParams.mOutput[index.xy].rgb += c.rgb / float(gRadianceQuantizationFactor);
     }
 }
