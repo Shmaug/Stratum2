@@ -2,6 +2,7 @@
 
 #include "VCM.hpp"
 #include "TestRenderer.hpp"
+#include "ReSTIRPT.hpp"
 #include "RasterRenderer.hpp"
 #include "NonEuclidianRenderer.hpp"
 
@@ -11,10 +12,12 @@ using Renderer = variant<
 	shared_ptr<RasterRenderer>,
 	shared_ptr<VCM>,
 	shared_ptr<TestRenderer>,
+	shared_ptr<ReSTIRPT>,
 	shared_ptr<NonEuclidianRenderer>>;
 
 enum RendererType {
 	eRaster,
+	eReSTIRPT,
 	eVCM,
 	eTest,
 	eNonEuclidian,
@@ -30,6 +33,8 @@ inline Renderer make_renderer(const RendererType type, Node& node) {
 			return node.makeComponent<VCM>(node);
 		case RendererType::eTest:
 			return node.makeComponent<TestRenderer>(node);
+		case RendererType::eReSTIRPT:
+			return node.makeComponent<ReSTIRPT>(node);
 		case RendererType::eNonEuclidian:
 			return node.makeComponent<NonEuclidianRenderer>(node);
 	}
@@ -39,6 +44,7 @@ inline static unordered_map<string, RendererType> StringToRendererTypeMap = {
 	{ "Raster", RendererType::eRaster },
 	{ "VCM", RendererType::eVCM },
 	{ "Test", RendererType::eTest },
+	{ "ReSTIRPT", RendererType::eReSTIRPT },
 	{ "NonEuclidian", RendererType::eNonEuclidian } };
 
 }
@@ -50,6 +56,7 @@ inline string to_string(stm2::RendererType type) {
 		case stm2::RendererType::eRaster: return "Raster";
 		case stm2::RendererType::eVCM: return "VCM";
 		case stm2::RendererType::eTest: return "Test";
+		case stm2::RendererType::eReSTIRPT: return "ReSTIRPT";
 		case stm2::RendererType::eNonEuclidian: return "Non euclidian";
 	}
 }

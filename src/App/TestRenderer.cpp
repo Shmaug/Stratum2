@@ -475,7 +475,9 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 			mPushConstants["mPrevHashGridValid"] = 1u;
 	}
 
-	const uint32_t maxShadowRays = mDefines.at("gDeferShadowRays") ? (extent.width*extent.height*2 + (mLightTrace || mDefines.at("gUseVC") ? mPushConstants["mLightSubpathCount"].get<uint32_t>() : 0))*(mPushConstants["mMaxDepth"].get<uint32_t>()-1) : 0;
+	const uint32_t maxShadowRays = mDefines.at("gDeferShadowRays") ? (mPushConstants["mMaxDepth"].get<uint32_t>()-1)*(
+		extent.width*extent.height*(mDefines.at("gUseVC") ? 2 : 1) + (mLightTrace || mDefines.at("gUseVC") ? mPushConstants["mLightSubpathCount"].get<uint32_t>() : 0))
+		: 0;
 
 	auto lightVertexBuffer = mResourcePool.getBuffer<array<float4,3>>(commandBuffer.mDevice, "mLightVertices", mDefines.at("gUseVC") ? max(1u, mPushConstants["mLightSubpathCount"].get<uint32_t>()*(mPushConstants["mMaxDepth"].get<uint32_t>()-1)) : 1, vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal, 0);
 	auto counterBuffer = mResourcePool.getBuffer<uint32_t>(commandBuffer.mDevice, "mCounters", 2, vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal, 0);
@@ -483,7 +485,7 @@ void TestRenderer::render(CommandBuffer& commandBuffer, const Image::View& rende
 	descriptors[{ "gRenderParams.mCounters", 0 }] = counterBuffer;
 	descriptors[{ "gRenderParams.mShadowRays", 0 }] = mResourcePool.getBuffer<array<float4,4>>(commandBuffer.mDevice, "mShadowRays", max(1u, maxShadowRays), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal, 0);
 
-	mHashGrid.mSize = mDefines.at("gReSTIR_DI_Reuse") ? max(1u, extent.width*extent.height*(mPushConstants["mMaxDepth"].get<uint32_t>()-1)) : 1;
+	mHashGrid.mSize = mDefines.at("gReSTIR_DI_Reuse") ? max(1u, extent.width*extent.height*min(2u,mPushConstants["mMaxDepth"].get<uint32_t>()-1)) : 1;
 	const auto hashGrid = mHashGrid.init(commandBuffer, descriptors, "mHashGrid", GpuHashGrid::Metadata{
 			.mCameraPosition = viewTransformsBufferData[0].transformPoint(float3::Zero()),
 			.mVerticalFoV = viewsBufferData[0].mProjection.mVerticalFoV,

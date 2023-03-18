@@ -149,6 +149,8 @@ struct App {
 					newType = RendererType::eRaster;
 				if (ImGui::Selectable("Non euclidian", mRendererType == RendererType::eNonEuclidian))
 					newType = RendererType::eNonEuclidian;
+				if (ImGui::Selectable("ReSTIR PT", mRendererType == RendererType::eReSTIRPT))
+					newType = RendererType::eReSTIRPT;
 
 				if (newType != mRendererType) {
 					mRendererType = newType;

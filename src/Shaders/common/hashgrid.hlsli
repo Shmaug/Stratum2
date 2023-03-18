@@ -6,7 +6,7 @@ struct HashGridConstants {
 	float mCellPixelRadius;
 	float mMinCellSize;
 	uint mCellCount;
-	uint pad;
+	uint mMaxSize;
 	float3 mCameraPosition;
 	float mDistanceScale;
 };
@@ -81,13 +81,16 @@ struct HashGrid<T> {
 			return -1;
         }
 
+		// store payload
+		uint appendIndex;
+		InterlockedAdd(mOtherCounters[0], 1, appendIndex);
+        if (appendIndex >= mConstants.mMaxSize)
+            return -1;
+
 		// append item to cell by incrementing cell counter
 		uint indexInCell;
 		InterlockedAdd(mCellCounters[cellIndex], 1, indexInCell);
 
-		// store payload
-		uint appendIndex;
-		InterlockedAdd(mOtherCounters[0], 1, appendIndex);
 		mAppendDataIndices[appendIndex] = uint2(cellIndex, indexInCell);
         mAppendData[appendIndex] = data;
         return appendIndex;

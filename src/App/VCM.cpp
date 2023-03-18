@@ -487,8 +487,8 @@ void VCM::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) 
 		descriptors[{"gRenderParams.mLightPathLengths",0}] = mResourcePool.getBuffer<uint32_t>       (commandBuffer.mDevice, "mLightPathLengths", mPushConstants.mLightSubPathCount, vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
 
 		mLightHashGrid.mSize = maxLightVertices;
-		mDIHashGrid.mSize = maxCameraVertices;
-		mLVCHashGrid.mSize = maxCameraVertices;
+		mDIHashGrid.mSize    = maxCameraVertices;
+		mLVCHashGrid.mSize   = maxCameraVertices;
 
 		GpuHashGrid::Metadata md{
 			.mCameraPosition = viewTransforms[0].transformPoint(float3::Zero()),

@@ -19,14 +19,15 @@ GpuHashGrid::FrameData GpuHashGrid::init(CommandBuffer& commandBuffer, Descripto
 		float mCellPixelRadius;
 		float mMinCellSize;
 		uint32_t mCellCount;
-		uint32_t pad;
+		uint32_t mMaxSize;
 		float3 mCameraPosition;
 		float mDistanceScale;
 	};
 	HashGridConstants constants;
-	constants.mCellCount = mCellCount;
 	constants.mCellPixelRadius = mCellPixelRadius;
 	constants.mMinCellSize = mCellSize;
+	constants.mCellCount = mCellCount;
+	constants.mMaxSize = mSize;
 	constants.mCameraPosition = md.mCameraPosition;
 	constants.mDistanceScale = tan(constants.mCellPixelRadius * md.mVerticalFoV * max(1.0f / md.mImageExtent[1], md.mImageExtent[1] / (float)(md.mImageExtent[0]*md.mImageExtent[0])));
 

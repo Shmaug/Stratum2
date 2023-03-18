@@ -139,8 +139,7 @@ void DescriptorSets::bind(CommandBuffer& commandBuffer, const unordered_map<stri
 	if (compute)
 		transitionImages(commandBuffer);
 
-	#ifdef _DEBUG
-	/*
+	/*#ifdef _DEBUG
 	for (const auto&[name, value] : mPipeline.descriptorMap()) {
 		if (mDescriptors.find({name,0}) == mDescriptors.end() && mPipeline.metadata().mImmutableSamplers.find(name) == mPipeline.metadata().mImmutableSamplers.end()) {
 			if (auto bf = mPipeline.metadata().mBindingFlags.find(name); bf != mPipeline.metadata().mBindingFlags.end())
@@ -148,8 +147,8 @@ void DescriptorSets::bind(CommandBuffer& commandBuffer, const unordered_map<stri
 					continue;
 			cerr << "Warning: Binding DescriptorSets with missing descriptor: " << name << endl;
 		}
-	}*/
-	#endif
+	}
+	#endif*/
 
 	// dynamic offsets
 	vector<uint32_t> dynamicOffsetValues(dynamicOffsets.size());

@@ -234,8 +234,10 @@ extension SceneParameters {
 
 			if (!hit) return false; // missed scene
 
-            if (isect.mShadingData.isSurface())
-				return true; // hit surface
+            if (isect.mShadingData.isSurface()) {
+                isect.mDistance = length(isect.mShadingData.mPosition - origin);
+                return true; // hit surface
+            }
 
             if (dot(isect.mShadingData.getGeometryNormal(), ray.Direction) > 0) {
 				// leaving medium
