@@ -42,6 +42,7 @@ private:
 	bool mDemodulateAlbedo = true;
 	bool mCheckNormal = true;
 	bool mCheckDepth = true;
+	bool mShadowHysteresis = false;
 
 	uint32_t mAccumulatedFrames = 0;
 	uint32_t mAtrousIterations = 0;
@@ -53,6 +54,8 @@ private:
 	uint32_t mHistoryLimit = 0;
 	uint32_t mVarianceBoostLength = 4;
 	float mSigmaLuminanceBoost = 3;
+	float mShadowPreserveOffset = 0.1f;
+	float mShadowPreserveScale = 1;
 
 	ComputePipelineCache mTemporalAccumulationPipeline;
 	ComputePipelineCache mEstimateVariancePipeline;

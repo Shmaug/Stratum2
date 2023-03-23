@@ -44,8 +44,8 @@ struct RandomSampler {
 	}
 
 	[mutating]
-	void skipNext() {
-		mState.w++;
+	void skipNext(const uint n = 1) {
+		mState.w += n;
 	}
 
 	[mutating]

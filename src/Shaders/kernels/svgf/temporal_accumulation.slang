@@ -10,6 +10,9 @@
 #ifndef gCheckDepth
 #define gCheckDepth false
 #endif
+#ifndef gShadowHysteresis
+#define gShadowHysteresis false
+#endif
 #ifndef gDebugMode
 #define gDebugMode (DenoiserDebugMode)0
 #endif
@@ -17,6 +20,8 @@
 struct PushConstants {
 	uint mViewCount;
     uint mHistoryLimit;
+    float mShadowPreserveOffset;
+    float mShadowPreserveScale;
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> gPushConstants;
 
@@ -97,7 +102,13 @@ void main(uint3 index: SV_DispatchThreadId) {
 		if (gPushConstants.mHistoryLimit > 0 && n > gPushConstants.mHistoryLimit)
 			n = gPushConstants.mHistoryLimit;
 
-        const float alpha = saturate(color_curr.a / n);
+        float alpha = saturate(color_curr.a / n);
+        if (gShadowHysteresis) {
+			// increase alpha when the luminance decreases drastically
+            const float l_prev = luminance(color_prev.rgb);
+            const float alpha_l = pow2(saturate(safe_divide(l_prev - l, l + l_prev) - gPushConstants.mShadowPreserveOffset)) * gPushConstants.mShadowPreserveScale;
+            alpha = 1 - (1 - alpha) * saturate(1 - alpha_l);
+        }
 
 		gParams.mAccumColor[ipos] = float4(lerp(color_prev.rgb, color_curr.rgb, alpha), n);
 		gParams.mAccumMoments[ipos] = lerp(moments_prev, float2(l, l*l), alpha);

@@ -384,7 +384,7 @@ extension PackedMaterialData {
     float emissionPdf() { return any(getEmission() > 0) ? 1 : 0; }
 	float3 albedo() { return getBaseColor(); }
     bool canEvaluate() { return any(getBaseColor() > 0); }
-    bool isSingular() { return false; }
+    bool isSingular() { return getRoughness() < 1e-3; }
     float continuationProb() { return saturate(luminance(getBaseColor())); }
 
 
@@ -404,12 +404,12 @@ extension PackedMaterialData {
     float3 evaluateReflectanceFast<let Adjoint : bool>(const float3 dirIn, const float3 dirOut) {
         // phong brdf
 
-        const float ks = 1 - getTransmission() * (1 - getMetallic());
+        const float ks = saturate(1 - (1 - getTransmission()) * (1 - getMetallic()));
         const float kd = 1 - ks;
 
-        const float n = sqrt(2 / (getRoughness() + 2));
+        const float n = 1 / (pow2(getRoughness()) + 0.01);
         const float alpha = max(0, dot(dirOut, normalize(-dirIn + 2 * dot(dirIn, float3(0, 0, sign(dirIn.z))) * float3(0, 0, sign(dirIn.z)))));
-        return (kd / M_PI + ks * (n + 2) / (2 * M_PI) * pow(alpha, n)) * abs(dirOut.z);
+        return getBaseColor() * (kd / M_PI + ks * (n + 2) / (2 * M_PI) * pow(alpha, n)) * abs(dirOut.z);
     }
 
     DirectionSampleRecord sampleDirection<let Adjoint : bool>(const float3 rnd, float3 dirIn) {

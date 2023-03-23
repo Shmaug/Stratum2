@@ -49,6 +49,7 @@ void Denoiser::drawGui() {
 		mPrevVisibility = {};
 		mPrevDepth = {};
 	}
+	ImGui::SameLine();
 	if (ImGui::Button("Reload shaders")) {
 		Device& device = *mNode.findAncestor<Device>();
 		device->waitIdle();
@@ -70,6 +71,13 @@ void Denoiser::drawGui() {
 		if (mReprojection) {
 			ImGui::Checkbox("Check normal", &mCheckNormal);
 			ImGui::Checkbox("Check depth", &mCheckDepth);
+			ImGui::Checkbox("Shadow-preserving hysteresis", &mShadowHysteresis);
+			if (mShadowHysteresis) {
+				ImGui::SetNextItemWidth(40);
+				ImGui::DragFloat("Shadow-preserve offset", &mShadowPreserveOffset, .01f);
+				ImGui::SetNextItemWidth(40);
+				ImGui::DragFloat("Shadow-preserve scale", &mShadowPreserveScale, .01f);
+			}
 		}
 
 		ImGui::PushItemWidth(40);
@@ -154,6 +162,7 @@ Image::View Denoiser::denoise(
 		{"gDemodulateAlbedo", mDemodulateAlbedo ? "true" : "false" },
 		{"gCheckNormal"     , mCheckNormal      ? "true" : "false" },
 		{"gCheckDepth"      , mCheckDepth       ? "true" : "false" },
+		{"gShadowHysteresis", mShadowHysteresis ? "true" : "false" },
 		{"gFilterKernelType", to_string((uint32_t)mFilterType) },
 		{"gDebugMode", "(DenoiserDebugMode)" + to_string((uint32_t)mDebugMode) },
 	};
@@ -185,6 +194,8 @@ Image::View Denoiser::denoise(
 			accumulationPipeline->dispatchTiled(commandBuffer, extent, mResourcePool.getDescriptorSets(*accumulationPipeline, "AccumulationDescriptors", descriptors), {}, {
 				{ "mViewCount", PushConstantValue((uint32_t)views.size()) },
 				{ "mHistoryLimit", PushConstantValue(mHistoryLimit) },
+				{ "mShadowPreserveScale", PushConstantValue(mShadowPreserveScale) },
+				{ "mShadowPreserveOffset", PushConstantValue(mShadowPreserveOffset) },
 			});
 		}
 

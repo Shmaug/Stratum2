@@ -147,7 +147,7 @@ extension SceneParameters {
     }
 
     // uniformly samples a light instance and primitive index, then uniformly samples the primitive's area
-    IlluminationSampleRecord SampleIllumination(const float4 rnd, const Optional<float3> referencePosition = none) {
+    IlluminationSampleRecord SampleIllumination(const float4 rnd) {
         IlluminationSampleRecord r;
         r.isSingular = false;
         if (gEnvironmentMaterialAddress != -1) {
@@ -205,17 +205,21 @@ extension SceneParameters {
 			return { 0 }; // volume lights are unsupported
 
 		r.mPdf /= shadingData.mShapeArea;
-		r.mPosition = shadingData.mPosition;
-		r.mPackedNormal = shadingData.mPackedShadingNormal;
-
-        if (referencePosition.hasValue) {
-			r.mDirectionToLight = r.mPosition - referencePosition.value;
+        r.mPosition = shadingData.mPosition;
+        r.mPackedNormal = shadingData.mPackedShadingNormal;
+        r.mRadiance = LoadMaterial(shadingData).getEmission();
+        return r;
+    }
+    IlluminationSampleRecord SampleIllumination(const float4 rnd, const float3 referencePosition) {
+        IlluminationSampleRecord r = SampleIllumination(rnd);
+        if (r.isFinite) {
+			r.mDirectionToLight = r.mPosition - referencePosition;
 			r.mDistanceToLight  = length(r.mDirectionToLight);
 			r.mDirectionToLight /= r.mDistanceToLight;
 			r.mCosLight = -dot(r.getNormal(), r.mDirectionToLight);
+			if (r.mCosLight <= 0)
+                r.mRadiance = 0;
         }
-        r.mRadiance = (referencePosition.hasValue && r.mCosLight <= 0) ? 0 : LoadMaterial(shadingData).getEmission();
-
         return r;
     }
 }

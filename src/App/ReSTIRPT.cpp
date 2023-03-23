@@ -20,20 +20,26 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 		{ "gAlphaTest", true },
 		{ "gNormalMaps", true },
 		{ "gShadingNormals", true },
-		{ "gPixelJitter", false },
 		{ "gLambertian", false },
 		{ "gDebugFastBRDF", false },
+		{ "gDirectLight", true },
+		{ "gIndirectLight", true },
 		{ "gReSTIR_DI", false },
 		{ "gReSTIR_DI_Reuse", false },
 		{ "gReSTIR_DI_Reuse_Visibility", false },
-		{ "gNoIndirect", false }
+		{ "gReSTIR_GI", false },
+		{ "gReSTIR_GI_Reuse", false },
 	};
 
 	mPushConstants["mMaxDepth"] = 5u;
 	mPushConstants["mMaxNullCollisions"] = 1000;
 	mPushConstants["mEnvironmentSampleProbability"] = 0.9f;
-	mPushConstants["mCandidateSamples"] = 32;
-	mPushConstants["mMaxM"] = 3.f;
+	mPushConstants["mDICandidateSamples"] = 32;
+	mPushConstants["mGICandidateSamples"] = 4;
+	mPushConstants["mDIReuseRadius"] = 32;
+	mPushConstants["mGIReuseRadius"] = 16;
+	mPushConstants["mDIMaxM"] = 3.f;
+	mPushConstants["mGIMaxM"] = 16.f;
 
 	Device& device = *mNode.findAncestor<Device>();
 
@@ -66,8 +72,7 @@ void ReSTIRPT::createPipelines(Device& device) {
 
 	const filesystem::path shaderPath = *device.mInstance.findArgument("shaderKernelPath");
 	mPipelines.clear();
-	mPipelines.emplace("Render",                 ComputePipelineCache(shaderPath / "restirpt.slang", "Render"             , "sm_6_6", args, md));
-	mPipelines.emplace("RenderIteration",        ComputePipelineCache(shaderPath / "restirpt.slang", "RenderIteration"    , "sm_6_6", args, md));
+	mPipelines.emplace("Render", ComputePipelineCache(shaderPath / "restirpt" / "restirpt.slang", "Render", "sm_6_6", args, md));
 }
 
 void ReSTIRPT::drawGui() {
@@ -100,13 +105,21 @@ void ReSTIRPT::drawGui() {
 		if (ImGui::Checkbox("Random frame seed", &mRandomPerFrame)) changed = true;
 		ImGui::PushItemWidth(40);
 		uint32_t one = 1;
-		if (ImGui::DragScalar("Max depth", ImGuiDataType_U32, &mPushConstants["mMaxDepth"].get<uint32_t>(), .2f, &one)) changed = true;
+		if (ImGui::DragScalar("Max depth", ImGuiDataType_U32, &mPushConstants["mMaxDepth"].get<uint32_t>(), .1f, &one)) changed = true;
 		if (ImGui::SliderFloat("Environment sample p", &mPushConstants["mEnvironmentSampleProbability"].get<float>(), 0, 1)) changed = true;
 
 		if (mDefines.at("gReSTIR_DI")) {
-			if (ImGui::DragScalar("Candidate samples", ImGuiDataType_U32, &mPushConstants["mCandidateSamples"].get<uint32_t>())) changed = true;
+			if (ImGui::DragScalar("DI candidate samples", ImGuiDataType_U32, &mPushConstants["mDICandidateSamples"].get<uint32_t>())) changed = true;
 			if (mDefines.at("gReSTIR_DI_Reuse")) {
-				if (ImGui::DragFloat("Max M", &mPushConstants["mMaxM"].get<float>(), .01f)) changed = true;
+				if (ImGui::DragFloat("DI max M", &mPushConstants["mDIMaxM"].get<float>(), .01f, 0, 1000)) changed = true;
+				if (ImGui::DragFloat("DI reuse radius", &mPushConstants["mDIReuseRadius"].get<float>(), .01f, 0, 200)) changed = true;
+			}
+		}
+		if (mDefines.at("gReSTIR_GI")) {
+			if (ImGui::DragScalar("GI candidate samples", ImGuiDataType_U32, &mPushConstants["mGICandidateSamples"].get<uint32_t>())) changed = true;
+			if (mDefines.at("gReSTIR_GI_Reuse")) {
+				if (ImGui::DragFloat("GI max M", &mPushConstants["mGIMaxM"].get<float>(), .01f, 0, 1000)) changed = true;
+				if (ImGui::DragFloat("GI reuse radius", &mPushConstants["mGIReuseRadius"].get<float>(), .01f, 0, 200)) changed = true;
 			}
 		}
 		ImGui::PopItemWidth();
@@ -206,23 +219,37 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 	descriptors[{ "gRenderParams.mDepth", 0 }]      = ImageDescriptor{ depthImage     , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 
 	mPushConstants["mReservoirHistoryValid"] = 1u;
-	Image::View reservoirData[3];
 	for (uint32_t i = 0; i < 3; i++) {
-		const string id = "mReservoirData["+to_string(i)+"]";
+		const string id = "mReservoirDataDI["+to_string(i)+"]";
 		const Image::View prev = mResourcePool.getLastImage(id);
-
-		reservoirData[i] = mResourcePool.getImage(commandBuffer.mDevice, id, Image::Metadata{
+		const Image::View reservoirData = mResourcePool.getImage(commandBuffer.mDevice, id, Image::Metadata{
 			.mFormat = vk::Format::eR32G32B32A32Sfloat,
 			.mExtent = extent,
 			.mUsage = vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eTransferSrc|vk::ImageUsageFlagBits::eTransferDst,
 		});
-		descriptors[{ "gRenderParams.mReservoirData", i }] = ImageDescriptor{ reservoirData[i], vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
-		descriptors[{ "gRenderParams.mPrevReservoirData", i }] = ImageDescriptor{ prev ? prev : reservoirData[i], vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{ "gRenderParams.mReservoirDataDI", i }] = ImageDescriptor{ reservoirData, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+		descriptors[{ "gRenderParams.mPrevReservoirDataDI", i }] = ImageDescriptor{ prev ? prev : reservoirData, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderRead, {} };
 		if (!prev)
 			mPushConstants["mReservoirHistoryValid"] = 0u;
 
 		if (mDefines.at("gReSTIR_DI_Reuse"))
-			reservoirData[i].clearColor(commandBuffer, vk::ClearColorValue{array<float,4>{0,0,0,0}});
+			reservoirData.clearColor(commandBuffer, vk::ClearColorValue{array<float,4>{0,0,0,0}});
+	}
+	for (uint32_t i = 0; i < 4; i++) {
+		const string id = "mReservoirDataGI["+to_string(i)+"]";
+		const Image::View prev = mResourcePool.getLastImage(id);
+		const Image::View reservoirData = mResourcePool.getImage(commandBuffer.mDevice, id, Image::Metadata{
+			.mFormat = vk::Format::eR32G32B32A32Sfloat,
+			.mExtent = extent,
+			.mUsage = vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eTransferSrc|vk::ImageUsageFlagBits::eTransferDst,
+		});
+		descriptors[{ "gRenderParams.mReservoirDataGI", i }] = ImageDescriptor{ reservoirData, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+		descriptors[{ "gRenderParams.mPrevReservoirDataGI", i }] = ImageDescriptor{ prev ? prev : reservoirData, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderRead, {} };
+		if (!prev)
+			mPushConstants["mReservoirHistoryValid"] = 0u;
+
+		if (mDefines.at("gReSTIR_GI"))
+			reservoirData.clearColor(commandBuffer, vk::ClearColorValue{array<float,4>{0,0,0,0}});
 	}
 	if (ImGui::IsKeyDown(ImGuiKey_F5))
 		mPushConstants["mReservoirHistoryValid"] = 0u;
@@ -376,7 +403,6 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 	// render
 	{
 		ProfilerScope ps("Trace paths", &commandBuffer);
-
 		renderPipeline->dispatchTiled(commandBuffer, extent, descriptorSets, {}, mPushConstants);
 	}
 
