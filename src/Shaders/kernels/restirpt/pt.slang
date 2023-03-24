@@ -5,6 +5,7 @@ struct PushConstants {
     uint2 mOutputExtent;
 	uint mViewCount;
     uint mMaxDepth;
+	uint mMaxDiffuseBounces;
 	uint mRandomSeed;
     uint mMaxNullCollisions;
     uint mLightCount;
@@ -14,8 +15,8 @@ struct PushConstants {
     uint mGICandidateSamples;
     float mDIMaxM;
     float mGIMaxM;
-    uint mDIReuseRadius;
-    uint mGIReuseRadius;
+    float mDIReuseRadius;
+    float mGIReuseRadius;
     uint mReservoirHistoryValid;
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> gPushConstants;
@@ -143,3 +144,24 @@ struct PathVertex {
             mLocalDirIn = dirIn;
 	}
 };
+
+PathVertex SampleVisibility(const uint2 index, inout RandomSampler rng, out float3 throughput) {
+    const uint viewIndex = getViewIndex(index, gPushConstants.mOutputExtent, gPushConstants.mViewCount);
+
+    float2 uv;
+    const float3 localDir = gRenderParams.mViews[viewIndex].toWorld(index + 0.5, /*out*/ uv);
+    const TransformData t = gRenderParams.mViewTransforms[viewIndex];
+    const float3 direction = normalize(t.transformVector(localDir));
+
+    uint medium = gRenderParams.mViewMediumIndices[viewIndex];
+
+    IntersectionResult isect;
+    float transDirPdf, transNeePdf;
+    throughput = 1;
+    const bool hit = gScene.traceScatteringRay(makeRay(float3(t.m[0][3], t.m[1][3], t.m[2][3]), direction), rng, medium, throughput, transDirPdf, transNeePdf, isect);
+    if (transDirPdf > 0)
+        throughput /= transDirPdf;
+
+    isect.mShadingData.mTexcoordScreenSize = 0; // disable mipmaps for now
+    return PathVertex(isect.mShadingData, isect.mInstancePrimitiveIndex, medium, -direction);
+}

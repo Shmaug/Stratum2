@@ -12,7 +12,7 @@ find_package(OpenVDB CONFIG)
 set(SLANG_ROOT "${CMAKE_CURRENT_LIST_DIR}/extern/slang")
 if (NOT EXISTS ${SLANG_ROOT})
 	message(STATUS "Downloading slang")
-	set(SLANG_URL https://github.com/shader-slang/slang/releases/download/v0.24.54/slang-0.24.54)
+	set(SLANG_URL https://github.com/shader-slang/slang/releases/download/v0.26.0/slang-0.26.0)
 	if (WIN32)
 		file(DOWNLOAD "${SLANG_URL}-win64.zip" "${SLANG_ROOT}.zip")
 		message(STATUS "Extracting slang")
@@ -57,6 +57,7 @@ list(APPEND STRATUM_SOURCE
 	"${CMAKE_CURRENT_SOURCE_DIR}/extern/imgui/imgui_impl_vulkan.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/extern/imgui/imgui.cpp"
 	"${CMAKE_CURRENT_SOURCE_DIR}/extern/ImGuizmo.cpp"
+	"${CMAKE_CURRENT_SOURCE_DIR}/extern/printing/gpu-printing.cpp"
 )
 
 add_executable(${TARGET_NAME} ${STRATUM_SOURCE} src/main.cpp)

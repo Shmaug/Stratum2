@@ -42,6 +42,9 @@ extension SceneParameters {
         }
         return m;
     }
+    PackedMaterialData LoadMaterial(const ShadingData shadingData) {
+        return LoadMaterial(shadingData.getMaterialAddress(), shadingData.mTexcoord, shadingData.mTexcoordScreenSize);
+    }
     PackedMaterialData LoadMaterialUniform(const uint address, const float2 uv) {
         uint4 imageIndices;
         PackedMaterialData m = LoadMaterial(address, imageIndices);
@@ -53,15 +56,17 @@ extension SceneParameters {
             m.setEmission(m.getEmission()   * mImages[imageIndices.y].Sample(mStaticSampler, uv).rgb);
         }
         if (imageIndices.z < gImageCount) {
-            m.mPackedData[2] = D3DX_FLOAT4_to_R8G8B8A8_UNORM(D3DX_R8G8B8A8_UNORM_to_FLOAT4(m.mPackedData[2]) * mImages[imageIndices.z].Sample(mStaticSampler, uv));
+            float4 v = D3DX_R8G8B8A8_UNORM_to_FLOAT4(m.mPackedData[2]);
+            const float4 vi = mImages[imageIndices.z].Sample(mStaticSampler, uv);
+            v.xzw *= vi.xzw;
+			// convert "roughness" to "smoothness" before modulation, so that materials can be made rougher
+            v.y = 1 - (1 - v.y) * (1 - vi.y);
+            m.mPackedData[2] = D3DX_FLOAT4_to_R8G8B8A8_UNORM(v);
         }
         if (imageIndices.w < gImageCount) {
             m.mPackedData[3] = D3DX_FLOAT4_to_R8G8B8A8_UNORM(D3DX_R8G8B8A8_UNORM_to_FLOAT4(m.mPackedData[3]) * mImages[imageIndices.w].Sample(mStaticSampler, uv));
         }
         return m;
-    }
-    PackedMaterialData LoadMaterial(const ShadingData shadingData) {
-        return LoadMaterial(shadingData.getMaterialAddress(), shadingData.mTexcoord, shadingData.mTexcoordScreenSize);
     }
 
     void getMaterialAlphaMask(const uint materialAddress, out uint alphaMask, out float alphaCutoff) {

@@ -35,6 +35,7 @@ private:
 
 	DeviceResourcePool mResourcePool;
 	list<pair<Buffer::View<byte>, bool>> mSelectionData;
+	list<pair<Buffer::View<byte>, shared_ptr<Shader>>> mGpuPrintData;
 	vector<TransformData> mPrevViewTransforms;
 };
 

@@ -1,11 +1,16 @@
 #include "di.slang"
 
+import printing.printing;
+
 struct VertexSampleRecord {
     float3 mLe;
+	float mNeePdfA;
     float3 mNeeLe;
-    float3 mBrdf;
+	float mNeeMisWeight;
+
     float3 mDirection;
     float mDirPdfW;
+    float3 mBrdf;
     bool isSpecular;
     bool isSpecularLobe;
 };
@@ -13,45 +18,56 @@ struct VertexSampleRecord {
 VertexSampleRecord ProcessVertex(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, const bool sampleDirection, const bool sampleNee) {
     VertexSampleRecord r;
     r.mLe = 0;
+	r.mNeePdfA = 0;
     r.mNeeLe = 0;
-	r.mBrdf = 0;
+	r.mNeeMisWeight = 0;
 	r.mDirPdfW = 0;
-
-    const float3 localDirIn = vertex.mLocalDirIn;
-
-    if (vertex.mShadingData.isEnvironment()) {
-		float tmp;
-		r.mLe = gScene.EvaluateEnvironment(-localDirIn, tmp);
-        return r;
-	}
-
-    if ((gHasMedia && vertex.mShadingData.isMedium()) || localDirIn.z > 0) {
-        r.mLe = bsdf.emission();
-    }
-
+	r.mBrdf = 0;
     r.isSpecular = bsdf.isSingular();
     r.isSpecularLobe = false;
 
-	if (sampleDirection) {
+    const bool isMedium = gHasMedia && vertex.mShadingData.isMedium();
+    const float3 localDirIn = vertex.mLocalDirIn;
+
+    if (isMedium || localDirIn.z > 0) {
+        r.mLe = bsdf.emission();
+    }
+
+	if (sampleDirection && bsdf.canEvaluate()) {
         const DirectionSampleRecord s = bsdf.sampleDirection<false>(rng.nextFloat().xyz, localDirIn);
         r.isSpecularLobe = s.isSingular();
-		r.mBrdf = s.mReflectance * vertex.mShadingData.shadingNormalCorrection<false>(localDirIn, s.mDirection);
-		r.mDirPdfW = s.mFwdPdfW;
-		r.mDirection = (gHasMedia && vertex.mShadingData.isMedium()) ? s.mDirection : vertex.mShadingData.toWorld(s.mDirection);
+        r.mBrdf = s.mReflectance;
+        r.mDirPdfW = s.mFwdPdfW;
+        if (!isMedium) {
+			r.mBrdf *= vertex.mShadingData.shadingNormalCorrection<false>(localDirIn, s.mDirection);
+            r.mDirection = vertex.mShadingData.toWorld(s.mDirection);
+        } else
+            r.mDirection = s.mDirection;
 	}
 
-	if (!r.isSpecular && sampleNee) {
-        float tmp;
-        r.mNeeLe = DirectIlluminationSimple(vertex, bsdf, rng, tmp, sampleDirection);
+    if (sampleNee && !r.isSpecular) {
+        r.mNeeLe = DirectIllumination(vertex, bsdf, rng, r.mNeePdfA, r.mNeeMisWeight);
     }
 
     return r;
 }
 VertexSampleRecord ProcessVertex(const PathVertex vertex, inout RandomSampler rng, const bool sampleNext, const bool sampleNee) {
-    if (gHasMedia && vertex.mShadingData.isMedium())
+    if (vertex.mShadingData.isEnvironment()) {
+		VertexSampleRecord r;
+		float tmp;
+		r.mLe = gScene.EvaluateEnvironment(-vertex.mLocalDirIn, tmp);
+		r.mNeeLe = 0;
+		r.mNeePdfA = 0;
+		r.mBrdf = 0;
+		r.mDirPdfW = 0;
+		r.isSpecular = false;
+		r.isSpecularLobe = false;
+        return r;
+    }
+	if (gHasMedia && vertex.mShadingData.isMedium())
         return ProcessVertex(vertex, Medium(vertex.mShadingData.getMaterialAddress()), rng, sampleNext, sampleNee);
 	else
-        return ProcessVertex(vertex, gScene.LoadMaterial(vertex.mShadingData), rng, sampleNext, sampleNee);
+        return ProcessVertex(vertex, gScene.LoadMaterial(vertex.mShadingData)        , rng, sampleNext, sampleNee);
 }
 PathVertex TraceNext(const PathVertex vertex, inout RandomSampler rng, const float3 direction, inout float3 throughput, out float transDirPdf, out float directPdfA, out float WtoA) {
 	const float3 origin = (gHasMedia && vertex.mShadingData.isMedium()) ?
@@ -63,9 +79,9 @@ PathVertex TraceNext(const PathVertex vertex, inout RandomSampler rng, const flo
 	IntersectionResult isect;
     float transNeePdf;
     const bool hit = gScene.traceScatteringRay(makeRay(origin, direction), rng, medium, throughput, transDirPdf, transNeePdf, isect);
+    isect.mShadingData.mTexcoordScreenSize = 0; // disable mipmaps for now
 
-    PathVertex v = PathVertex(isect.mShadingData, isect.mInstancePrimitiveIndex, medium, -direction); ;
-    v.mShadingData.mTexcoordScreenSize = 0; // disable mipmaps for now
+    PathVertex v = PathVertex(isect.mShadingData, isect.mInstancePrimitiveIndex, medium, -direction);
 
     if (hit) {
         directPdfA = isect.LightSamplePdfA();
@@ -80,6 +96,68 @@ PathVertex TraceNext(const PathVertex vertex, inout RandomSampler rng, const flo
 	return v;
 }
 
+float3 EstimateRadiance(PathVertex vertex, inout RandomSampler rng, const uint2 pixelIndex) {
+    float3 radiance = 0;
+    float3 throughput = 1;
+	uint diffuseBounces = 0;
+    float misWeight = 1;
+
+    // handle first bounce explicitly
+    {
+        VertexSampleRecord s;
+        if (gHasMedia && vertex.mShadingData.isMedium()) {
+            const Medium m = Medium(vertex.mShadingData.getMaterialAddress());
+			gRenderParams.mAlbedo[pixelIndex] = float4(m.albedo(), 1);
+            s = ProcessVertex(vertex, m, rng, true, true);
+        } else {
+            const PackedMaterialData m = gScene.LoadMaterial(vertex.mShadingData);
+			gRenderParams.mAlbedo[pixelIndex] = float4(m.albedo(), 1);
+            s = ProcessVertex(vertex, m, rng, true, false);
+        }
+
+        radiance += throughput * (s.mLe);
+
+        if (!s.isSpecular)
+            diffuseBounces++;
+        if (s.mDirPdfW <= 0 || all(s.mBrdf <= 0) || diffuseBounces > gPushConstants.mMaxDiffuseBounces)
+            return radiance;
+
+        throughput *= s.mBrdf / s.mDirPdfW;
+
+        float transDirPdf, directPdfA, WtoA;
+        vertex = TraceNext(vertex, rng, s.mDirection, throughput, transDirPdf, directPdfA, WtoA);
+        if (transDirPdf <= 0)
+            return radiance;
+        throughput /= transDirPdf;
+
+        misWeight = s.isSpecular ? 1 : DirectMis(s.mDirPdfW * WtoA, directPdfA);
+    }
+
+    for (uint depth = 2; depth <= gPushConstants.mMaxDepth; depth++) {
+        const VertexSampleRecord s = ProcessVertex(vertex, rng, depth < gPushConstants.mMaxDepth, false);
+
+        // add emission from vertex and nee sample
+        radiance += throughput * (s.mLe);
+
+        if (!s.isSpecular)
+			diffuseBounces++;
+        if (s.mDirPdfW <= 0 || all(s.mBrdf <= 0) || diffuseBounces > gPushConstants.mMaxDiffuseBounces)
+            break;
+
+        throughput *= s.mBrdf / s.mDirPdfW;
+
+        float transDirPdf, directPdfA, WtoA;
+        vertex = TraceNext(vertex, rng, s.mDirection, throughput, transDirPdf, directPdfA, WtoA);
+        if (transDirPdf <= 0)
+            break;
+        throughput /= transDirPdf;
+
+        misWeight = s.isSpecular ? 1 : DirectMis(s.mDirPdfW * WtoA, directPdfA);
+    }
+    return radiance;
+}
+
+// -------- ReSTIR --------
 
 struct PackedVertex {
     float3 mLocalPosition;
@@ -111,64 +189,130 @@ struct GISample {
     uint mPathLength;
 };
 
+
 struct ReservoirSampleDataGI {
     GISample mSample;
     float3 mCachedContribution;
     float mCachedTargetPdf;
     float W;
 
+	// randomly replaces mCachedContribution and mCachedTargetPdf using resampling
+    [mutating]
+    void UpdatePath(const float3 pathContribution, const float pathPdfW, const float pathPdfA, const uint pathLength, const float rnd) {
+		const float phat = luminance(pathContribution);
+		const float wi = phat / pathPdfW;
+
+		const float wsum = wi + W * mCachedTargetPdf;
+
+		if (rnd*wsum <= wi) {
+			mCachedContribution = pathContribution;
+            mCachedTargetPdf = phat;
+            mSample.mReplayPdfA = pathPdfA;
+			mSample.mPathLength = pathLength;
+		}
+
+		W = mCachedTargetPdf > 0 ? wsum / mCachedTargetPdf : 0;
+	}
+
 	[mutating]
-    void make(PathVertex vertex, const uint4 x) {
+    void make<let bIsCanonical : bool>(PathVertex vertex, const uint4 x, const uint2 pixelIndex, out float3 directRadiance) {
         mSample.mRng = x;
         mSample.mReplayPdfA = 0;
         mSample.mPathLength = 0;
         mCachedContribution = 0;
-        mCachedTargetPdf = 0;
+		mCachedTargetPdf = 0;
         W = 0;
-
-        float pdfA = 1;
 
         RandomSampler rng;
         rng.mState = x;
 
         float3 throughput = 1;
-        for (uint pathLength = 1; pathLength <= gPushConstants.mMaxDepth; pathLength++) {
-            const VertexSampleRecord s = ProcessVertex(vertex, rng, pathLength < gPushConstants.mMaxDepth, false);
+        float pdfW = 1;
+        float pathWtoA = 1;
+		uint diffuseBounces = 0;
+        float misWeight = 1;
 
-            if (pathLength > 2 && any(s.mLe > 0)) {
-                mCachedContribution = throughput * s.mLe;
-                mCachedTargetPdf = luminance(mCachedContribution);
-                W = 1 / pdfA;
-                mSample.mReplayPdfA = pdfA;
-                mSample.mPathLength = pathLength;
-                break;
+        {
+            // handle first bounce explicitly
+
+			VertexSampleRecord s;
+			if (gHasMedia && vertex.mShadingData.isMedium()) {
+				const Medium m = Medium(vertex.mShadingData.getMaterialAddress());
+				if (bIsCanonical)
+					gRenderParams.mAlbedo[pixelIndex] = float4(m.albedo(), 1);
+				s = ProcessVertex(vertex, m, rng, true, false);
+			} else {
+				const PackedMaterialData m = gScene.LoadMaterial(vertex.mShadingData);
+				if (bIsCanonical)
+					gRenderParams.mAlbedo[pixelIndex] = float4(m.albedo(), 1);
+				s = ProcessVertex(vertex, m, rng, true, false);
             }
 
-            if (s.mDirPdfW <= 0 || all(s.mBrdf <= 0)) break;
-            throughput *= s.mBrdf;
-            pdfA *= s.mDirPdfW;
+			directRadiance = s.mLe;
 
-            float transDirPdf, directPdfA, WtoA;
-            vertex = TraceNext(vertex, rng, s.mDirection, throughput, transDirPdf, directPdfA, WtoA);
-            if (transDirPdf <= 0 || all(throughput <= 0)) break;
-            pdfA *= transDirPdf;
-            pdfA *= WtoA;
-            throughput *= WtoA;
-        }
+			if (!s.isSpecular)
+				diffuseBounces++;
+            if (s.mDirPdfW <= 0 || all(s.mBrdf <= 0) || diffuseBounces > gPushConstants.mMaxDiffuseBounces)
+                return;
+
+            throughput *= s.mBrdf;
+			pdfW *= s.mDirPdfW;
+
+			float transDirPdf, directPdfA, WtoA;
+			vertex = TraceNext(vertex, rng, s.mDirection, throughput, transDirPdf, directPdfA, WtoA);
+            if (transDirPdf <= 0)
+                return;
+            throughput /= transDirPdf;
+
+            pathWtoA *= WtoA;
+
+			misWeight = s.isSpecular ? 1 : DirectMis(s.mDirPdfW * WtoA, directPdfA);
+		}
+
+        /*for (uint depth = 2; depth <= gPushConstants.mMaxDepth; depth++)*/ {
+			const VertexSampleRecord s = ProcessVertex(vertex, rng, false, false);
+
+            if (any(s.mLe > 0)) {
+                UpdatePath(throughput * s.mLe, pdfW, pdfW*pathWtoA, 2, rng.nextFloat().x);
+            }
+
+            return;
+
+			if (!s.isSpecular)
+				diffuseBounces++;
+            if (s.mDirPdfW <= 0 || all(s.mBrdf <= 0) || diffuseBounces > gPushConstants.mMaxDiffuseBounces)
+                return;
+
+            throughput *= s.mBrdf;
+			pdfW *= s.mDirPdfW;
+
+			float transDirPdf, directPdfA, WtoA;
+			vertex = TraceNext(vertex, rng, s.mDirection, throughput, transDirPdf, directPdfA, WtoA);
+            if (transDirPdf <= 0)
+                return;
+			throughput /= transDirPdf;
+
+            pathWtoA *= WtoA;
+
+            misWeight = s.isSpecular ? 1 : DirectMis(s.mDirPdfW * WtoA, directPdfA);
+		}
 	}
 
     // construct canonical sample at vertex
-    __init(const PathVertex vertex, const uint4 x) {
-        make(vertex, x);
+    __init(const PathVertex vertex, const uint4 x, const uint2 pixelIndex, out float3 directRadiance) {
+        make<true>(vertex, x, pixelIndex, directRadiance);
     }
 
     // shift sample to vertex's domain
     __init(const PathVertex vertex, const GISample sample, out float shiftJacobian) {
-        make(vertex, sample.mRng);
+        float3 tmp;
+        make<false>(vertex, sample.mRng, -1, tmp);
         if (mSample.mReplayPdfA > 0 && sample.mPathLength == mSample.mPathLength)
             shiftJacobian = sample.mReplayPdfA / mSample.mReplayPdfA;
-        else
+        else {
             shiftJacobian = 0;
+            mCachedTargetPdf = 0;
+        }
     }
 };
 
@@ -220,26 +364,21 @@ void ReservoirReuseGI(const PathVertex vertex, const PackedReservoirGI q, inout 
         const PathVertex v_q = PathVertex(q.mVertex.getShadingData(), q.mVertex.mInstancePrimitiveIndex, vertex.mCurrentMedium, q.mPackedLocalDirIn);
         float jac_curToQ;
         const ReservoirSampleDataGI currentSample_q = ReservoirSampleDataGI(v_q, currentSample.mSample, jac_curToQ);
-        phat_from_q = currentSample_q.mCachedTargetPdf;
-        // jacobian is 0 if the current path is 0, so dont apply it in that case
-        if (currentSample.mSample.mReplayPdfA > 0)
-            phat_from_q *= jac_curToQ;
-        else
-            jac_QtoCur = 1;
+        phat_from_q = currentSample_q.mCachedTargetPdf * jac_curToQ;
     }
 
 
     // Resampling MIS weights
 
     // naive mis
-    // const float m0 = M / (M + (phat_from_q > 0 ? q.M : 0));
-    // const float m1 = q.M / (q.M + (newSample.mTargetPdf > 0 ? M : 0));
+    const float m0 = M   / (M   + (phat_from_q > 0 ? q.M : 0));
+    const float m1 = q.M / (q.M + (newSample.mCachedTargetPdf > 0 ? M : 0));
 
     // generalized talbot mis
-    const float m0 = safe_divide(currentSample.mCachedTargetPdf*M  , currentSample.mCachedTargetPdf*M   + phat_from_q*q.M);
-    const float m1 = safe_divide(            q.mCachedTargetPdf*q.M,             q.mCachedTargetPdf*q.M + newSample.mCachedTargetPdf * jac_QtoCur*q.M);
+    //const float m0 = safe_divide(currentSample.mCachedTargetPdf*M  , currentSample.mCachedTargetPdf*M   + phat_from_q*q.M);
+    //const float m1 = safe_divide(            q.mCachedTargetPdf*q.M,             q.mCachedTargetPdf*q.M + newSample.mCachedTargetPdf * jac_QtoCur*q.M);
 
-    const float R = M;
+    //const float R = M;
     M += q.M;
 
     // defensive pairwise mis
@@ -249,13 +388,16 @@ void ReservoirReuseGI(const PathVertex vertex, const PackedReservoirGI q, inout 
     // RIS weights
 
     const float w0 = m0 * currentSample.mCachedTargetPdf * currentSample.W;
-    const float w1 = m1 * newSample.mCachedTargetPdf * q.W * jac_QtoCur;
+    const float w1 = m1 *     newSample.mCachedTargetPdf * q.W * jac_QtoCur;
 
     // create new reservoir
 
     const float totalWeight = w0 + w1;
     if (rng.nextFloat().x * totalWeight <= w1) {
         currentSample = newSample;
+
+		if ((gPushConstants.mRandomSeed % 10) == 0)
+        	printf_("reused (%.03f / %.03f)\n", w1, totalWeight);
     }
 
     if (currentSample.mCachedTargetPdf > 0)
@@ -264,20 +406,20 @@ void ReservoirReuseGI(const PathVertex vertex, const PackedReservoirGI q, inout 
         currentSample.W = 0;
 }
 
-float3 GlobalIlluminationReSTIR(const PathVertex vertex, inout RandomSampler rng, const uint2 pixelIndex) {
+float3 EstimateRadianceReSTIR(const PathVertex vertex, inout RandomSampler rng, const uint2 pixelIndex) {
     ReservoirSampleDataGI sample;
-
    	float wsum = 0;
 
     // initial ris
 
+	float3 directRadiance;
     for (uint i = 0; i < gPushConstants.mGICandidateSamples; i++) {
-        const ReservoirSampleDataGI xi = ReservoirSampleDataGI(vertex, rng.mState);
-        rng.skipNext(100);
+        const ReservoirSampleDataGI xi = ReservoirSampleDataGI(vertex, rng.mState, pixelIndex, directRadiance);
+        rng.skipNext(gPushConstants.mMaxDepth*(2 + gPushConstants.mMaxNullCollisions));
         if (xi.mCachedTargetPdf > 0) {
             const float wi = xi.mCachedTargetPdf * xi.W;
             wsum += wi;
-            if (rng.nextFloat().x <= wi / wsum)
+            if (rng.nextFloat().x*wsum <= wi)
                 sample = xi;
         }
     }
@@ -294,18 +436,14 @@ float3 GlobalIlluminationReSTIR(const PathVertex vertex, inout RandomSampler rng
     float M = 1;
 
     if (gPushConstants.mReservoirHistoryValid != 0) {
-        for (uint i = 0; i < 8; i++) {
-			const float2 discRng = rng.nextFloat().xy;
-			const int2 qi = int2(gRenderParams.mPrevUVs[pixelIndex] * gPushConstants.mOutputExtent + sampleConcentricDisc(discRng.x, discRng.y) * gPushConstants.mGIReuseRadius);
-			if (all(qi >= 0) && all(qi < gPushConstants.mOutputExtent)) {
-				PackedReservoirGI q;
-                q.LoadPrev(qi);
-                if (q.M <= 0 || q.mSample.mPathLength != sample.mSample.mPathLength)
-                    continue;
+		const float2 discRng = rng.nextFloat().xy;
+		const int2 qi = int2(gRenderParams.mPrevUVs[pixelIndex] * gPushConstants.mOutputExtent + sampleConcentricDisc(discRng.x, discRng.y) * gPushConstants.mGIReuseRadius);
+		if (all(qi >= 0) && all(qi < gPushConstants.mOutputExtent)) {
+			PackedReservoirGI q;
+			q.LoadPrev(qi);
+			if (q.M > 0 && q.mSample.mPathLength == sample.mSample.mPathLength)
 				ReservoirReuseGI(vertex, q, sample, M, rng);
-                break;
-			}
-        }
+		}
     }
 
     // store for reuse
@@ -323,42 +461,5 @@ float3 GlobalIlluminationReSTIR(const PathVertex vertex, inout RandomSampler rng
 
 	#endif
 
-	return sample.mCachedContribution * sample.W;
+    return directRadiance + sample.mCachedContribution * sample.W;
 }
-
-float3 GlobalIlluminationSimple(PathVertex vertex, inout RandomSampler rng, const uint2 pixelIndex) {
-    float3 radiance = 0;
-    float3 throughput = 1;
-    float misWeight = 0; // emission weight at first vertex is 0, since it's handled by the caller
-    for (uint depth = 1; depth <= gPushConstants.mMaxDepth; depth++) {
-        const VertexSampleRecord s = ProcessVertex(vertex, rng, depth < gPushConstants.mMaxDepth, depth < gPushConstants.mMaxDepth && depth > 1);
-
-        // note: s.mNeeLe already has mis weight applied
-		radiance += throughput * (s.mNeeLe + s.mLe * misWeight);
-
-        if (depth == gPushConstants.mMaxDepth || s.mDirPdfW <= 0 || all(s.mBrdf <= 0))
-            break;
-
-        throughput *= s.mBrdf / s.mDirPdfW;
-
-        float transDirPdf, directPdfA, WtoA;
-        vertex = TraceNext(vertex, rng, s.mDirection, throughput, transDirPdf, directPdfA, WtoA);
-        if (transDirPdf <= 0)
-            break;
-        throughput /= transDirPdf;
-
-        if (s.isSpecular)
-            misWeight = 1;
-        else if (depth == 1)
-            misWeight = 0; // diffuse direct light handled by DirectIllumination
-        else
-            misWeight = DirectMis(s.mDirPdfW * WtoA, directPdfA);
-    }
-    return radiance;
-}
-
-#ifdef gReSTIR_GI
-#define GlobalIllumination GlobalIlluminationReSTIR
-#else
-#define GlobalIllumination GlobalIlluminationSimple
-#endif

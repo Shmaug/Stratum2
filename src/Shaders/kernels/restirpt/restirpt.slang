@@ -1,57 +1,22 @@
 #include "gi.slang"
 
-float3 Radiance(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, const uint2 index) {
-	gRenderParams.mAlbedo[index] = float4(bsdf.albedo(), 1);
+#ifdef gReSTIR_GI
+#define EstimateRadianceFn EstimateRadianceReSTIR
+#else
+#define EstimateRadianceFn EstimateRadiance
+#endif
 
-    float3 radiance = 0;
-
-    if (vertex.mShadingData.isSurface() && vertex.mLocalDirIn.z > 0)
-        radiance += bsdf.emission();
-
-    if (!bsdf.canEvaluate() || gPushConstants.mMaxDepth < 2)
-		return radiance;
-
-	#ifdef gDirectLight
-    if (!bsdf.isSingular())
-        radiance = DirectIllumination(vertex, bsdf, rng, index);
-	#endif
-
-	#ifdef gIndirectLight
-	radiance += GlobalIllumination(vertex, rng, index);
-	#endif
-
-    return radiance;
-}
-
-PathVertex SampleVisibility(const uint2 index, inout RandomSampler rng, out float3 throughput) {
-    const uint viewIndex = getViewIndex(index, gPushConstants.mOutputExtent, gPushConstants.mViewCount);
-
-    float2 uv;
-    const float3 localDir = gRenderParams.mViews[viewIndex].toWorld(index + 0.5, /*out*/ uv);
-    const TransformData t = gRenderParams.mViewTransforms[viewIndex];
-    const float3 direction = normalize(t.transformVector(localDir));
-
-    uint medium = gRenderParams.mViewMediumIndices[viewIndex];
-
-    IntersectionResult isect;
-    float transDirPdf, transNeePdf;
-    throughput = 1;
-    const bool hit = gScene.traceScatteringRay(makeRay(float3(t.m[0][3], t.m[1][3], t.m[2][3]), direction), rng, medium, throughput, transDirPdf, transNeePdf, isect);
-    if (transDirPdf > 0)
-        throughput /= transDirPdf;
-
-    isect.mShadingData.mTexcoordScreenSize = 0; // disable mipmaps for now
-    return PathVertex(isect.mShadingData, isect.mInstancePrimitiveIndex, medium, -direction);
-}
+#ifdef gReSTIR_DI
+#define DirectIlluminationFn DirectIlluminationReSTIR
+#else
+#define DirectIlluminationFn DirectIllumination
+#endif
 
 [shader("compute")]
 [numthreads(8, 4, 1)]
 void Render(uint3 index: SV_DispatchThreadID) {
 	if (any(index.xy >= gPushConstants.mOutputExtent))
         return;
-
-    gRenderParams.mOutput[index.xy] = float4(0, 0, 0, 1);
-    gRenderParams.mAlbedo[index.xy] = float4(0, 0, 0, 1);
 
     RandomSampler rng = RandomSampler(gPushConstants.mRandomSeed, index.xy);
 
@@ -61,11 +26,28 @@ void Render(uint3 index: SV_DispatchThreadID) {
 	gRenderParams.StoreAuxillaryData(primaryVertex.mShadingData, index.xy, primaryVertex.mInstancePrimitiveIndex);
 
     if (primaryVertex.mShadingData.isEnvironment()) {
-        float dirPdfW;
-        const float3 emission = gScene.EvaluateEnvironment(-primaryVertex.mLocalDirIn, dirPdfW);
-		gRenderParams.mOutput[index.xy].rgb += throughput * emission;
-	} else if (gHasMedia && primaryVertex.mShadingData.isMedium())
-        gRenderParams.mOutput[index.xy].rgb += throughput * Radiance(primaryVertex, Medium(primaryVertex.mShadingData.getMaterialAddress()), rng, index.xy);
-    else
-        gRenderParams.mOutput[index.xy].rgb += throughput * Radiance(primaryVertex, gScene.LoadMaterial(primaryVertex.mShadingData), rng, index.xy);
+        float tmp;
+    	gRenderParams.mAlbedo[index.xy] = float4(0, 0, 0, 1);
+        gRenderParams.mOutput[index.xy] = float4(throughput * gScene.EvaluateEnvironment(-primaryVertex.mLocalDirIn, tmp), 1);
+        return;
+	}
+
+	#ifdef gFullGI
+
+    gRenderParams.mOutput[index.xy] = float4(EstimateRadianceFn(primaryVertex, rng, index.xy), 1);
+
+	#else // gFullGI
+
+    // load load material
+    if (gHasMedia && primaryVertex.mShadingData.isMedium()) {
+        const Medium m = Medium(primaryVertex.mShadingData.getMaterialAddress());
+        gRenderParams.mAlbedo[index.xy] = float4(m.albedo(), 1);
+        gRenderParams.mOutput[index.xy] = float4(DirectIlluminationFn(primaryVertex, m, rng, index.xy), 1);
+    } else {
+        const PackedMaterialData m = gScene.LoadMaterial(primaryVertex.mShadingData);
+        gRenderParams.mAlbedo[index.xy] = float4(m.albedo(), 1);
+        gRenderParams.mOutput[index.xy] = float4(DirectIlluminationFn(primaryVertex, m, rng, index.xy), 1);
+	}
+
+	#endif
 }

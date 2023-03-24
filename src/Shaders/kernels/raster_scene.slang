@@ -47,15 +47,15 @@ VSOut vsmain(uint vertexID: SV_VertexID) {
 void fsmain(VSOut i, out float4 outputColor: SV_Target0, out uint2 visibility: SV_Target1) {
     const PackedMaterialData material = gScene.LoadMaterialUniform(gPushConstants.mMaterialAddress, i.uv);
 
-#ifdef gUseAlphaMask
-    uint alphaMask;
-    float alphaCutoff;
-    gScene.getMaterialAlphaMask(gPushConstants.mMaterialAddress, alphaMask, alphaCutoff);
-    if (alphaMask < gImageCount) {
-        if (gScene.mImage1s[alphaMask].SampleLevel(gScene.mStaticSampler, i.uv, 0) < alphaCutoff)
-            discard;
-    }
-#endif
+	#ifdef gUseAlphaMask
+	uint alphaMask;
+	float alphaCutoff;
+	gScene.getMaterialAlphaMask(gPushConstants.mMaterialAddress, alphaMask, alphaCutoff);
+	if (alphaMask < gImageCount) {
+		if (gScene.mImage1s[alphaMask].SampleLevel(gScene.mStaticSampler, i.uv, 0) < alphaCutoff)
+			discard;
+	}
+	#endif
 
     outputColor = float4(material.getBaseColor() + material.getEmission(), 1);
 

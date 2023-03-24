@@ -141,44 +141,33 @@ struct App {
 		if (ImGui::Begin("Renderer")) {
 			if (ImGui::BeginCombo("Renderer", to_string(mRendererType).c_str())) {
 				RendererType newType = mRendererType;
-				if (ImGui::Selectable("Test", mRendererType == RendererType::eTest))
-					newType = RendererType::eTest;
-				if (ImGui::Selectable("VCM", mRendererType == RendererType::eVCM))
-					newType = RendererType::eVCM;
-				if (ImGui::Selectable("Raster", mRendererType == RendererType::eRaster))
-					newType = RendererType::eRaster;
-				if (ImGui::Selectable("Non euclidian", mRendererType == RendererType::eNonEuclidian))
-					newType = RendererType::eNonEuclidian;
-				if (ImGui::Selectable("ReSTIR PT", mRendererType == RendererType::eReSTIRPT))
-					newType = RendererType::eReSTIRPT;
+				for (const auto& [n, t] : StringToRendererTypeMap)
+					if (ImGui::Selectable(n.c_str(), mRendererType == t))
+						newType = t;
 
 				if (newType != mRendererType) {
 					mRendererType = newType;
 					bool found = false;
-					switch (mRendererType) {
-					case RendererType::eVCM:
-						if (auto r = mRendererNode->getComponent<VCM>()) {
+
+					auto findRendererFn = [&]<typename T>() {
+						if (auto r = mRendererNode->getComponent<T>()) {
 							mRenderer = r;
 							found = true;
 						}
+					};
+
+					switch (mRendererType) {
+					case RendererType::eRaster:
+						findRendererFn.operator()<RasterRenderer>();
 						break;
 					case RendererType::eTest:
-						if (auto r = mRendererNode->getComponent<TestRenderer>()) {
-							mRenderer = r;
-							found = true;
-						}
+						findRendererFn.operator()<TestRenderer>();
 						break;
-					case RendererType::eRaster:
-						if (auto r = mRendererNode->getComponent<RasterRenderer>()) {
-							mRenderer = r;
-							found = true;
-						}
+					case RendererType::eReSTIRPT:
+						findRendererFn.operator()<ReSTIRPT>();
 						break;
-					case RendererType::eNonEuclidian:
-						if (auto r = mRendererNode->getComponent<NonEuclidianRenderer>()) {
-							mRenderer = r;
-							found = true;
-						}
+					case RendererType::eVCM:
+						findRendererFn.operator()<VCM>();
 						break;
 					}
 					if (!found)

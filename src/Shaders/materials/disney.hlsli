@@ -384,7 +384,7 @@ extension PackedMaterialData {
     float emissionPdf() { return any(getEmission() > 0) ? 1 : 0; }
 	float3 albedo() { return getBaseColor(); }
     bool canEvaluate() { return any(getBaseColor() > 0); }
-    bool isSingular() { return getRoughness() < 1e-3; }
+    bool isSingular() { return max(max(getSpecular(), getMetallic()), getTransmission()) * (1 - getRoughness()) > 0.75; }
     float continuationProb() { return saturate(luminance(getBaseColor())); }
 
 

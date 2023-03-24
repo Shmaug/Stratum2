@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include <printing/gpu-printing.h>
+
 namespace stm2 {
 
 string exec(const char* cmd) {
@@ -128,6 +130,13 @@ Shader::Shader(Device& device, const filesystem::path& sourceFile, const string&
 		#endif
 	}
 
+	mGPUPrinting = make_shared<GPUPrinting>();;
+	{
+    	slang::IComponentType* linkedProgram;
+		request->getProgram(&linkedProgram);
+		mGPUPrinting->loadStrings(linkedProgram->getLayout());
+		linkedProgram->release();
+	}
 	// reflection
 
 	slang::ShaderReflection* shaderReflection = (slang::ShaderReflection*)request->getReflection();
@@ -309,6 +318,10 @@ Shader::Shader(Device& device, const filesystem::path& sourceFile, const string&
 
 	request->Release();
 	session->Release();
+}
+
+void Shader::processGPUPrintCommands(const void* data, const size_t dataSize) const {
+	mGPUPrinting->processGPUPrintCommands(data, dataSize);
 }
 
 }
