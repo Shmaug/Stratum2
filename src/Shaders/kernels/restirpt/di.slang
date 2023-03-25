@@ -167,19 +167,30 @@ void ReservoirReuseDI(const PathVertex vertex, const Interaction bsdf, const Pac
 
     // Resampling MIS weights
 
+	#ifdef gPairwiseMis
+    const float R = M;
+    M += q.M;
+    // defensive pairwise mis
+    const float m0 = (1 +      safe_divide(currentSample.mTargetPdf, R * currentSample.mTargetPdf + (M - R) * phat_q)) / M;
+    const float m1 = (M - R) * safe_divide(q.mCachedTargetPdf, R * newSample.mTargetPdf + (M - R) * q.mCachedTargetPdf) / M;
+	#elif defined(gTalbotMis)
+	// generalized talbot mis
+    const float m0 = safe_divide(M*currentSample.mTargetPdf, M*currentSample.mTargetPdf + q.M * phat_q);
+    const float m1 = safe_divide(q.M * q.mCachedTargetPdf  , q.M * q.mCachedTargetPdf   + M * newSample.mTargetPdf);
+    M += q.M;
+	#else
+	// naive mis
     const float m0 = M / (M + (phat_q > 0 ? q.M : 0));
     const float m1 = q.M / (q.M + (newSample.mTargetPdf > 0 ? M : 0));
-    //const float m0 = safe_divide(M*currentSample.mTargetPdf, M*currentSample.mTargetPdf + q.M * phat_q);
-    //const float m1 = safe_divide(q.M * q.mCachedTargetPdf  , q.M * q.mCachedTargetPdf   + M * newSample.mTargetPdf);
+    M += q.M;
+	#endif
 
     // RIS weights
 
     const float w0 = m0 * currentSample.mTargetPdf * integrationWeight;
     const float w1 = m1 * newSample.mTargetPdf * q.W;
 
-    M += q.M;
-
-    // create new reservoir
+	// create new reservoir
 
     const float totalWeight = w0 + w1;
     if (rng.nextFloat().x * totalWeight <= w1) {

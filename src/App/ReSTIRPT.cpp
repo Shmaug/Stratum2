@@ -28,6 +28,9 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 		{ "gReSTIR_DI_Reuse_Visibility", false },
 		{ "gReSTIR_GI", false },
 		{ "gReSTIR_GI_Reuse", false },
+		{ "gPairwiseMis", false },
+		{ "gTalbotMis", false },
+		{ "gDebugPixel", false },
 	};
 
 	mPushConstants["mMaxDepth"] = 8u;
@@ -409,11 +412,16 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 	// gpu printing
 	const Buffer::View<byte> gpuPrintBuffer = mResourcePool.getBuffer<byte>(commandBuffer.mDevice, "mGpuPrintBuffer", 4096*1024, vk::BufferUsageFlagBits::eTransferSrc|vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
 	{
-		gpuPrintBuffer.fill(commandBuffer, 0);
-		gpuPrintBuffer.barrier(commandBuffer,
+		const auto b = Buffer::View<uint32_t>(gpuPrintBuffer.buffer(), 0, 1);
+		b.fill(commandBuffer, 0);
+		b.barrier(commandBuffer,
 			vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
 			vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
 		descriptors[{"gPrintBuffer",0}] = gpuPrintBuffer;
+	}
+	if (mDefines.at("gDebugPixel")) {
+		const ImVec2 c = ImGui::GetIO().MousePos;
+		mPushConstants["mPackedDebugPixelIndex"] = ((int)c.x & 0xFFFF) | ((int)c.y << 16);
 	}
 
 	// create descriptor sets
@@ -427,7 +435,7 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 
 
 	// gpu printing
-	{
+	if (mDefines.at("gDebugPixel")) {
 		const Buffer::View<byte> cpuPrintBuffer = make_shared<Buffer>(commandBuffer.mDevice, "CpuPrintBuffer", gpuPrintBuffer.sizeBytes(), vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
 		gpuPrintBuffer.barrier(commandBuffer,
 			vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eTransfer,

@@ -278,6 +278,23 @@ void println<A : IPrintable, B : IPrintable, C : IPrintable>(
     c.writePrintWords(gPrintBuffer, wordOffset); wordOffset += cCount;
 }
 
+void println<A : IPrintable, B : IPrintable, C : IPrintable, D : IPrintable>(
+    A a, B b, C c, D d)
+{
+    uint wordCount = 0;
+    uint aCount = a.getPrintWordCount(); wordCount += aCount;
+    uint bCount = b.getPrintWordCount(); wordCount += bCount;
+    uint cCount = c.getPrintWordCount(); wordCount += cCount;
+    uint dCount = d.getPrintWordCount(); wordCount += dCount;
+
+    uint wordOffset = _beginPrintln(wordCount);
+
+    a.writePrintWords(gPrintBuffer, wordOffset); wordOffset += aCount;
+    b.writePrintWords(gPrintBuffer, wordOffset); wordOffset += bCount;
+    c.writePrintWords(gPrintBuffer, wordOffset); wordOffset += cCount;
+    d.writePrintWords(gPrintBuffer, wordOffset); wordOffset += dCount;
+}
+
 // Further generalizing to four or more arguments is straightforward but tedious.
 //
 // A future version of Slang may support variadic functions, variadic generics,
@@ -411,6 +428,36 @@ void printf_<A : IPrintf, B : IPrintf>(String format, A a, B b)
 
     a.writePrintfWords(gPrintBuffer, wordOffset); wordOffset += aCount;
     b.writePrintfWords(gPrintBuffer, wordOffset); wordOffset += bCount;
+}
+
+void printf_<A : IPrintf, B : IPrintf, C : IPrintf>(String format, A a, B b, C c)
+{
+    uint wordCount = 0;
+    uint aCount = a.getPrintfWordCount(); wordCount += aCount;
+    uint bCount = b.getPrintfWordCount(); wordCount += bCount;
+    uint cCount = c.getPrintfWordCount(); wordCount += cCount;
+
+    uint wordOffset = _beginPrintf(format, wordCount);
+
+    a.writePrintfWords(gPrintBuffer, wordOffset); wordOffset += aCount;
+    b.writePrintfWords(gPrintBuffer, wordOffset); wordOffset += bCount;
+    c.writePrintfWords(gPrintBuffer, wordOffset); wordOffset += cCount;
+}
+
+void printf_<A : IPrintf, B : IPrintf, C : IPrintf, D : IPrintf>(String format, A a, B b, C c, D d)
+{
+    uint wordCount = 0;
+    uint aCount = a.getPrintfWordCount(); wordCount += aCount;
+    uint bCount = b.getPrintfWordCount(); wordCount += bCount;
+    uint cCount = c.getPrintfWordCount(); wordCount += cCount;
+    uint dCount = d.getPrintfWordCount(); wordCount += dCount;
+
+    uint wordOffset = _beginPrintf(format, wordCount);
+
+    a.writePrintfWords(gPrintBuffer, wordOffset); wordOffset += aCount;
+    b.writePrintfWords(gPrintBuffer, wordOffset); wordOffset += bCount;
+    c.writePrintfWords(gPrintBuffer, wordOffset); wordOffset += cCount;
+    d.writePrintfWords(gPrintBuffer, wordOffset); wordOffset += dCount;
 }
 
 // Extending this `printf()` implementation to handle more format arguments

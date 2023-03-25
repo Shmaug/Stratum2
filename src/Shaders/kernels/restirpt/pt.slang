@@ -18,6 +18,7 @@ struct PushConstants {
     float mDIReuseRadius;
     float mGIReuseRadius;
     uint mReservoirHistoryValid;
+    uint mPackedDebugPixelIndex;
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> gPushConstants;
 
