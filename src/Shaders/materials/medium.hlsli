@@ -21,11 +21,11 @@ struct Medium {
     uint mAlbedoVolumeIndex;
     float mAnisotropy;
 
-    __init(const uint address) {
-        const uint4 data0 = gScene.mMaterialData.Load<uint4>((int)address);
+    __init(const SceneParameters scene, const uint address) {
+        const uint4 data0 = scene.mMaterialData.Load<uint4>((int)address);
         mDensityScale = asfloat(data0.xyz);
         mPackedAlbedoScale = data0.w;
-        const uint3 data1 = gScene.mMaterialData.Load<uint3>((int)address + 16);
+        const uint3 data1 = scene.mMaterialData.Load<uint3>((int)address + 16);
         mDensityVolumeIndex = data1[0];
         mAlbedoVolumeIndex = data1[1];
         mAnisotropy = asfloat(data1[2]);
@@ -79,24 +79,29 @@ struct Medium {
 
 	// density/transmittance sampling
 
-    StructuredBuffer<uint> getDensityVolume() { return gScene.mVolumes[NonUniformResourceIndex(mDensityVolumeIndex)]; }
-	StructuredBuffer<uint> getAlbedoVolume()  { return gScene.mVolumes[NonUniformResourceIndex(mAlbedoVolumeIndex)]; }
+    StructuredBuffer<uint> getDensityVolume(const SceneParameters scene) { return scene.mVolumes[NonUniformResourceIndex(mDensityVolumeIndex)]; }
+	StructuredBuffer<uint> getAlbedoVolume (const SceneParameters scene) { return scene.mVolumes[NonUniformResourceIndex(mAlbedoVolumeIndex)]; }
 
-    float3 readDensity(inout pnanovdb_readaccessor_t density_accessor, const float3 pos_index) {
+    float3 readGrid(pnanovdb_buf_t buf, inout pnanovdb_readaccessor_t accessor, const float3 pos_index) {
+		return pnanovdb_read_float(buf, pnanovdb_readaccessor_get_value_address(PNANOVDB_GRID_TYPE_FLOAT, buf, accessor, (int3)floor(pos_index)));
+
+	}
+
+    float3 readDensity(const SceneParameters scene, inout pnanovdb_readaccessor_t accessor, const float3 pos_index) {
         if (mDensityVolumeIndex == -1)
             return 1;
-		else
-        	return pnanovdb_read_float(getDensityVolume(), pnanovdb_readaccessor_get_value_address(PNANOVDB_GRID_TYPE_FLOAT, getDensityVolume(), density_accessor, (int3)floor(pos_index)));
-    }
-    float3 readAlbedo(inout pnanovdb_readaccessor_t albedo_accessor, const float3 pos_index) {
-		if (mAlbedoVolumeIndex == -1)
-			return 1;
         else
-            return pnanovdb_read_float(getAlbedoVolume(), pnanovdb_readaccessor_get_value_address(PNANOVDB_GRID_TYPE_FLOAT, getAlbedoVolume(), albedo_accessor, (int3)floor(pos_index)));
+            return readGrid(getDensityVolume(scene), accessor, pos_index);
+    }
+    float3 readAlbedo(const SceneParameters scene, inout pnanovdb_readaccessor_t accessor, const float3 pos_index) {
+		if (mAlbedoVolumeIndex == -1)
+            return 1;
+        else
+            return readGrid(getAlbedoVolume(scene), accessor, pos_index);
 	}
 
 	// returns hit position inside medium. multiplies beta by transmittance*sigma_s
-    float3 deltaTrack<let Scattering : bool>(inout RandomSampler rng, float3 origin, float3 direction, float tmax, inout float3 beta, out float3 dirPdf, out float3 neePdf, out bool scattered) {
+    float3 deltaTrack<let Scattering : bool>(const SceneParameters scene, inout RandomSampler rng, float3 origin, float3 direction, float tmax, inout float3 beta, out float3 dirPdf, out float3 neePdf, out bool scattered) {
 		scattered = false;
 		dirPdf = 1;
 		neePdf = 1;
@@ -122,22 +127,21 @@ struct Medium {
 
 		// heterogeneous volume
 
-		pnanovdb_readaccessor_t density_accessor, albedo_accessor;
-		pnanovdb_readaccessor_init(density_accessor, pnanovdb_tree_get_root(getDensityVolume(), pnanovdb_grid_get_tree(getDensityVolume(), { 0 })));
+        pnanovdb_buf_t densityVolume = getDensityVolume(scene);
+
+        pnanovdb_readaccessor_t density_accessor, albedo_accessor;
+        pnanovdb_readaccessor_init(density_accessor, pnanovdb_tree_get_root(densityVolume, pnanovdb_grid_get_tree(densityVolume, { 0 })));
         if (mAlbedoVolumeIndex != -1)
-            pnanovdb_readaccessor_init(albedo_accessor, pnanovdb_tree_get_root(getAlbedoVolume(), pnanovdb_grid_get_tree(getAlbedoVolume(), { 0 })));
+            pnanovdb_readaccessor_init(albedo_accessor, pnanovdb_tree_get_root(getAlbedoVolume(scene), pnanovdb_grid_get_tree(getAlbedoVolume(scene), { 0 })));
 
-
-        float3 majorant = density() * pnanovdb_read_float(getDensityVolume(), pnanovdb_root_get_max_address(PNANOVDB_GRID_TYPE_FLOAT, getDensityVolume(), density_accessor.root));
+        float3 majorant = density() * pnanovdb_read_float(densityVolume, pnanovdb_root_get_max_address(PNANOVDB_GRID_TYPE_FLOAT, densityVolume, density_accessor.root));
         if (majorant[channel] < 1e-6) return 0;
 
-		origin    = pnanovdb_grid_world_to_indexf    (getDensityVolume(), { 0 }, origin);
-		direction = pnanovdb_grid_world_to_index_dirf(getDensityVolume(), { 0 }, direction);
+		origin    = pnanovdb_grid_world_to_indexf    (densityVolume, { 0 }, origin);
+		direction = pnanovdb_grid_world_to_index_dirf(densityVolume, { 0 }, direction);
 
         const float invMajorantChannel = 1 / majorant[channel];
         const float invMajorantMax = 1 / max3(majorant);
-
-		pnanovdb_buf_t densityVolume = getDensityVolume();
 
         for (uint iteration = 0; iteration < gMaxNullCollisions && any(beta > 0); iteration++) {
             const float t = -log(1 - rng.nextFloat().x) * invMajorantChannel;
@@ -154,8 +158,8 @@ struct Medium {
 			origin += direction*t;
 			tmax -= t;
 
-            const float3 sigma_t = density() * readDensity(density_accessor, origin);
-            const float3 sigma_s = albedo()  * readAlbedo(albedo_accessor, origin);
+            const float3 sigma_t = density() * readDensity(scene, density_accessor, origin);
+            const float3 sigma_s = albedo()  * readAlbedo (scene, albedo_accessor , origin);
 
             const float3 tr = exp(-majorant * t) * invMajorantMax;
 

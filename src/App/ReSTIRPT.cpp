@@ -57,13 +57,13 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 
 void ReSTIRPT::createPipelines(Device& device) {
 	ComputePipeline::Metadata md;
-	md.mImmutableSamplers["gScene.mStaticSampler"]  = { mStaticSampler };
-	md.mImmutableSamplers["gScene.mStaticSampler1"] = { mStaticSampler };
-	md.mBindingFlags["gScene.mVertexBuffers"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
-	md.mBindingFlags["gScene.mImages"]  = vk::DescriptorBindingFlagBits::ePartiallyBound;
-	md.mBindingFlags["gScene.mImage2s"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
-	md.mBindingFlags["gScene.mImage1s"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
-	md.mBindingFlags["gScene.mVolumes"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	md.mImmutableSamplers["gPathTracer.mScene.mStaticSampler"]  = { mStaticSampler };
+	md.mImmutableSamplers["gPathTracer.mScene.mStaticSampler1"] = { mStaticSampler };
+	md.mBindingFlags["gPathTracer.mScene.mVertexBuffers"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	md.mBindingFlags["gPathTracer.mScene.mImages"]  = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	md.mBindingFlags["gPathTracer.mScene.mImage2s"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	md.mBindingFlags["gPathTracer.mScene.mImage1s"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+	md.mBindingFlags["gPathTracer.mScene.mVolumes"] = vk::DescriptorBindingFlagBits::ePartiallyBound;
 
 	const vector<string>& args = {
 		"-matrix-layout-row-major",
@@ -224,11 +224,11 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 
 	Descriptors descriptors;
 
-	descriptors[{ "gRenderParams.mOutput", 0 }]     = ImageDescriptor{ outputImage    , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
-	descriptors[{ "gRenderParams.mAlbedo", 0 }]     = ImageDescriptor{ albedoImage    , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
-	descriptors[{ "gRenderParams.mPrevUVs", 0 }]    = ImageDescriptor{ prevUVsImage   , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
-	descriptors[{ "gRenderParams.mVisibility", 0 }] = ImageDescriptor{ visibilityImage, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
-	descriptors[{ "gRenderParams.mDepth", 0 }]      = ImageDescriptor{ depthImage     , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+	descriptors[{ "gPathTracer.mFramebuffer.mOutput", 0 }]     = ImageDescriptor{ outputImage    , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+	descriptors[{ "gPathTracer.mFramebuffer.mAlbedo", 0 }]     = ImageDescriptor{ albedoImage    , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+	descriptors[{ "gPathTracer.mFramebuffer.mPrevUVs", 0 }]    = ImageDescriptor{ prevUVsImage   , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+	descriptors[{ "gPathTracer.mFramebuffer.mVisibility", 0 }] = ImageDescriptor{ visibilityImage, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+	descriptors[{ "gPathTracer.mFramebuffer.mDepth", 0 }]      = ImageDescriptor{ depthImage     , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 
 	mPushConstants["mReservoirHistoryValid"] = 1u;
 	for (uint32_t i = 0; i < 3; i++) {
@@ -239,8 +239,8 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 			.mExtent = extent,
 			.mUsage = vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eTransferSrc|vk::ImageUsageFlagBits::eTransferDst,
 		});
-		descriptors[{ "gRenderParams.mReservoirDataDI", i }] = ImageDescriptor{ reservoirData, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
-		descriptors[{ "gRenderParams.mPrevReservoirDataDI", i }] = ImageDescriptor{ prev ? prev : reservoirData, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{ "gPathTracer.mFramebuffer.mReservoirDataDI", i }] = ImageDescriptor{ reservoirData, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+		descriptors[{ "gPathTracer.mFramebuffer.mPrevReservoirDataDI", i }] = ImageDescriptor{ prev ? prev : reservoirData, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderRead, {} };
 		if (!prev)
 			mPushConstants["mReservoirHistoryValid"] = 0u;
 
@@ -255,8 +255,8 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 			.mExtent = extent,
 			.mUsage = vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eTransferSrc|vk::ImageUsageFlagBits::eTransferDst,
 		});
-		descriptors[{ "gRenderParams.mReservoirDataGI", i }] = ImageDescriptor{ reservoirData, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
-		descriptors[{ "gRenderParams.mPrevReservoirDataGI", i }] = ImageDescriptor{ prev ? prev : reservoirData, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{ "gPathTracer.mFramebuffer.mReservoirDataGI", i }] = ImageDescriptor{ reservoirData, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+		descriptors[{ "gPathTracer.mFramebuffer.mPrevReservoirDataGI", i }] = ImageDescriptor{ prev ? prev : reservoirData, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderRead, {} };
 		if (!prev)
 			mPushConstants["mReservoirHistoryValid"] = 0u;
 
@@ -289,8 +289,8 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 		}
 
 		for (auto& [name, d] : sceneData.mDescriptors)
-			descriptors[{ "gScene." + name.first, name.second }] = d;
-		descriptors[{ "gScene.mRayCount", 0u }] = make_shared<Buffer>(commandBuffer.mDevice, "mRayCount", 2*sizeof(uint32_t), vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+			descriptors[{ "gPathTracer.mScene." + name.first, name.second }] = d;
+		descriptors[{ "gPathTracer.mScene.mRayCount", 0u }] = make_shared<Buffer>(commandBuffer.mDevice, "mRayCount", 2*sizeof(uint32_t), vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
 
 		// track resources which are not held by the descriptorset
 		commandBuffer.trackResource(sceneData.mAccelerationStructureBuffer.buffer());
@@ -328,10 +328,10 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 
 		viewsBuffer = mResourcePool.uploadData<ViewData>(commandBuffer, "mViews", viewsBufferData);
 
-		descriptors[{ "gRenderParams.mViews", 0 }]                     = viewsBuffer;
-		descriptors[{ "gRenderParams.mViewTransforms", 0 }]            = mResourcePool.uploadData<TransformData>(commandBuffer, "mViewTransforms", viewTransformsBufferData);
-		descriptors[{ "gRenderParams.mViewInverseTransforms", 0 }]     = mResourcePool.uploadData<TransformData>(commandBuffer, "mViewInverseTransforms", inverseViewTransformsData);
-		descriptors[{ "gRenderParams.mPrevViewInverseTransforms", 0 }] = mResourcePool.uploadData<TransformData>(commandBuffer, "mPrevViewInverseTransforms", prevInverseViewTransformsData);
+		descriptors[{ "gPathTracer.mFramebuffer.mViews", 0 }]                     = viewsBuffer;
+		descriptors[{ "gPathTracer.mFramebuffer.mViewTransforms", 0 }]            = mResourcePool.uploadData<TransformData>(commandBuffer, "mViewTransforms", viewTransformsBufferData);
+		descriptors[{ "gPathTracer.mFramebuffer.mViewInverseTransforms", 0 }]     = mResourcePool.uploadData<TransformData>(commandBuffer, "mViewInverseTransforms", inverseViewTransformsData);
+		descriptors[{ "gPathTracer.mFramebuffer.mPrevViewInverseTransforms", 0 }] = mResourcePool.uploadData<TransformData>(commandBuffer, "mPrevViewInverseTransforms", prevInverseViewTransformsData);
 
 
 		// find if views are inside a volume
@@ -350,9 +350,10 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 			}
 		}
 
-		descriptors[{ "gRenderParams.mViewMediumIndices", 0 }] = mResourcePool.uploadData<uint>(commandBuffer, "mViewMediumIndices", viewMediumIndices);
+		descriptors[{ "gPathTracer.mFramebuffer.mViewMediumIndices", 0 }] = mResourcePool.uploadData<uint>(commandBuffer, "mViewMediumIndices", viewMediumIndices);
 	}
 
+	// push constants
 	{
 		const Scene::FrameData& sceneData = scene->frameData();
 

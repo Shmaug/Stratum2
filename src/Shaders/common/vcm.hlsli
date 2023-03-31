@@ -36,6 +36,8 @@
 #include "compat/vcm.h"
 #include "compat/scene.h"
 
+ParameterBlock<SceneParameters> gScene;
+
 #ifdef gLambertian
 #include "materials/lambertian.hlsli"
 #else

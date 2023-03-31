@@ -40,6 +40,8 @@ struct PushConstants {
 #include "common/lights.hlsli"
 #include "common/hashgrid.hlsli"
 
+ParameterBlock<SceneParameters> gScene;
+
 struct PackedLightVertex {
     float3 mLocalPosition;
     uint mInstancePrimitiveIndex;
@@ -320,10 +322,6 @@ void TraceConnectionRay(const float3 rayOrigin, const float3 rayDirection, const
     #endif
 }
 
-float AdjustIntersectionDistance(const float d) {
-    return max(d * 0.99, d - 1e-2);
-}
-
 // ---------------------------------------------------------------------------------------------------------
 // ----------------------------------- Bidirectional vertex connections ------------------------------------
 // ---------------------------------------------------------------------------------------------------------
@@ -377,7 +375,7 @@ LightVertexSampleRecord SampleLightVertex(const float3 referencePosition, const 
 
     if (gHasMedia && shadingData.isMedium()) {
 		r.mCosLight = 1;
-        const Medium lightBsdf = Medium(shadingData.getMaterialAddress());
+        const Medium lightBsdf = Medium(gScene, shadingData.getMaterialAddress());
 		f = lightBsdf.evaluateReflectance<true>(v.getLocalDirIn(), -r.mDirectionToLight);
 		contProb = lightBsdf.continuationProb();
 	} else {
@@ -632,10 +630,10 @@ void ReservoirReuse(const Interaction bsdf, const ShadingData shadingData, const
         ShadingData sd_q = qd.getShadingData();
         ReservoirSampleDataDI currentSample_q;
         if (gHasMedia && sd_q.isMedium()) {
-            currentSample_q = ReservoirSampleDataDI(Medium(sd_q.getMaterialAddress()), sd_q, qd.mLocalDirIn, currentSample.mSample);
+            currentSample_q = ReservoirSampleDataDI(Medium(gScene, sd_q.getMaterialAddress()), sd_q, qd.mLocalDirIn, currentSample.mSample);
 		} else {
             gScene.ApplyNormalMap(sd_q);
-            currentSample_q = ReservoirSampleDataDI(gScene.LoadMaterial(sd_q)        , sd_q, qd.mLocalDirIn, currentSample.mSample);
+            currentSample_q = ReservoirSampleDataDI(gScene.LoadMaterial(sd_q)                , sd_q, qd.mLocalDirIn, currentSample.mSample);
 		}
 
 		if (currentSample_q.mTargetPdf > 0) {
@@ -1078,7 +1076,7 @@ bool ExtendPath<let bFromLight : bool>() {
 		return false;
 
 	if (gHasMedia && shadingData.isMedium()) {
-		return ProcessInteraction<bFromLight>(Medium(shadingData.getMaterialAddress()), shadingData);
+		return ProcessInteraction<bFromLight>(Medium(gScene, shadingData.getMaterialAddress()), shadingData);
 	} else {
 		gScene.ApplyNormalMap(shadingData);
 		return ProcessInteraction<bFromLight>(gScene.LoadMaterial(shadingData), shadingData);

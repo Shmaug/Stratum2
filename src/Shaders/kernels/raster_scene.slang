@@ -13,6 +13,7 @@ struct Params {
 	StructuredBuffer<TransformData> mViewTransforms;
 	StructuredBuffer<TransformData> mViewInverseTransforms;
 };
+ParameterBlock<SceneParameters> gScene;
 ParameterBlock<Params> gParams;
 
 struct VSOut {

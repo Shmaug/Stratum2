@@ -4,9 +4,9 @@
 #include "compat/material_data.h"
 
 struct SceneParameters {
-#ifndef NO_SCENE_ACCELERATION_STRUCTURE
+	#ifndef NO_SCENE_ACCELERATION_STRUCTURE
 	RaytracingAccelerationStructure mAccelerationStructure;
-#endif
+	#endif
 
 	StructuredBuffer<InstanceData> mInstances;
 	StructuredBuffer<TransformData> mInstanceTransforms;
@@ -111,8 +111,6 @@ uint getViewIndex(const uint2 index, const uint2 extent, const uint viewCount) {
     // return index.x / (extent.x / gPushConstants.mViewCount);
 	return 0;
 }
-
-ParameterBlock<SceneParameters> gScene;
 
 struct ReflectanceEvalRecord {
     float3 mReflectance;

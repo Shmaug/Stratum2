@@ -56,14 +56,14 @@ struct RenderParams {
     RWTexture2D<float4> mReservoirDataGI[4];
     RWTexture2D<float4> mPrevReservoirDataGI[4];
 
-    void StoreAuxillaryData(const ShadingData shadingData, const uint2 index, const uint instancePrimitiveIndex) {
+    void StoreAuxillaryData(const SceneParameters scene, const ShadingData shadingData, const uint2 index, const uint instancePrimitiveIndex) {
         float2 prevPixelCoord = index + 0.5;
 
 		const float depth = length(mViewInverseTransforms[0].transformPoint(shadingData.mPosition));
 
         float prevDepth = depth;
         if (BF_GET(instancePrimitiveIndex, 0, 16) != INVALID_INSTANCE) {
-            const float3 prevCameraPos = mPrevViewInverseTransforms[0].transformPoint(gScene.mInstanceMotionTransforms[BF_GET(instancePrimitiveIndex, 0, 16)].transformPoint(shadingData.mPosition));
+            const float3 prevCameraPos = mPrevViewInverseTransforms[0].transformPoint(scene.mInstanceMotionTransforms[BF_GET(instancePrimitiveIndex, 0, 16)].transformPoint(shadingData.mPosition));
 			prevDepth = length(prevCameraPos);
 			mViews[0].toRaster(prevCameraPos, prevPixelCoord);
 		}
@@ -82,30 +82,6 @@ struct RenderParams {
         mDepth[index] = reinterpret<float4>(d);
     }
 };
-ParameterBlock<RenderParams> gRenderParams;
-
-
-float AdjustIntersectionDistance(const float d) {
-    return max(d * 0.99, d - 1e-2);
-}
-
-interface Interaction {
-    bool canEvaluate();
-    bool isSingular();
-
-    float3 emission();
-    float emissionPdf();
-    float3 albedo();
-
-    float continuationProb();
-
-    ReflectanceEvalRecord evaluateReflectance<let Adjoint : bool>(const float3 dirIn, const float3 dirOut);
-    DirectionSampleRecord sampleDirection<let Adjoint : bool>(const float3 rnd, const float3 dirIn);
-
-    float3 evaluateReflectanceFast<let Adjoint : bool>(const float3 localDirIn, const float3 localDirOut);
-};
-extension PackedMaterialData : Interaction {};
-extension Medium : Interaction {};
 
 struct PathVertex {
     ShadingData mShadingData;
@@ -126,43 +102,66 @@ struct PathVertex {
         set { BF_SET(mInstancePrimitiveIndex, newValue, 16, 16); }
     };
 
-    __init(const ShadingData shadingData, const uint instancePrimitiveIndex, const uint currentMedium, const uint packedLocalDirIn) {
+    __init(const SceneParameters scene, const ShadingData shadingData, const uint instancePrimitiveIndex, const uint currentMedium, const uint packedLocalDirIn) {
         mShadingData = shadingData;
 		mInstancePrimitiveIndex = instancePrimitiveIndex;
         mCurrentMedium = currentMedium;
 		mPackedLocalDirIn = packedLocalDirIn;
         if (mShadingData.isSurface())
-            gScene.ApplyNormalMap(mShadingData);
+            scene.ApplyNormalMap(mShadingData);
     }
-    __init(const ShadingData shadingData, const uint instancePrimitiveIndex, const uint currentMedium, const float3 dirIn) {
+    __init(const SceneParameters scene, const ShadingData shadingData, const uint instancePrimitiveIndex, const uint currentMedium, const float3 dirIn) {
         mShadingData = shadingData;
 		mInstancePrimitiveIndex = instancePrimitiveIndex;
         mCurrentMedium = currentMedium;
 		if (mShadingData.isSurface()) {
-            gScene.ApplyNormalMap(mShadingData);
+            scene.ApplyNormalMap(mShadingData);
             mLocalDirIn = mShadingData.toLocal(dirIn);
         } else
             mLocalDirIn = dirIn;
 	}
 };
 
-PathVertex SampleVisibility(const uint2 index, inout RandomSampler rng, out float3 throughput) {
-    const uint viewIndex = getViewIndex(index, gPushConstants.mOutputExtent, gPushConstants.mViewCount);
+struct PathTracer {
+    SceneParameters mScene;
+    RenderParams mFramebuffer;
 
-    float2 uv;
-    const float3 localDir = gRenderParams.mViews[viewIndex].toWorld(index + 0.5, /*out*/ uv);
-    const TransformData t = gRenderParams.mViewTransforms[viewIndex];
-    const float3 direction = normalize(t.transformVector(localDir));
+	PathVertex SampleVisibility(const uint2 index, inout RandomSampler rng, out float3 throughput) {
+		const uint viewIndex = getViewIndex(index, gPushConstants.mOutputExtent, gPushConstants.mViewCount);
 
-    uint medium = gRenderParams.mViewMediumIndices[viewIndex];
+		float2 uv;
+		const float3 localDir = mFramebuffer.mViews[viewIndex].toWorld(index + 0.5, /*out*/ uv);
+		const TransformData t = mFramebuffer.mViewTransforms[viewIndex];
+		const float3 direction = normalize(t.transformVector(localDir));
 
-    IntersectionResult isect;
-    float transDirPdf, transNeePdf;
-    throughput = 1;
-    const bool hit = gScene.traceScatteringRay(makeRay(float3(t.m[0][3], t.m[1][3], t.m[2][3]), direction), rng, medium, throughput, transDirPdf, transNeePdf, isect);
-    if (transDirPdf > 0)
-        throughput /= transDirPdf;
+		uint medium = mFramebuffer.mViewMediumIndices[viewIndex];
 
-    isect.mShadingData.mTexcoordScreenSize = 0; // disable mipmaps for now
-    return PathVertex(isect.mShadingData, isect.mInstancePrimitiveIndex, medium, -direction);
-}
+		IntersectionResult isect;
+		float transDirPdf, transNeePdf;
+        throughput = 1;
+        const bool hit = mScene.traceScatteringRay(makeRay(float3(t.m[0][3], t.m[1][3], t.m[2][3]), direction), rng, medium, throughput, transDirPdf, transNeePdf, isect);
+		if (transDirPdf > 0)
+			throughput /= transDirPdf;
+
+		isect.mShadingData.mTexcoordScreenSize = 0; // disable mipmaps for now
+		return PathVertex(mScene, isect.mShadingData, isect.mInstancePrimitiveIndex, medium, -direction);
+	}
+};
+
+interface Interaction {
+    bool canEvaluate();
+    bool isSingular();
+
+    float3 emission();
+    float emissionPdf();
+    float3 albedo();
+
+    float continuationProb();
+
+    ReflectanceEvalRecord evaluateReflectance<let Adjoint : bool>(const float3 dirIn, const float3 dirOut);
+    DirectionSampleRecord sampleDirection<let Adjoint : bool>(const float3 rnd, const float3 dirIn);
+
+    float3 evaluateReflectanceFast<let Adjoint : bool>(const float3 localDirIn, const float3 localDirOut);
+};
+extension PackedMaterialData : Interaction {};
+extension Medium : Interaction {};

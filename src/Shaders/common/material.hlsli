@@ -78,7 +78,7 @@ extension SceneParameters {
     void ApplyNormalMap(inout ShadingData aoShadingData) {
         if (!gNormalMaps) return;
 
-        const uint3 p = gScene.mMaterialData.Load<uint3>(int(aoShadingData.getMaterialAddress() + 36));
+        const uint3 p = mMaterialData.Load<uint3>(int(aoShadingData.getMaterialAddress() + 36));
         if (p.x >= gImageCount) return;
         const float scale = asfloat(p.y);
         if (scale <= 0) return;

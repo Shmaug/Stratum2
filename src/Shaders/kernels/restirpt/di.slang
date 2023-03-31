@@ -5,48 +5,50 @@ float DirectMis(const float a, const float b) {
     return safe_divide(a2, a2 + b * b);
 }
 
-float3 DirectIllumination(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, out float directPdfA, out float misWeight) {
-    const IlluminationSampleRecord r = gScene.SampleIllumination(rng.nextFloat(), vertex.mShadingData.mPosition);
-    if (all(r.mRadiance <= 0) || r.mPdf <= 0)
-        return 0;
+extension PathTracer {
+	float3 DirectIllumination(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, out float directPdfA, out float misWeight) {
+		const IlluminationSampleRecord r = mScene.SampleIllumination(rng.nextFloat(), vertex.mShadingData.mPosition);
+		if (all(r.mRadiance <= 0) || r.mPdf <= 0)
+			return 0;
 
-    float WtoA = 1;
-    if (r.isFinite)
-        WtoA = r.mCosLight / pow2(r.mDistanceToLight);
+		float WtoA = 1;
+		if (r.isFinite)
+			WtoA = r.mCosLight / pow2(r.mDistanceToLight);
 
-    const bool isMedium = gHasMedia && vertex.mShadingData.isMedium();
-    const float3 localDirOut = isMedium ? r.mDirectionToLight : vertex.mShadingData.toLocal(r.mDirectionToLight);
+		const bool isMedium = gHasMedia && vertex.mShadingData.isMedium();
+		const float3 localDirOut = isMedium ? r.mDirectionToLight : vertex.mShadingData.toLocal(r.mDirectionToLight);
 
-    ReflectanceEvalRecord f = bsdf.evaluateReflectance<false>(vertex.mLocalDirIn, localDirOut);
-    if (!isMedium)
-        f.mReflectance *= vertex.mShadingData.shadingNormalCorrection<false>(vertex.mLocalDirIn, localDirOut);
+		ReflectanceEvalRecord f = bsdf.evaluateReflectance<false>(vertex.mLocalDirIn, localDirOut);
+		if (!isMedium)
+			f.mReflectance *= vertex.mShadingData.shadingNormalCorrection<false>(vertex.mLocalDirIn, localDirOut);
 
-    float3 contrib = (r.mRadiance * f.mReflectance) * (WtoA / r.mPdf);
+		float3 contrib = (r.mRadiance * f.mReflectance) * (WtoA / r.mPdf);
 
-	directPdfA = r.mPdf;
-	misWeight = DirectMis(r.mPdf, f.mFwdPdfW * WtoA);
+		directPdfA = r.mPdf;
+		misWeight = DirectMis(r.mPdf, f.mFwdPdfW * WtoA);
 
-    // evaluate transmittance along shadow ray
+		// evaluate transmittance along shadow ray
 
-    const float3 rayOrigin = isMedium ?
-			vertex.mShadingData.mPosition :
-			rayOffset(vertex.mShadingData.mPosition, vertex.mShadingData.getGeometryNormal(), r.mDirectionToLight);
+		const float3 rayOrigin = isMedium ?
+				vertex.mShadingData.mPosition :
+				rayOffset(vertex.mShadingData.mPosition, vertex.mShadingData.getGeometryNormal(), r.mDirectionToLight);
 
-    float transDirPdf, transNeePdf;
-    gScene.traceVisibilityRay(
-        makeRay(rayOrigin, r.mDirectionToLight, 0, AdjustIntersectionDistance(r.mDistanceToLight)),
-        rng, vertex.mCurrentMedium, contrib, transDirPdf, transNeePdf);
+		float transDirPdf, transNeePdf;
+		mScene.traceVisibilityRay(
+			makeRay(rayOrigin, r.mDirectionToLight, 0, AdjustIntersectionDistance(r.mDistanceToLight)),
+			rng, vertex.mCurrentMedium, contrib, transDirPdf, transNeePdf);
 
-    if (all(contrib <= 0) || transNeePdf <= 0)
-        return 0;
+		if (all(contrib <= 0) || transNeePdf <= 0)
+			return 0;
 
-	directPdfA *= transNeePdf;
+		directPdfA *= transNeePdf;
 
-    return contrib / transNeePdf;
-}
-float3 DirectIllumination(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, const uint2 pixelIndex) {
-    float tmp1, tmp2;
-	return DirectIllumination(vertex, bsdf, rng, tmp1, tmp2);
+		return contrib / transNeePdf;
+	}
+	float3 DirectIllumination(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, const uint2 pixelIndex) {
+		float tmp1, tmp2;
+		return DirectIllumination(vertex, bsdf, rng, tmp1, tmp2);
+	}
 }
 
 /* -------- ReSTIR -------- */
@@ -62,12 +64,12 @@ struct ReservoirSampleDataDI {
     property float mTargetPdf { get { return luminance(mCachedContribution) * mCachedWtoA; } }
     property float mRISWeight { get { return mTargetPdf / mSourcePdf; } }
 
-    __init(const PathVertex vertex, const Interaction bsdf, const float4 x) {
+    __init(const SceneParameters scene, const PathVertex vertex, const Interaction bsdf, const float4 x) {
         mSample = x;
         mCachedContribution = 0;
         mCachedWtoA = 0;
         mCachedBsdfPdfW = 0;
-        const IlluminationSampleRecord r = gScene.SampleIllumination(mSample, vertex.mShadingData.mPosition);
+        const IlluminationSampleRecord r = scene.SampleIllumination(mSample, vertex.mShadingData.mPosition);
         mSourcePdf = r.mPdf;
         if (luminance(r.mRadiance) > 0 && r.mPdf > 0) {
             const bool isMedium = gHasMedia && vertex.mShadingData.isMedium();
@@ -105,29 +107,29 @@ struct PackedReservoirDI {
 
     uint getInstanceIndex()  { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
     uint getPrimitiveIndex() { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
-    ShadingData getShadingData() {
+    ShadingData getShadingData(const SceneParameters scene) {
         const uint instanceIndex = getInstanceIndex();
-        ShadingData sd = gScene.makeShadingData(gScene.mInstances[instanceIndex], gScene.mInstanceTransforms[instanceIndex], mLocalPosition, getPrimitiveIndex());
+        ShadingData sd = scene.makeShadingData(scene.mInstances[instanceIndex], scene.mInstanceTransforms[instanceIndex], mLocalPosition, getPrimitiveIndex());
         sd.mTexcoordScreenSize = 0;
         return sd;
     }
 
-    void Store(const uint2 idx) {
+    void Store(const RenderParams fb, const uint2 idx) {
         float4 data;
         data.xyz = mLocalPosition;
         data.w = asfloat(mInstancePrimitiveIndex);
-        gRenderParams.mReservoirDataDI[0][idx] = data;
-        gRenderParams.mReservoirDataDI[1][idx] = mSample;
-        gRenderParams.mReservoirDataDI[2][idx] = float4(mCachedTargetPdf, W, M, asfloat(mPackedLocalDirIn));
+        fb.mReservoirDataDI[0][idx] = data;
+        fb.mReservoirDataDI[1][idx] = mSample;
+        fb.mReservoirDataDI[2][idx] = float4(mCachedTargetPdf, W, M, asfloat(mPackedLocalDirIn));
     }
 
     [mutating]
-    void LoadPrev(const uint2 idx) {
-        const float4 data = gRenderParams.mPrevReservoirDataDI[0][idx];
+    void LoadPrev(const RenderParams fb, const uint2 idx) {
+        const float4 data = fb.mPrevReservoirDataDI[0][idx];
         mLocalPosition = data.xyz;
         mInstancePrimitiveIndex = asuint(data.w);
-        mSample = gRenderParams.mPrevReservoirDataDI[1][idx];
-        const float4 data2 = gRenderParams.mPrevReservoirDataDI[2][idx];
+        mSample = fb.mPrevReservoirDataDI[1][idx];
+        const float4 data2 = fb.mPrevReservoirDataDI[2][idx];
         mCachedTargetPdf = data2.x;
         W = data2.y;
         M = data2.z;
@@ -135,141 +137,143 @@ struct PackedReservoirDI {
     }
 };
 
-void ReservoirReuseDI(const PathVertex vertex, const Interaction bsdf, const PackedReservoirDI q, inout ReservoirSampleDataDI currentSample, inout float integrationWeight, inout float M, inout RandomSampler rng) {
-    // q's sample in the current domain
-    ReservoirSampleDataDI newSample = ReservoirSampleDataDI(vertex, bsdf, q.mSample);
-	#ifdef gReSTIR_DI_Reuse_Visibility
-    if (newSample.mTargetPdf > 0) {
-        float transDirPdf, transNeePdf;
-        gScene.traceVisibilityRay(newSample.mVisibilityRay, rng, vertex.mCurrentMedium, newSample.mCachedContribution, transDirPdf, transNeePdf);
-    }
-	#endif
+extension PathTracer {
+	void ReservoirReuseDI(const PathVertex vertex, const Interaction bsdf, const PackedReservoirDI q, inout ReservoirSampleDataDI currentSample, inout float integrationWeight, inout float M, inout RandomSampler rng) {
+		// q's sample in the current domain
+		ReservoirSampleDataDI newSample = ReservoirSampleDataDI(mScene, vertex, bsdf, q.mSample);
+		#ifdef gReSTIR_DI_Reuse_Visibility
+		if (newSample.mTargetPdf > 0) {
+			float transDirPdf, transNeePdf;
+			mScene.traceVisibilityRay(newSample.mVisibilityRay, rng, vertex.mCurrentMedium, newSample.mCachedContribution, transDirPdf, transNeePdf);
+		}
+		#endif
 
-    // target pdf in q's domain of currentSample
-    float phat_q = 0;
-    {
-        const PathVertex v_q = PathVertex(q.getShadingData(), q.mInstancePrimitiveIndex, vertex.mCurrentMedium, q.mPackedLocalDirIn);
-        ReservoirSampleDataDI currentSample_q;
-        if (gHasMedia && v_q.mShadingData.isMedium())
-            currentSample_q = ReservoirSampleDataDI(v_q, Medium(v_q.mShadingData.getMaterialAddress()), currentSample.mSample);
-		else
-        	currentSample_q = ReservoirSampleDataDI(v_q, gScene.LoadMaterial(v_q.mShadingData), currentSample.mSample);
+		// target pdf in q's domain of currentSample
+		float phat_q = 0;
+		{
+			const PathVertex v_q = PathVertex(mScene, q.getShadingData(mScene), q.mInstancePrimitiveIndex, vertex.mCurrentMedium, q.mPackedLocalDirIn);
+			ReservoirSampleDataDI currentSample_q;
+			if (gHasMedia && v_q.mShadingData.isMedium())
+				currentSample_q = ReservoirSampleDataDI(mScene, v_q, Medium(mScene, v_q.mShadingData.getMaterialAddress()), currentSample.mSample);
+			else
+				currentSample_q = ReservoirSampleDataDI(mScene, v_q, mScene.LoadMaterial(v_q.mShadingData), currentSample.mSample);
 
-        if (currentSample_q.mTargetPdf > 0) {
-			#ifdef gReSTIR_DI_Reuse_Visibility
-            // note: this ray should really be traced through the previous frame's acceleration structure
-            float transDirPdf, transNeePdf;
-            gScene.traceVisibilityRay(currentSample_q.mVisibilityRay, rng, vertex.mCurrentMedium, currentSample_q.mCachedContribution, transDirPdf, transNeePdf);
-			#endif
-            phat_q = currentSample_q.mTargetPdf;
-        }
-    }
-
-    // Resampling MIS weights
-
-	#ifdef gPairwiseMis
-    const float R = M;
-    M += q.M;
-    // defensive pairwise mis
-    const float m0 = (1 +      safe_divide(currentSample.mTargetPdf, R * currentSample.mTargetPdf + (M - R) * phat_q)) / M;
-    const float m1 = (M - R) * safe_divide(q.mCachedTargetPdf, R * newSample.mTargetPdf + (M - R) * q.mCachedTargetPdf) / M;
-	#elif defined(gTalbotMis)
-	// generalized talbot mis
-    const float m0 = safe_divide(M*currentSample.mTargetPdf, M*currentSample.mTargetPdf + q.M * phat_q);
-    const float m1 = safe_divide(q.M * q.mCachedTargetPdf  , q.M * q.mCachedTargetPdf   + M * newSample.mTargetPdf);
-    M += q.M;
-	#else
-	// naive mis
-    const float m0 = M / (M + (phat_q > 0 ? q.M : 0));
-    const float m1 = q.M / (q.M + (newSample.mTargetPdf > 0 ? M : 0));
-    M += q.M;
-	#endif
-
-    // RIS weights
-
-    const float w0 = m0 * currentSample.mTargetPdf * integrationWeight;
-    const float w1 = m1 * newSample.mTargetPdf * q.W;
-
-	// create new reservoir
-
-    const float totalWeight = w0 + w1;
-    if (rng.nextFloat().x * totalWeight <= w1) {
-        currentSample = newSample;
-    }
-
-    if (currentSample.mTargetPdf > 0)
-        integrationWeight = totalWeight / currentSample.mTargetPdf;
-    else
-        integrationWeight = 0;
-}
-
-float3 DirectIlluminationReSTIR(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, const uint2 pixelIndex) {
-    ReservoirSampleDataDI sample;
-    float wsum = 0;
-
-    // initial ris
-
-    for (uint i = 0; i < gPushConstants.mDICandidateSamples; i++) {
-        const ReservoirSampleDataDI xi = ReservoirSampleDataDI(vertex, bsdf, rng.nextFloat());
-        if (xi.mTargetPdf <= 0)
-            continue;
-
-        wsum += xi.mRISWeight;
-        if (rng.nextFloat().x <= xi.mRISWeight / wsum)
-            sample = xi;
-    }
-
-    float integrationWeight = 0;
-
-	#if !defined(gReSTIR_DI_Reuse) || defined(gReSTIR_DI_Reuse_Visibility)
-    if (sample.mTargetPdf > 0) {
-        float transDirPdf, transNeePdf;
-        gScene.traceVisibilityRay(sample.mVisibilityRay, rng, vertex.mCurrentMedium, sample.mCachedContribution, transDirPdf, transNeePdf);
-    }
-	#endif
-
-	if (sample.mTargetPdf > 0)
-		integrationWeight = wsum / (gPushConstants.mDICandidateSamples * sample.mTargetPdf);
-
-    // reuse
-
-	#ifdef gReSTIR_DI_Reuse
-
-    float M = gPushConstants.mDICandidateSamples;
-
-    if (gPushConstants.mReservoirHistoryValid != 0) {
-		const float2 discRng = rng.nextFloat().xy;
-		const int2 qi = int2(gRenderParams.mPrevUVs[pixelIndex] * gPushConstants.mOutputExtent + sampleConcentricDisc(discRng.x, discRng.y) * gPushConstants.mDIReuseRadius);
-		if (all(qi >= 0) && all(qi < gPushConstants.mOutputExtent)) {
-			PackedReservoirDI q;
-			q.LoadPrev(qi);
-			if (q.M > 0) {
-				ReservoirReuseDI(vertex, bsdf, q, sample, integrationWeight, M, rng);
+			if (currentSample_q.mTargetPdf > 0) {
+				#ifdef gReSTIR_DI_Reuse_Visibility
+				// note: this ray should really be traced through the previous frame's acceleration structure
+				float transDirPdf, transNeePdf;
+				mScene.traceVisibilityRay(currentSample_q.mVisibilityRay, rng, vertex.mCurrentMedium, currentSample_q.mCachedContribution, transDirPdf, transNeePdf);
+				#endif
+				phat_q = currentSample_q.mTargetPdf;
 			}
 		}
-    }
 
-    // store for reuse
-    {
-        PackedReservoirDI r;
-        r.mLocalPosition = gScene.mInstanceInverseTransforms[vertex.mInstanceIndex].transformPoint(vertex.mShadingData.mPosition);
-        r.mInstancePrimitiveIndex = vertex.mInstancePrimitiveIndex;
-        r.mSample = sample.mSample;
-        r.mCachedTargetPdf = sample.mTargetPdf;
-        r.W = integrationWeight;
-        r.M = min(M, gPushConstants.mDIMaxM * gPushConstants.mDICandidateSamples);
-        r.mPackedLocalDirIn = vertex.mPackedLocalDirIn;
-        r.Store(pixelIndex);
-    }
+		// Resampling MIS weights
 
-	#ifndef gReSTIR_DI_Reuse_Visibility
-    if (sample.mTargetPdf > 0) {
-        float transDirPdf, transNeePdf;
-        gScene.traceVisibilityRay(sample.mVisibilityRay, rng, vertex.mCurrentMedium, sample.mCachedContribution, transDirPdf, transNeePdf);
-    }
-	#endif
+		#ifdef gPairwiseMis
+		const float R = M;
+		M += q.M;
+		// defensive pairwise mis
+		const float m0 = (1 +      safe_divide(currentSample.mTargetPdf, R * currentSample.mTargetPdf + (M - R) * phat_q)) / M;
+		const float m1 = (M - R) * safe_divide(q.mCachedTargetPdf, R * newSample.mTargetPdf + (M - R) * q.mCachedTargetPdf) / M;
+		#elif defined(gTalbotMis)
+		// generalized talbot mis
+		const float m0 = safe_divide(M*currentSample.mTargetPdf, M*currentSample.mTargetPdf + q.M * phat_q);
+		const float m1 = safe_divide(q.M * q.mCachedTargetPdf  , q.M * q.mCachedTargetPdf   + M * newSample.mTargetPdf);
+		M += q.M;
+		#else
+		// naive mis
+		const float m0 = M / (M + (phat_q > 0 ? q.M : 0));
+		const float m1 = q.M / (q.M + (newSample.mTargetPdf > 0 ? M : 0));
+		M += q.M;
+		#endif
 
-	#endif
+		// RIS weights
 
-	return sample.mCachedContribution * integrationWeight * sample.mCachedWtoA;
+		const float w0 = m0 * currentSample.mTargetPdf * integrationWeight;
+		const float w1 = m1 * newSample.mTargetPdf * q.W;
+
+		// create new reservoir
+
+		const float totalWeight = w0 + w1;
+		if (rng.nextFloat().x * totalWeight <= w1) {
+			currentSample = newSample;
+		}
+
+		if (currentSample.mTargetPdf > 0)
+			integrationWeight = totalWeight / currentSample.mTargetPdf;
+		else
+			integrationWeight = 0;
+	}
+
+	float3 DirectIlluminationReSTIR(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, const uint2 pixelIndex) {
+		ReservoirSampleDataDI sample;
+		float wsum = 0;
+
+		// initial ris
+
+		for (uint i = 0; i < gPushConstants.mDICandidateSamples; i++) {
+			const ReservoirSampleDataDI xi = ReservoirSampleDataDI(mScene, vertex, bsdf, rng.nextFloat());
+			if (xi.mTargetPdf <= 0)
+				continue;
+
+			wsum += xi.mRISWeight;
+			if (rng.nextFloat().x <= xi.mRISWeight / wsum)
+				sample = xi;
+		}
+
+		float integrationWeight = 0;
+
+		#if !defined(gReSTIR_DI_Reuse) || defined(gReSTIR_DI_Reuse_Visibility)
+		if (sample.mTargetPdf > 0) {
+			float transDirPdf, transNeePdf;
+			mScene.traceVisibilityRay(sample.mVisibilityRay, rng, vertex.mCurrentMedium, sample.mCachedContribution, transDirPdf, transNeePdf);
+		}
+		#endif
+
+		if (sample.mTargetPdf > 0)
+			integrationWeight = wsum / (gPushConstants.mDICandidateSamples * sample.mTargetPdf);
+
+		// reuse
+
+		#ifdef gReSTIR_DI_Reuse
+
+		float M = gPushConstants.mDICandidateSamples;
+
+		if (gPushConstants.mReservoirHistoryValid != 0) {
+			const float2 discRng = rng.nextFloat().xy;
+			const int2 qi = int2(mFramebuffer.mPrevUVs[pixelIndex] * gPushConstants.mOutputExtent + sampleConcentricDisc(discRng.x, discRng.y) * gPushConstants.mDIReuseRadius);
+			if (all(qi >= 0) && all(qi < gPushConstants.mOutputExtent)) {
+				PackedReservoirDI q;
+				q.LoadPrev(mFramebuffer, qi);
+				if (q.M > 0) {
+					ReservoirReuseDI(vertex, bsdf, q, sample, integrationWeight, M, rng);
+				}
+			}
+		}
+
+		// store for reuse
+		{
+			PackedReservoirDI r;
+			r.mLocalPosition = mScene.mInstanceInverseTransforms[vertex.mInstanceIndex].transformPoint(vertex.mShadingData.mPosition);
+			r.mInstancePrimitiveIndex = vertex.mInstancePrimitiveIndex;
+			r.mSample = sample.mSample;
+			r.mCachedTargetPdf = sample.mTargetPdf;
+			r.W = integrationWeight;
+			r.M = min(M, gPushConstants.mDIMaxM * gPushConstants.mDICandidateSamples);
+			r.mPackedLocalDirIn = vertex.mPackedLocalDirIn;
+			r.Store(mFramebuffer, pixelIndex);
+		}
+
+		#ifndef gReSTIR_DI_Reuse_Visibility
+		if (sample.mTargetPdf > 0) {
+			float transDirPdf, transNeePdf;
+			mScene.traceVisibilityRay(sample.mVisibilityRay, rng, vertex.mCurrentMedium, sample.mCachedContribution, transDirPdf, transNeePdf);
+		}
+		#endif
+
+		#endif
+
+		return sample.mCachedContribution * integrationWeight * sample.mCachedWtoA;
+	}
 }

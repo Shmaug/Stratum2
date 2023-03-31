@@ -14,25 +14,6 @@
 #include "materials/medium.hlsli"
 #include "rng.hlsli"
 
-struct IntersectionResult {
-	uint mInstancePrimitiveIndex;
-	float mPrimitivePickPdf;
-	float mDistance;
-	ShadingData mShadingData;
-
-	property uint mInstanceIndex {
-        get { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
-        set { BF_SET(mInstancePrimitiveIndex, newValue, 0, 16); }
-	}
-	property uint mPrimitiveIndex {
-		get { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
-		set { BF_SET(mInstancePrimitiveIndex, newValue, 16, 16); }
-	}
-	InstanceData  getInstance()   { return gScene.mInstances[mInstanceIndex]; }
-	TransformData getTransform()  { return gScene.mInstanceTransforms[mInstanceIndex]; }
-	uint          getLightIndex() { return gScene.mInstanceLightMap[mInstanceIndex]; }
-};
-
 float3 rayOffset(const float3 P, const float3 Ng) {
 	// This function should be used to compute a modified ray start position for
 	// rays leaving from a surface. This is from "A Fast and Robust Method for Avoiding
@@ -58,6 +39,27 @@ RayDesc makeRay(const float3 origin, const float3 direction, const float tmin = 
 	ray.TMax = tmax;
 	return ray;
 }
+
+struct IntersectionResult {
+	uint mInstancePrimitiveIndex;
+	float mPrimitivePickPdf;
+	float mDistance;
+	ShadingData mShadingData;
+
+	property uint mInstanceIndex {
+        get { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
+        set { BF_SET(mInstancePrimitiveIndex, newValue, 0, 16); }
+	}
+	property uint mPrimitiveIndex {
+		get { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
+		set { BF_SET(mInstancePrimitiveIndex, newValue, 16, 16); }
+	}
+	InstanceData  getInstance  (const SceneParameters scene) { return scene.mInstances         [mInstanceIndex]; }
+	TransformData getTransform (const SceneParameters scene) { return scene.mInstanceTransforms[mInstanceIndex]; }
+	uint          getLightIndex(const SceneParameters scene) { return scene.mInstanceLightMap  [mInstanceIndex]; }
+};
+
+float AdjustIntersectionDistance(const float d) { return max(d * 0.99, d - 1e-2); }
 
 extension SceneParameters {
     bool traceRay(const RayDesc ray, const bool closest, out IntersectionResult isect) {
@@ -160,9 +162,9 @@ extension SceneParameters {
 				isect.mInstanceIndex  = rayQuery.CommittedInstanceID();
 				isect.mPrimitiveIndex = rayQuery.CommittedPrimitiveIndex();
 
-                MeshInstanceData meshInstance = reinterpret<MeshInstanceData>(isect.getInstance());
+                MeshInstanceData meshInstance = reinterpret<MeshInstanceData>(isect.getInstance(this));
                 isect.mPrimitivePickPdf = 1.0 / float(meshInstance.primitiveCount());
-				isect.mShadingData = makeTriangleShadingData(meshInstance, isect.getTransform(), rayQuery.CommittedPrimitiveIndex(), rayQuery.CommittedTriangleBarycentrics());
+				isect.mShadingData = makeTriangleShadingData(meshInstance, isect.getTransform(this), rayQuery.CommittedPrimitiveIndex(), rayQuery.CommittedTriangleBarycentrics());
 				break;
 			}
 			case COMMITTED_PROCEDURAL_PRIMITIVE_HIT: {
@@ -170,13 +172,13 @@ extension SceneParameters {
 				isect.mInstanceIndex = rayQuery.CommittedInstanceID();
                 isect.mPrimitiveIndex = INVALID_PRIMITIVE;
                 isect.mPrimitivePickPdf = 1;
-				switch (isect.getInstance().getType()) {
+				switch (isect.getInstance(this).getType()) {
 					case InstanceType::eSphere:
-						isect.mShadingData = makeSphereShadingData(reinterpret<SphereInstanceData>(isect.getInstance()), isect.getTransform(), rayQuery.CommittedObjectRayOrigin() + rayQuery.CommittedObjectRayDirection() * rayQuery.CommittedRayT());
+						isect.mShadingData = makeSphereShadingData(reinterpret<SphereInstanceData>(isect.getInstance(this)), isect.getTransform(this), rayQuery.CommittedObjectRayOrigin() + rayQuery.CommittedObjectRayDirection() * rayQuery.CommittedRayT());
 						break;
 					case InstanceType::eVolume: {
 						const uint n = isect.mShadingData.mPackedGeometryNormal; // assigned in the rayQuery loop above
-						isect.mShadingData = makeVolumeShadingData(reinterpret<VolumeInstanceData>(isect.getInstance()), ray.Origin + ray.Direction * rayQuery.CommittedRayT());
+						isect.mShadingData = makeVolumeShadingData(reinterpret<VolumeInstanceData>(isect.getInstance(this)), ray.Origin + ray.Direction * rayQuery.CommittedRayT());
 						isect.mShadingData.mPackedGeometryNormal = n;
 						break;
 					}
@@ -208,7 +210,8 @@ extension SceneParameters {
 
                 float3 dirPdf3, neePdf3;
                 bool scattered;
-                const float3 p = Medium(mInstances[curMediumInstance].getMaterialAddress()).deltaTrack<true>(
+                const float3 p = Medium(this, mInstances[curMediumInstance].getMaterialAddress()).deltaTrack<true>(
+					this,
 					rng,
 					invTransform.transformPoint(ray.Origin),
 					invTransform.transformVector(ray.Direction),
@@ -273,7 +276,7 @@ extension SceneParameters {
 		// load medium
 		Medium medium;
 		if (curMediumInstance != INVALID_INSTANCE)
-            medium = Medium(mInstances[curMediumInstance].getMaterialAddress());
+            medium = Medium(this, mInstances[curMediumInstance].getMaterialAddress());
 
         ray.Origin += ray.Direction * ray.TMin;
         ray.TMin = 0;
@@ -282,7 +285,7 @@ extension SceneParameters {
             IntersectionResult isect;
             const bool hit = traceRay(ray, true, /*out*/ isect);
 
-            if (hit && isect.getInstance().getType() != InstanceType::eVolume) {
+            if (hit && isect.getInstance(this).getType() != InstanceType::eVolume) {
 				// hit a surface
 				beta = 0;
 				dirPdf = 0;
@@ -297,6 +300,7 @@ extension SceneParameters {
                 float3 dirPdf3, neePdf3;
                 bool scattered;
 				medium.deltaTrack<false>(
+					this,
 					rng,
 					invTransform.transformPoint(ray.Origin),
 					invTransform.transformVector(ray.Direction),
@@ -319,7 +323,7 @@ extension SceneParameters {
 			if (dot(ng, ray.Direction) < 0) {
 				// entering medium
 				curMediumInstance = isect.mInstanceIndex;
-				medium = Medium(isect.mShadingData.getMaterialAddress());
+				medium = Medium(this, isect.mShadingData.getMaterialAddress());
 				ray.Origin = rayOffset(isect.mShadingData.mPosition, -ng);
 			} else {
 				// leaving medium
