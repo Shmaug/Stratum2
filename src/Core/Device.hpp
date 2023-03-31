@@ -47,6 +47,8 @@ public:
 	inline const vk::raii::PipelineCache& pipelineCache() const { return mPipelineCache; }
 	inline VmaAllocator allocator() const { return mAllocator; }
 
+	inline const unordered_set<string>& extensions() const { return mExtensions; }
+
 	inline const vk::PhysicalDeviceLimits& limits() const { return mLimits; }
 	inline const vk::PhysicalDeviceFeatures& features() const { return mFeatures; }
 	inline const vk::PhysicalDeviceVulkan13Features&                 vulkan13Features() const              { return get<vk::PhysicalDeviceVulkan13Features>(mFeatureChain); }
@@ -92,6 +94,8 @@ private:
  	vk::raii::PhysicalDevice mPhysicalDevice;
 	vk::raii::PipelineCache mPipelineCache;
 
+	unordered_set<string> mExtensions;
+
 	shared_mutex mCommandPoolMutex;
 	unordered_map<thread::id, unordered_map<uint32_t, vk::raii::CommandPool>> mCommandPools;
 
@@ -102,6 +106,7 @@ private:
 
 	size_t mFrameIndex;
 	size_t mLastFrameDone;
+
 
 	vk::PhysicalDeviceFeatures mFeatures;
 	vk::StructureChain<

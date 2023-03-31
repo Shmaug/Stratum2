@@ -16,17 +16,16 @@ Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) :
 	mPipelineCache(nullptr),
 	mFrameIndex(0),
 	mLastFrameDone(0) {
-	unordered_set<string> deviceExtensions;
 	for (const string& s : mInstance.findArguments("deviceExtension"))
-		deviceExtensions.emplace(s);
-	deviceExtensions.emplace(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
-	if (deviceExtensions.contains(VK_KHR_RAY_QUERY_EXTENSION_NAME)) {
-		deviceExtensions.emplace(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
-		deviceExtensions.emplace(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
-		deviceExtensions.emplace(VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
+		mExtensions.emplace(s);
+	mExtensions.emplace(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+	if (mExtensions.contains(VK_KHR_RAY_QUERY_EXTENSION_NAME)) {
+		mExtensions.emplace(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+		mExtensions.emplace(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+		mExtensions.emplace(VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
 	}
-	if (deviceExtensions.contains(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME))
-		deviceExtensions.emplace(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+	if (mExtensions.contains(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME))
+		mExtensions.emplace(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
 
 	// Queue create infos
 
@@ -61,19 +60,19 @@ Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) :
 	difeatures.shaderSampledImageArrayNonUniformIndexing = true;
 	difeatures.shaderStorageImageArrayNonUniformIndexing = true;
 	difeatures.descriptorBindingPartiallyBound = true;
-	get<vk::PhysicalDeviceBufferDeviceAddressFeatures>(mFeatureChain).bufferDeviceAddress = deviceExtensions.contains(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
-	get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>(mFeatureChain).accelerationStructure = deviceExtensions.contains(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+	get<vk::PhysicalDeviceBufferDeviceAddressFeatures>(mFeatureChain).bufferDeviceAddress = mExtensions.contains(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
+	get<vk::PhysicalDeviceAccelerationStructureFeaturesKHR>(mFeatureChain).accelerationStructure = mExtensions.contains(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
 	auto& rtfeatures = get<vk::PhysicalDeviceRayTracingPipelineFeaturesKHR>(mFeatureChain);
-	rtfeatures.rayTracingPipeline = deviceExtensions.contains(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+	rtfeatures.rayTracingPipeline = mExtensions.contains(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
 	rtfeatures.rayTraversalPrimitiveCulling = rtfeatures.rayTracingPipeline;
-	get<vk::PhysicalDeviceRayQueryFeaturesKHR>(mFeatureChain).rayQuery = deviceExtensions.contains(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+	get<vk::PhysicalDeviceRayQueryFeaturesKHR>(mFeatureChain).rayQuery = mExtensions.contains(VK_KHR_RAY_QUERY_EXTENSION_NAME);
 
 
 
 	// Create logical device
 
 	vector<const char*> deviceExts;
-	for (const string& s : deviceExtensions)
+	for (const string& s : mExtensions)
 		deviceExts.emplace_back(s.c_str());
 
 	vector<const char*> validationLayers;
@@ -119,10 +118,11 @@ Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) :
 	allocatorInfo.instance = **mInstance;
 	allocatorInfo.vulkanApiVersion = mInstance.vulkanVersion();
 	allocatorInfo.preferredLargeHeapBlockSize = 1024 * 1024;
+	allocatorInfo.flags = 0;
+	if (mExtensions.contains(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME))
+		allocatorInfo.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
 	if (get<vk::PhysicalDeviceBufferDeviceAddressFeatures>(mFeatureChain).bufferDeviceAddress)
-		allocatorInfo.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
-	else
-		allocatorInfo.flags = 0;
+		allocatorInfo.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
 	vmaCreateAllocator(&allocatorInfo, &mAllocator);
 }
 Device::~Device() {
@@ -198,22 +198,44 @@ void Device::submit(const vk::raii::Queue queue, const vk::ArrayProxy<const shar
 
 void Device::drawGui() {
 	if (ImGui::CollapsingHeader("Heap budgets")) {
+		const bool memoryBudgetExt = mExtensions.contains(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+		vk::StructureChain<vk::PhysicalDeviceMemoryProperties2, vk::PhysicalDeviceMemoryBudgetPropertiesEXT> structureChain;
+		if (memoryBudgetExt) {
+			const auto tmp = mPhysicalDevice.getMemoryProperties2<vk::PhysicalDeviceMemoryProperties2, vk::PhysicalDeviceMemoryBudgetPropertiesEXT>();
+			structureChain = tmp;
+		} else {
+			structureChain.get<vk::PhysicalDeviceMemoryProperties2>() = mPhysicalDevice.getMemoryProperties2();
+		}
+
+		const vk::PhysicalDeviceMemoryProperties2& properties = structureChain.get<vk::PhysicalDeviceMemoryProperties2>();
+		const vk::PhysicalDeviceMemoryBudgetPropertiesEXT& budgetProperties = structureChain.get<vk::PhysicalDeviceMemoryBudgetPropertiesEXT>();
+
 		VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
 		vmaGetHeapBudgets(mAllocator, budgets);
-		const vk::PhysicalDeviceMemoryProperties properties = mPhysicalDevice.getMemoryProperties();
-		for (uint32_t heapIndex = 0; heapIndex < properties.memoryHeapCount; heapIndex++) {
-			ImGui::Text("Heap %u %s", heapIndex, (properties.memoryHeaps[heapIndex].flags & vk::MemoryHeapFlagBits::eDeviceLocal) ? "(device local)" : "");
+
+		for (uint32_t heapIndex = 0; heapIndex < properties.memoryProperties.memoryHeapCount; heapIndex++) {
+			const char* isDeviceLocalStr = (properties.memoryProperties.memoryHeaps[heapIndex].flags & vk::MemoryHeapFlagBits::eDeviceLocal) ? " (device local)" : "";
+
+			if (memoryBudgetExt) {
+				const auto[usage, usageUnit]   = formatBytes(budgetProperties.heapUsage[heapIndex]);
+				const auto[budget, budgetUnit] = formatBytes(budgetProperties.heapBudget[heapIndex]);
+				ImGui::Text("Heap %u%s (%llu %s / %llu %s)", heapIndex, isDeviceLocalStr, usage, usageUnit, budget, budgetUnit);
+			} else
+				ImGui::Text("Heap %u%s", heapIndex, isDeviceLocalStr);
 			ImGui::Indent();
 
-			const auto[usage, usageUnit] = formatBytes(budgets[heapIndex].usage);
-			const auto[budget, budgetUnit] = formatBytes(budgets[heapIndex].budget);
-			ImGui::Text("%llu %s used, %llu %s budgeted", usage, usageUnit, budget, budgetUnit);
+			// VMA stats
+			{
+				const auto[usage, usageUnit]   = formatBytes(budgets[heapIndex].usage);
+				const auto[budget, budgetUnit] = formatBytes(budgets[heapIndex].budget);
+				ImGui::Text("%llu %s used, %llu %s budgeted", usage, usageUnit, budget, budgetUnit);
 
-			const auto[allocationBytes, allocationBytesUnit] = formatBytes(budgets[heapIndex].statistics.allocationBytes);
-			ImGui::Text("%u allocations\t(%llu %s)", budgets[heapIndex].statistics.allocationCount, allocationBytes, allocationBytesUnit);
+				const auto[allocationBytes, allocationBytesUnit] = formatBytes(budgets[heapIndex].statistics.allocationBytes);
+				ImGui::Text("%u allocations\t(%llu %s)", budgets[heapIndex].statistics.allocationCount, allocationBytes, allocationBytesUnit);
 
-			const auto[blockBytes, blockBytesUnit] = formatBytes(budgets[heapIndex].statistics.blockBytes);
-			ImGui::Text("%u memory blocks\t(%llu %s)", budgets[heapIndex].statistics.blockCount, blockBytes, blockBytesUnit);
+				const auto[blockBytes, blockBytesUnit] = formatBytes(budgets[heapIndex].statistics.blockBytes);
+				ImGui::Text("%u memory blocks\t(%llu %s)", budgets[heapIndex].statistics.blockCount, blockBytes, blockBytesUnit);
+			}
 
 			ImGui::Unindent();
 		}
