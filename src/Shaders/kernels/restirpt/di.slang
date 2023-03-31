@@ -49,7 +49,7 @@ float3 DirectIllumination(const PathVertex vertex, const Interaction bsdf, inout
 	return DirectIllumination(vertex, bsdf, rng, tmp1, tmp2);
 }
 
-// -------- ReSTIR --------
+/* -------- ReSTIR -------- */
 
 struct ReservoirSampleDataDI {
     float4 mSample;

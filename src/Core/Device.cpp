@@ -197,20 +197,26 @@ void Device::submit(const vk::raii::Queue queue, const vk::ArrayProxy<const shar
 }
 
 void Device::drawGui() {
-	VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
-	vmaGetHeapBudgets(mAllocator, budgets);
-	const vk::PhysicalDeviceMemoryProperties properties = mPhysicalDevice.getMemoryProperties();
-	for (uint32_t heapIndex = 0; heapIndex < properties.memoryHeapCount; heapIndex++) {
-		const auto[usage, usageUnit] = formatBytes(budgets[heapIndex].usage);
-		const auto[budget, budgetUnit] = formatBytes(budgets[heapIndex].budget);
-		const auto[allocationBytes, allocationBytesUnit] = formatBytes(budgets[heapIndex].statistics.allocationBytes);
-		const auto[blockBytes, blockBytesUnit] = formatBytes(budgets[heapIndex].statistics.blockBytes);
-		ImGui::Text("Heap %u %s", heapIndex, (properties.memoryHeaps[heapIndex].flags & vk::MemoryHeapFlagBits::eDeviceLocal) ? "(device local)" : "");
-		ImGui::Text("%llu %s used, %llu %s budgeted", usage, usageUnit, budget, budgetUnit);
-		ImGui::Indent();
-		ImGui::Text("%u allocations (%llu %s)", budgets[heapIndex].statistics.allocationCount, allocationBytes, allocationBytesUnit);
-		ImGui::Text("%u device memory blocks (%llu %s)", budgets[heapIndex].statistics.blockCount, blockBytes, blockBytesUnit);
-		ImGui::Unindent();
+	if (ImGui::CollapsingHeader("Heap budgets")) {
+		VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
+		vmaGetHeapBudgets(mAllocator, budgets);
+		const vk::PhysicalDeviceMemoryProperties properties = mPhysicalDevice.getMemoryProperties();
+		for (uint32_t heapIndex = 0; heapIndex < properties.memoryHeapCount; heapIndex++) {
+			ImGui::Text("Heap %u %s", heapIndex, (properties.memoryHeaps[heapIndex].flags & vk::MemoryHeapFlagBits::eDeviceLocal) ? "(device local)" : "");
+			ImGui::Indent();
+
+			const auto[usage, usageUnit] = formatBytes(budgets[heapIndex].usage);
+			const auto[budget, budgetUnit] = formatBytes(budgets[heapIndex].budget);
+			ImGui::Text("%llu %s used, %llu %s budgeted", usage, usageUnit, budget, budgetUnit);
+
+			const auto[allocationBytes, allocationBytesUnit] = formatBytes(budgets[heapIndex].statistics.allocationBytes);
+			ImGui::Text("%u allocations\t(%llu %s)", budgets[heapIndex].statistics.allocationCount, allocationBytes, allocationBytesUnit);
+
+			const auto[blockBytes, blockBytesUnit] = formatBytes(budgets[heapIndex].statistics.blockBytes);
+			ImGui::Text("%u memory blocks\t(%llu %s)", budgets[heapIndex].statistics.blockCount, blockBytes, blockBytesUnit);
+
+			ImGui::Unindent();
+		}
 	}
 }
 

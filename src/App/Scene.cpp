@@ -250,12 +250,15 @@ Material Scene::makeMetallicRoughnessMaterial(CommandBuffer& commandBuffer, cons
 		descriptors[{ "gEmission", 0 }]      = ImageDescriptor{ emission.mImage           ? emission.mImage           : d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
 		descriptors[{ "gRoughness", 0 }]     = ImageDescriptor{                                                         d, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {} };
 		Defines defs;
-		if (baseColor.mImage) defs["gUseDiffuse"] = "true";
+		if (baseColor.mImage)          defs["gUseDiffuse"] = "true";
 		if (metallic_roughness.mImage) defs["gUseSpecular"] = "true";
-		if (transmission.mImage) defs["gUseTransmittance"] = "true";
-		if (emission.mImage)     defs["gUseEmission"] = "true";
+		if (transmission.mImage)       defs["gUseTransmittance"] = "true";
+		if (emission.mImage)           defs["gUseEmission"] = "true";
 
-		mConvertPbrPipeline.get(commandBuffer.mDevice, defs)->dispatchTiled(commandBuffer, d.extent(), descriptors);
+		const shared_ptr<ComputePipeline> pipeline = mConvertPbrPipeline.get(commandBuffer.mDevice, defs);
+		const shared_ptr<DescriptorSets> descriptorSets = make_shared<DescriptorSets>(*pipeline, "Scene::makeMetallicRoughnessMaterial Descriptors");
+		descriptorSets->write(descriptors);
+		pipeline->dispatchTiled(commandBuffer, d.extent(), descriptorSets);
 
 		for (const Image::View& img : m.mImages)
 			if (img)
@@ -337,7 +340,10 @@ Material Scene::makeDiffuseSpecularMaterial(CommandBuffer& commandBuffer, const 
 		if (roughness.mImage)    defs["gUseRoughness"] = "true";
 		if (emission.mImage)     defs["gUseEmission"] = "true";
 
-		mConvertDiffuseSpecularPipeline.get(commandBuffer.mDevice, defs)->dispatchTiled(commandBuffer, d.extent(), descriptors);
+		const shared_ptr<ComputePipeline> pipeline = mConvertDiffuseSpecularPipeline.get(commandBuffer.mDevice, defs);
+		const shared_ptr<DescriptorSets> descriptorSets = make_shared<DescriptorSets>(*pipeline, "Scene::makeDiffuseSpecularMaterial Descriptors");
+		descriptorSets->write(descriptors);
+		pipeline->dispatchTiled(commandBuffer, d.extent(), descriptorSets);
 
 		for (const Image::View& img : m.mImages)
 			if (img)
@@ -377,8 +383,8 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 		 	it++;
 			continue;
 		}
-
-		mNode.addChild(it->get());
+		const auto[node, cb] = it->get();
+		mNode.addChild(node);
 
 		it = mLoading.erase(it);
 
@@ -393,22 +399,19 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 	}
 	for (const string& file : mToLoad) {
 		const filesystem::path filepath = file;
-		//*
-		mNode.addChild( load(commandBuffer, filepath) );
-		loaded = true;
-		update = true;
-		/*/
 		Device& device = commandBuffer.mDevice;
-		mLoading.emplace_back( move(async(launch::async, [=,&device](){
-			const uint32_t family = device.findQueueFamily(vk::QueueFlagBits::eTransfer|vk::QueueFlagBits::eCompute);
+		const uint32_t family = device.findQueueFamily(vk::QueueFlagBits::eTransfer|vk::QueueFlagBits::eCompute);
+		mLoading.emplace_back( move(async(launch::async, [=,&device]() {
 			shared_ptr<CommandBuffer> cb = make_shared<CommandBuffer>(device, "scene load", family);
 			(*cb)->begin(vk::CommandBufferBeginInfo{});
 			shared_ptr<Node> node = load(*cb, filepath);
 			(*cb)->end();
 			device.submit(device->getQueue(family, 0), cb);
-			return node;
+			while (cb->fence()->getStatus() == vk::Result::eNotReady) {
+				this_thread::sleep_for(1ms);
+			}
+			return make_pair(node, cb);
 		})) );
-		//*/
 	}
 	mToLoad.clear();
 

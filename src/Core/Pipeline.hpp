@@ -4,6 +4,7 @@
 #include "DescriptorSets.hpp"
 
 #include <future>
+#include <shared_mutex>
 
 namespace stm2 {
 
@@ -80,6 +81,7 @@ protected:
 	ShaderStageMap mShaders;
 
 	list<shared_ptr<DescriptorSets>> mDescriptorSetCache;
+	shared_mutex mDescriptorSetMutex;
 };
 
 class GraphicsPipeline : public Pipeline {
@@ -159,7 +161,8 @@ public:
 		const GraphicsPipeline::GraphicsMetadata& pipelineMetadata = {}) :
 		mEntryPointProfiles(sourceFiles),
 		mCompileArgs(compileArgs),
-		mPipelineMetadata(pipelineMetadata) {}
+		mPipelineMetadata(pipelineMetadata),
+		mMutex(make_shared<shared_mutex>()) {}
 	GraphicsPipelineCache() = default;
 	GraphicsPipelineCache(const GraphicsPipelineCache&) = default;
 	GraphicsPipelineCache(GraphicsPipelineCache&&) = default;
@@ -184,6 +187,7 @@ private:
 
 	unordered_map<size_t, Pipeline::ShaderStageMap> mCachedShaders;
 	unordered_map<size_t, shared_ptr<GraphicsPipeline>> mCachedPipelines;
+	shared_ptr<shared_mutex> mMutex;
 };
 
 
@@ -199,7 +203,8 @@ public:
 		mEntryPoint(entryPoint),
 		mProfile(profile),
 		mCompileArgs(compileArgs),
-		mPipelineMetadata(pipelineMetadata) {}
+		mPipelineMetadata(pipelineMetadata),
+		mMutex(make_shared<shared_mutex>()) {}
 	ComputePipelineCache() = default;
 	ComputePipelineCache(const ComputePipelineCache&) = default;
 	ComputePipelineCache(ComputePipelineCache&&) = default;
@@ -226,6 +231,7 @@ private:
 
 	unordered_map<size_t, shared_ptr<ComputePipeline>> mCachedPipelines;
 	unordered_map<size_t, future<shared_ptr<ComputePipeline>>> mCompileJobs;
+	shared_ptr<shared_mutex> mMutex;
 };
 
 }

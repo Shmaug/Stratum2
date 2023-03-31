@@ -116,10 +116,10 @@ void DescriptorSets::write(const Descriptors& descriptors) {
 		}
 	}
 
-	mDescriptors = descriptors;
-
 	if (!writes.empty())
 		mDevice->updateDescriptorSets(writes, {});
+
+	mDescriptors = descriptors;
 }
 
 void DescriptorSets::transitionImages(CommandBuffer& commandBuffer) {
@@ -322,18 +322,21 @@ void Pipeline::pushConstants(CommandBuffer& commandBuffer, const PushConstants& 
 
 shared_ptr<DescriptorSets> Pipeline::getDescriptorSets(const Descriptors& descriptors) {
 	shared_ptr<DescriptorSets> r;
-	for (auto ds : mDescriptorSetCache) {
-		if (!ds->inFlight()) {
-			r = ds;
-			break;
+	{
+		scoped_lock l(mDescriptorSetMutex);
+		for (auto ds : mDescriptorSetCache) {
+			if (!ds->inFlight()) {
+				r = ds;
+				break;
+			}
 		}
-	}
-	if (!r) {
-		r = make_shared<DescriptorSets>(*this, resourceName() + "/Resources");
-		mDescriptorSetCache.emplace_back(r);
+		if (!r) {
+			r = make_shared<DescriptorSets>(*this, resourceName() + "/DescriptorSets"+to_string(mDescriptorSetCache.size()));
+			mDescriptorSetCache.emplace_back(r);
+		}
+		r->markUsed();
 	}
 	r->write(descriptors);
-	r->markUsed();
 	return r;
 }
 
@@ -424,8 +427,11 @@ shared_ptr<GraphicsPipeline> GraphicsPipelineCache::get(Device& device, const De
 	if (renderPass.has_value())
 		key = hashArgs(key, *renderPass);
 
-	if (auto it = mCachedPipelines.find(key); it != mCachedPipelines.end())
-		return it->second;
+	{
+		scoped_lock l(*mMutex);
+		if (auto it = mCachedPipelines.find(key); it != mCachedPipelines.end())
+			return it->second;
+	}
 
 	Pipeline::ShaderStageMap stages;
 	if (auto it = mCachedShaders.find(defineKey); it != mCachedShaders.end())
@@ -433,7 +439,10 @@ shared_ptr<GraphicsPipeline> GraphicsPipelineCache::get(Device& device, const De
 	else {
 		for (const auto&[stage, info] : mEntryPointProfiles)
 			stages[stage] = make_shared<Shader>(device, info.mSourceFile, info.mEntryPoint, info.mProfile, mCompileArgs, defines);
-		mCachedShaders.emplace(defineKey, stages);
+		{
+			scoped_lock l(*mMutex);
+			mCachedShaders.emplace(defineKey, stages);
+		}
 	}
 
 	GraphicsPipeline::GraphicsMetadata metadata = mPipelineMetadata;
@@ -441,7 +450,10 @@ shared_ptr<GraphicsPipeline> GraphicsPipelineCache::get(Device& device, const De
 		tie(metadata.mRenderPass, metadata.mSubpassIndex) = renderPass.value();
 
 	const shared_ptr<GraphicsPipeline> pipeline = make_shared<GraphicsPipeline>("Graphics pipeline", stages, mPipelineMetadata, descriptorSetLayouts);
-	return mCachedPipelines.emplace(key, pipeline).first->second;
+	{
+		scoped_lock l(*mMutex);
+		return mCachedPipelines.emplace(key, pipeline).first->second;
+	}
 }
 
 shared_ptr<ComputePipeline> ComputePipelineCache::get(Device& device, const Defines& defines, const vector<shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts) {
@@ -451,12 +463,18 @@ shared_ptr<ComputePipeline> ComputePipelineCache::get(Device& device, const Defi
 	for (const auto& l : descriptorSetLayouts)
 		key = hashArgs(key, l);
 
-	if (auto it = mCachedPipelines.find(key); it != mCachedPipelines.end())
-		return it->second;
+	{
+		scoped_lock l(*mMutex);
+		if (auto it = mCachedPipelines.find(key); it != mCachedPipelines.end())
+			return it->second;
+	}
 
 	const shared_ptr<Shader> shader = make_shared<Shader>(device, mSourceFile, mEntryPoint, mProfile, mCompileArgs, defines);
 	const shared_ptr<ComputePipeline> pipeline = make_shared<ComputePipeline>(mSourceFile.stem().string() + "_" + mEntryPoint, shader, mPipelineMetadata, descriptorSetLayouts);
-	return mCachedPipelines.emplace(key, pipeline).first->second;
+	{
+		scoped_lock l(*mMutex);
+		return mCachedPipelines.emplace(key, pipeline).first->second;
+	}
 }
 
 shared_ptr<ComputePipeline> ComputePipelineCache::getAsync(Device& device, const Defines& defines, const vector<shared_ptr<vk::raii::DescriptorSetLayout>>& descriptorSetLayouts) {

@@ -207,7 +207,7 @@ private:
 	ComputePipelineCache mConvertDiffuseSpecularPipeline;
 
 	vector<string> mToLoad;
-	vector<future<shared_ptr<Node>>> mLoading;
+	vector< future<pair<shared_ptr<Node>, shared_ptr<CommandBuffer>>> > mLoading;
 
 	bool mAlwaysUpdate = false;
 	bool mUpdateOnce = false;

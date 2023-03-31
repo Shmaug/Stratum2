@@ -12,8 +12,6 @@
 namespace stm2 {
 
 shared_ptr<Node> Scene::loadAssimp(CommandBuffer& commandBuffer, const filesystem::path& filename) {
-	ProfilerScope ps("loadAssimp", &commandBuffer);
-
 	cout << "Loading " << filename << endl;
 
 	Device& device = commandBuffer.mDevice;
@@ -154,8 +152,6 @@ shared_ptr<Node> Scene::loadAssimp(CommandBuffer& commandBuffer, const filesyste
 		vector<size_t> indicesOffsets(scene->mNumMeshes);
 
 		for (int i = 0; i < scene->mNumMeshes; i++) {
-			cout << "\rCreating vertex buffers " << (i+1) << "/" << scene->mNumMeshes;
-
 			const aiMesh* m = scene->mMeshes[i];
 
 			if (!(m->mPrimitiveTypes & aiPrimitiveType_TRIANGLE) || (m->mPrimitiveTypes & ~aiPrimitiveType_TRIANGLE) != 0)
@@ -175,7 +171,6 @@ shared_ptr<Node> Scene::loadAssimp(CommandBuffer& commandBuffer, const filesyste
 			indicesOffsets[i] = indexDataSize;
 			indexDataSize += m->mNumFaces*3;
 		}
-		cout << endl;
 
 		Buffer::View<float> vertexBufferTmp   = make_shared<Buffer>(commandBuffer.mDevice, "tmp vertices" , vertexDataSize*sizeof(float), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
 		Buffer::View<uint32_t> indexBufferTmp = make_shared<Buffer>(commandBuffer.mDevice, "tmp indices" , indexDataSize*sizeof(uint32_t), vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);

@@ -1,5 +1,6 @@
 #include "Inspector.hpp"
 #include "Scene.hpp"
+#include "Gui.hpp"
 #include <Core/Instance.hpp>
 #include <Core/Swapchain.hpp>
 #include <Core/Window.hpp>
@@ -9,6 +10,17 @@
 #include <ImGuizmo.h>
 
 namespace stm2 {
+
+// dont allow deletion of core components
+static unordered_set<type_index> gProtectedComponents = {
+	typeid(Window),
+	typeid(Instance),
+	typeid(Device),
+	typeid(Swapchain),
+	typeid(Scene),
+	typeid(Gui),
+	typeid(Inspector)
+};
 
 Inspector::Inspector(Node& node) : mNode(node) {
 	setInspectCallback<Device>();
@@ -20,11 +32,12 @@ Inspector::Inspector(Node& node) : mNode(node) {
 // scene graph node inspector
 bool Inspector::drawNodeGui(Node& n) {
 	ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnDoubleClick | ImGuiTreeNodeFlags_OpenOnArrow;
-	if (&n == mSelected.get()) flags |= ImGuiTreeNodeFlags_Selected;
+	auto sel = selected();
+	if (&n == sel.get()) flags |= ImGuiTreeNodeFlags_Selected;
 	if (n.children().empty()) flags |= ImGuiTreeNodeFlags_Leaf;
 
 	// open nodes above selected node
-	if (mSelected && n.isDescendant(*mSelected))
+	if (sel && n.isDescendant(*sel))
 		ImGui::SetNextItemOpen(true, ImGuiCond_Once);
 
 
@@ -56,7 +69,14 @@ bool Inspector::drawNodeGui(Node& n) {
 
 	// context menu
 	if (ImGui::BeginPopupContextItem()) {
-		if (ImGui::Button("Delete")) {
+		bool canDelete = true;
+		for (type_index c : n.components()) {
+			if (gProtectedComponents.contains(c)) {
+				canDelete = false;
+				break;
+			}
+		}
+		if (canDelete && ImGui::Button("Delete")) {
 			erase = true;
 		}
 
@@ -113,9 +133,8 @@ bool Inspector::drawNodeGui(Node& n) {
 
 		for (Node* c : toErase) {
 			c->removeParent();
-			if (mSelected.get() == c) {
+			if (selected().get() == c)
 				select(nullptr);
-			}
 		}
 
 		ImGui::TreePop();
@@ -132,53 +151,62 @@ void Inspector::draw() {
 	ImGui::End();
 
 	if (ImGui::Begin("Inspector")) {
-		if (mSelected) {
-			auto s = mSelected->findAncestor<Scene>();
-			ImGui::PushID(s.get());
-			if ((s && !mSelected->getComponent<Scene>()) && ImGui::Button("x")) {
-				// delete selected node
+		if (auto sel = selected()) {
+			ImGui::PushID(sel.get());
+			bool deleteNode = ImGui::Button("x");
 
-				if (const shared_ptr<Node> p = mSelected->parent(); p && ImGui::GetIO().KeyAlt) {
-					for (const shared_ptr<Node>& c : mSelected->children())
-						p->addChild(c);
-				}
-				// detach from tree
-				mSelected->removeParent();
-				select(nullptr);
-				s->markDirty();
-			} else {
+			{
 				// inspect selected node
 
 				ImGui::SameLine();
-				ImGui::Text("%s", mSelected->name().c_str());
+				ImGui::Text("%s", sel->name().c_str());
 				ImGui::SetNextItemWidth(40);
 
-				// list components in selected node
+				// inspect components in node
 
 				type_index to_erase = typeid(nullptr_t);
-				for (type_index type : mSelected->components()) {
-					if ((s && !mSelected->getComponent<Scene>())) {
+				for (type_index type : sel->components()) {
+					if (gProtectedComponents.contains(type)) {
+						deleteNode = false;
+					} else {
 						ImGui::PushID(type.hash_code());
-						if (ImGui::Button("x")) to_erase = type;
+						if (ImGui::Button("x"))
+							to_erase = type;
 						ImGui::PopID();
 						ImGui::SameLine();
 					}
+
 					if (ImGui::CollapsingHeader(type.name(), ImGuiTreeNodeFlags_DefaultOpen)) {
 						if (auto it = mInspectorGuiFns.find(type); it != mInspectorGuiFns.end()) {
 							// draw gui for component
 							ImGui::Indent();
 							ImGui::Indent();
-							it->second(*mSelected);
+							it->second(*sel);
 							ImGui::Unindent();
 							ImGui::Unindent();
 						}
 					}
 				}
 				if (to_erase != typeid(nullptr_t)) {
-					mSelected->removeComponent(to_erase);
-					s->markDirty();
+					sel->removeComponent(to_erase);
+					if (auto scene = sel->findAncestor<Scene>())
+						scene->markDirty();
 				}
 			}
+
+			if (deleteNode) {
+				if (const shared_ptr<Node> p = sel->parent(); p && ImGui::GetIO().KeyAlt) {
+					for (const shared_ptr<Node>& c : sel->children())
+						p->addChild(c);
+				}
+				// detach from tree
+				sel->removeParent();
+				auto scene = sel->findAncestor<Scene>();
+				select(nullptr);
+				if (scene)
+					scene->markDirty();
+			}
+
 			ImGui::PopID();
 		} else
 			ImGui::Text("%s", "Select a node to inspect");

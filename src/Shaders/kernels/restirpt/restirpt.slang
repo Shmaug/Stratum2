@@ -12,6 +12,7 @@
 #define DirectIlluminationFn DirectIllumination
 #endif
 
+
 [shader("compute")]
 [numthreads(8, 4, 1)]
 void Render(uint3 index: SV_DispatchThreadID) {
@@ -32,13 +33,8 @@ void Render(uint3 index: SV_DispatchThreadID) {
         return;
 	}
 
-	#ifdef gFullGI
+	#ifdef gNoGI
 
-    gRenderParams.mOutput[index.xy] = float4(EstimateRadianceFn(primaryVertex, rng, index.xy), 1);
-
-	#else // gFullGI
-
-    // load load material
     if (gHasMedia && primaryVertex.mShadingData.isMedium()) {
         const Medium m = Medium(primaryVertex.mShadingData.getMaterialAddress());
         gRenderParams.mAlbedo[index.xy] = float4(m.albedo(), 1);
@@ -48,6 +44,10 @@ void Render(uint3 index: SV_DispatchThreadID) {
         gRenderParams.mAlbedo[index.xy] = float4(m.albedo(), 1);
         gRenderParams.mOutput[index.xy] = float4(DirectIlluminationFn(primaryVertex, m, rng, index.xy), 1);
 	}
+
+	#else // gNoGI
+
+    gRenderParams.mOutput[index.xy] = float4(EstimateRadianceFn(primaryVertex, rng, index.xy), 1);
 
 	#endif
 }

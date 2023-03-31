@@ -1,6 +1,7 @@
 #include "di.slang"
 
 import printing.printing;
+
 #ifdef gDebugPixel
 #define DebugPrintf(pixel, ...) \
     if (pixel.x == BF_GET(gPushConstants.mPackedDebugPixelIndex, 0, 16) && pixel.y == BF_GET(gPushConstants.mPackedDebugPixelIndex, 16, 16)) {                                                                                                                                   \
@@ -23,6 +24,7 @@ struct VertexSampleRecord {
     bool isSpecularLobe;
 };
 
+// samples a direction and samples direct illumination (nee)
 VertexSampleRecord ProcessVertex(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, const bool sampleDirection, const bool sampleNee) {
     VertexSampleRecord r;
     r.mLe = 0;
@@ -104,116 +106,76 @@ PathVertex TraceNext(const PathVertex vertex, inout RandomSampler rng, const flo
 	return v;
 }
 
-struct PathSampler {
-	float3 mRadianceEstimate;
+float3 EstimateRadiance(PathVertex vertex, inout RandomSampler rng, const uint2 pixelIndex) {
+    float3 radiance = 0;
+    float3 throughput = 1;
+    float pathPdfW = 1;
+    float pathWtoA = 1;
+    uint diffuseBounces = 0;
+    float misWeight = 1;
 
-	// for RIS
-    float3 mCachedContribution;
-    float mCachedTargetPdf;
-    float W;
-    float mCachedPdfA;
-    uint mCachedLength;
-    // randomly replaces mCachedContribution and mCachedTargetPdf using resampling
-    [mutating]
-    void UpdatePath(const float3 pathContribution, const float pathPdfW, const float pathPdfA, const uint pathLength, const float rnd) {
-        const float phat = luminance(pathContribution);
-        const float wi = phat / pathPdfW;
+    {
+        // handle first bounce explicitly for albedo
 
-        const float wsum = wi + W * mCachedTargetPdf;
-
-        if (rnd * wsum <= wi) {
-            mCachedContribution = pathContribution;
-            mCachedTargetPdf = phat;
-            mCachedPdfA = pathPdfA;
-            mCachedLength = pathLength;
+        VertexSampleRecord s;
+        if (gHasMedia && vertex.mShadingData.isMedium()) {
+            const Medium m = Medium(vertex.mShadingData.getMaterialAddress());
+            gRenderParams.mAlbedo[pixelIndex] = float4(m.albedo(), 1);
+            s = ProcessVertex(vertex, m, rng, true, true);
+        } else {
+            const PackedMaterialData m = gScene.LoadMaterial(vertex.mShadingData);
+            gRenderParams.mAlbedo[pixelIndex] = float4(m.albedo(), 1);
+            s = ProcessVertex(vertex, m, rng, true, false);
         }
 
-        W = mCachedTargetPdf > 0 ? wsum / mCachedTargetPdf : 0;
+        radiance += throughput * s.mLe;
+
+        if (!s.isSpecular)
+            diffuseBounces++;
+        if (s.mDirPdfW <= 0 || all(s.mBrdf <= 0) || diffuseBounces > gPushConstants.mMaxDiffuseBounces)
+            return radiance;
+
+        throughput *= s.mBrdf;
+        pathPdfW *= s.mDirPdfW;
+
+        float transDirPdf, directPdfA, WtoA;
+        vertex = TraceNext(vertex, rng, s.mDirection, throughput, transDirPdf, directPdfA, WtoA);
+        if (transDirPdf <= 0)
+            return radiance;
+        pathPdfW *= transDirPdf;
+        pathWtoA *= WtoA;
+
+        misWeight = s.isSpecular ? 1 : DirectMis(s.mDirPdfW * WtoA, directPdfA);
     }
 
-	// specify pixelIndex to store albedo
-	[mutating]
-    void Sample<let bStoreAlbedo : bool, let bUseRIS : bool>(PathVertex vertex, inout RandomSampler rng, const uint2 pixelIndex) {
-        mRadianceEstimate = 0;
-        float3 throughput = 1;
-        float pathPdfW = 1;
-        float pathWtoA = 1;
-        uint diffuseBounces = 0;
-        float misWeight = 1;
+    for (uint depth = 2; depth <= gPushConstants.mMaxDepth; depth++) {
+        const VertexSampleRecord s = ProcessVertex(vertex, rng, depth < gPushConstants.mMaxDepth, false);
 
-        // handle first bounce explicitly
-        {
-            VertexSampleRecord s;
-            if (bStoreAlbedo) {
-				if (gHasMedia && vertex.mShadingData.isMedium()) {
-					const Medium m = Medium(vertex.mShadingData.getMaterialAddress());
-					gRenderParams.mAlbedo[pixelIndex] = float4(m.albedo(), 1);
-					s = ProcessVertex(vertex, m, rng, true, true);
-				} else {
-					const PackedMaterialData m = gScene.LoadMaterial(vertex.mShadingData);
-                    gRenderParams.mAlbedo[pixelIndex] = float4(m.albedo(), 1);
-                    s = ProcessVertex(vertex, m, rng, true, false);
-				}
-			} else {
-				s = ProcessVertex(vertex, rng, true, false);
-			}
+        // add emission from vertex and nee sample
+        radiance += (throughput / pathPdfW) * s.mLe;
 
-            mRadianceEstimate += throughput * s.mLe;
+        if (!s.isSpecular)
+            diffuseBounces++;
+        if (s.mDirPdfW <= 0 || all(s.mBrdf <= 0) || diffuseBounces > gPushConstants.mMaxDiffuseBounces)
+            break;
 
-            if (!s.isSpecular)
-                diffuseBounces++;
-            if (s.mDirPdfW <= 0 || all(s.mBrdf <= 0) || diffuseBounces > gPushConstants.mMaxDiffuseBounces)
-                return;
+        throughput *= s.mBrdf;
+        pathPdfW *= s.mDirPdfW;
 
-            throughput *= s.mBrdf;
-            pathPdfW *= s.mDirPdfW;
+        float transDirPdf, directPdfA, WtoA;
+        vertex = TraceNext(vertex, rng, s.mDirection, throughput, transDirPdf, directPdfA, WtoA);
+        if (transDirPdf <= 0)
+            break;
+        pathPdfW *= transDirPdf;
+        pathWtoA *= WtoA;
 
-            float transDirPdf, directPdfA, WtoA;
-            vertex = TraceNext(vertex, rng, s.mDirection, throughput, transDirPdf, directPdfA, WtoA);
-            if (transDirPdf <= 0)
-                return;
-            pathPdfW *= transDirPdf;
-            pathWtoA *= WtoA;
+        misWeight = s.isSpecular ? 1 : DirectMis(s.mDirPdfW * WtoA, directPdfA);
+    }
 
-            misWeight = s.isSpecular ? 1 : DirectMis(s.mDirPdfW * WtoA, directPdfA);
-        }
-
-        for (uint depth = 2; depth <= gPushConstants.mMaxDepth; depth++) {
-            const VertexSampleRecord s = ProcessVertex(vertex, rng, depth < gPushConstants.mMaxDepth, false);
-
-            // add emission from vertex and nee sample
-            mRadianceEstimate += (throughput / pathPdfW) * s.mLe;
-            if (bUseRIS) {
-                UpdatePath(throughput, pathPdfW, pathPdfW*pathWtoA, depth, rng.nextFloat().x);
-            }
-
-            if (!s.isSpecular)
-                diffuseBounces++;
-            if (s.mDirPdfW <= 0 || all(s.mBrdf <= 0) || diffuseBounces > gPushConstants.mMaxDiffuseBounces)
-                break;
-
-            throughput *= s.mBrdf;
-            pathPdfW *= s.mDirPdfW;
-
-            float transDirPdf, directPdfA, WtoA;
-            vertex = TraceNext(vertex, rng, s.mDirection, throughput, transDirPdf, directPdfA, WtoA);
-            if (transDirPdf <= 0)
-                break;
-            pathPdfW *= transDirPdf;
-            pathWtoA *= WtoA;
-
-            misWeight = s.isSpecular ? 1 : DirectMis(s.mDirPdfW * WtoA, directPdfA);
-        }
-	}
-};
-
-float3 EstimateRadiance(PathVertex vertex, inout RandomSampler rng, const uint2 pixelIndex) {
-    PathSampler path;
-	path.Sample<true, false>(vertex, rng, pixelIndex);
-    return path.mRadianceEstimate;
+    return radiance;
 }
 
-// -------- ReSTIR --------
+/* -------- ReSTIR -------- */
 
 struct PackedVertex {
     float3 mLocalPosition;
@@ -289,7 +251,7 @@ struct ReservoirSampleDataGI {
         float misWeight = 1;
 
         {
-            // handle first bounce explicitly
+            // handle first bounce explicitly for albedo and directRadiance
 
 			VertexSampleRecord s;
 			if (gHasMedia && vertex.mShadingData.isMedium()) {

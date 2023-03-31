@@ -10,8 +10,6 @@
 namespace stm2 {
 
 shared_ptr<Node> Scene::loadGltf(CommandBuffer& commandBuffer, const filesystem::path& filename) {
-	ProfilerScope ps("loadGltf", &commandBuffer);
-
 	cout << "Loading " << filename << endl;
 
 	tinygltf::Model model;

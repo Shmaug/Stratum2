@@ -26,7 +26,7 @@ public:
 
 	void draw();
 
-	inline const shared_ptr<Node>& selected() const { return mSelected; }
+	inline shared_ptr<Node> selected() const { return mSelected.lock(); }
 	inline void select(const shared_ptr<Node>& n) { mSelected = n; }
 
 	template<typename T> requires(has_drawGui_node<T> || has_drawGui_void<T>)
@@ -67,7 +67,7 @@ private:
 	unordered_map<type_index, function<void(Node&)>> mInspectorGuiFns;
 	unordered_map<type_index, function<shared_ptr<void>(Node& n)>> mInspectorConstructFns;
 	unordered_map<Node*, PinnedComponent> mPinned;
-	shared_ptr<Node> mSelected;
+	weak_ptr<Node> mSelected;
 	string mInputChildName;
 
 	bool drawNodeGui(Node& n);

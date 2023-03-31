@@ -22,7 +22,7 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 		{ "gShadingNormals", true },
 		{ "gLambertian", false },
 		{ "gDebugFastBRDF", false },
-		{ "gFullGI", true },
+		{ "gNoGI", false },
 		{ "gReSTIR_DI", false },
 		{ "gReSTIR_DI_Reuse", false },
 		{ "gReSTIR_DI_Reuse_Visibility", false },
@@ -477,7 +477,7 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 	}
 
 
-	// copy VisibilityData for selected pixel for scene object picking
+	// copy VisibilityData for selected pixel (scene object picking)
 	if (!ImGui::GetIO().WantCaptureMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsUsing()) {
 		const ImVec2 c = ImGui::GetIO().MousePos;
 		for (const ViewData& view : viewsBufferData)
