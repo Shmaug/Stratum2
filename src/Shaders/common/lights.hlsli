@@ -194,9 +194,9 @@ extension SceneParameters {
 		if (instance.getType() == InstanceType::eMesh) {
 			// triangle
 			const MeshInstanceData mesh = reinterpret<MeshInstanceData>(instance);
+            r.mPdf /= (float)mesh.primitiveCount();
 			const uint primitiveIndex = uint(rnd.w * mesh.primitiveCount()) % mesh.primitiveCount();
-			shadingData = makeTriangleShadingData(mesh, transform, primitiveIndex, sampleUniformTriangle(rnd.x, rnd.y));
-			r.mPdf /= mesh.primitiveCount();
+            shadingData = makeTriangleShadingData(mesh, transform, primitiveIndex, sampleUniformTriangle(rnd.x, rnd.y));
 		} else if (instance.getType() == InstanceType::eSphere) {
 			// sphere
 			const SphereInstanceData sphere = reinterpret<SphereInstanceData>(instance);
@@ -216,9 +216,11 @@ extension SceneParameters {
 			r.mDirectionToLight = r.mPosition - referencePosition;
 			r.mDistanceToLight  = length(r.mDirectionToLight);
 			r.mDirectionToLight /= r.mDistanceToLight;
-			r.mCosLight = -dot(r.getNormal(), r.mDirectionToLight);
-			if (r.mCosLight <= 0)
+            r.mCosLight = -dot(r.getNormal(), r.mDirectionToLight);
+            if (r.mCosLight <= 0) {
                 r.mRadiance = 0;
+                r.mPdf = 0;
+            }
         }
         return r;
     }

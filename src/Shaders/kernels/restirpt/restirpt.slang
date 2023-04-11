@@ -1,4 +1,8 @@
+#ifdef gPathGuiding
+#include "pg.slang"
+#else
 #include "gi.slang"
+#endif
 
 #ifdef gReSTIR_GI
 #define EstimateRadianceFn EstimateRadianceReSTIR
@@ -33,19 +37,25 @@ extension PathTracer {
 
 		#ifdef gNoGI
 
+        DirectIlluminationSample s;
 		if (gHasMedia && primaryVertex.mShadingData.isMedium()) {
 			const Medium m = Medium(mScene, primaryVertex.mShadingData.getMaterialAddress());
 			mFramebuffer.mAlbedo[index] = float4(m.albedo(), 1);
-			mFramebuffer.mOutput[index] = float4(DirectIlluminationFn(primaryVertex, m, rng, index), 1);
+			s = DirectIlluminationFn(primaryVertex, m, rng, index);
 		} else {
 			const PackedMaterialData m = mScene.LoadMaterial(primaryVertex.mShadingData);
 			mFramebuffer.mAlbedo[index] = float4(m.albedo(), 1);
-			mFramebuffer.mOutput[index] = float4(DirectIlluminationFn(primaryVertex, m, rng, index), 1);
+			s = DirectIlluminationFn(primaryVertex, m, rng, index);
 		}
+		mFramebuffer.mOutput[index] = float4(throughput * s.mRadiance * safe_divide(s.G, s.mPdfA), 1);
 
 		#else // gNoGI
 
-		mFramebuffer.mOutput[index] = float4(EstimateRadianceFn(primaryVertex, rng, index), 1);
+		#ifdef gPathGuiding
+		mFramebuffer.mOutput[index] = float4(throughput * EstimateRadiancePathGuiding(primaryVertex, rng, index), 1);
+		#else
+        mFramebuffer.mOutput[index] = float4(throughput * EstimateRadianceFn(primaryVertex, rng, index), 1);
+		#endif
 
 		#endif
 	}

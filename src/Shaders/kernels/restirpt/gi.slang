@@ -1,19 +1,14 @@
 #include "di.slang"
 
-import printing.printing;
-
 #ifdef gDebugPixel
-#define DebugPrintf(pixel, ...) \
-    if (pixel.x == BF_GET(gPushConstants.mPackedDebugPixelIndex, 0, 16) && pixel.y == BF_GET(gPushConstants.mPackedDebugPixelIndex, 16, 16)) {                                                                                                                                   \
-        printf_(__VA_ARGS__);\
-	}
+#define DebugPrintf(pixel, ...) if ((pixel.y<<16 | (pixel.x&0xFFFF)) == gPushConstants.mPackedDebugPixelIndex) { printf(__VA_ARGS__); }
 #else
 #define DebugPrintf(pixel, ...)
 #endif
 
 struct VertexSampleRecord {
     float3 mLe;
-	float mNeePdfA;
+	float mNeePdfW;
     float3 mNeeLe;
 	float mNeeMisWeight;
 
@@ -26,10 +21,10 @@ struct VertexSampleRecord {
 
 extension PathTracer {
 	// samples a direction and samples direct illumination (nee)
-	VertexSampleRecord ProcessVertex(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, const bool sampleDirection, const bool sampleNee) {
+	VertexSampleRecord ProcessVertex(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, const bool sampleDirection) {
 		VertexSampleRecord r;
 		r.mLe = 0;
-		r.mNeePdfA = 0;
+		r.mNeePdfW = 0;
 		r.mNeeLe = 0;
 		r.mNeeMisWeight = 0;
 		r.mDirPdfW = 0;
@@ -54,21 +49,26 @@ extension PathTracer {
 				r.mDirection = vertex.mShadingData.toWorld(s.mDirection);
 			} else
 				r.mDirection = s.mDirection;
-		}
 
-		if (sampleNee && !r.isSpecular) {
-			r.mNeeLe = DirectIllumination(vertex, bsdf, rng, r.mNeePdfA, r.mNeeMisWeight);
+			#ifdef gNee
+			if (!r.isSpecular) {
+				const DirectIlluminationSample s = DirectIllumination(vertex, bsdf, rng);
+				r.mNeeLe = s.mRadiance;
+				r.mNeePdfW = safe_divide(s.mPdfA, s.G);
+				r.mNeeMisWeight = s.mMisWeight;
+			}
+			#endif
 		}
 
 		return r;
 	}
-	VertexSampleRecord ProcessVertex(const PathVertex vertex, inout RandomSampler rng, const bool sampleNext, const bool sampleNee) {
+	VertexSampleRecord ProcessVertex(const PathVertex vertex, inout RandomSampler rng, const bool sampleNext) {
 		if (vertex.mShadingData.isEnvironment()) {
 			VertexSampleRecord r;
 			float tmp;
 			r.mLe = mScene.EvaluateEnvironment(-vertex.mLocalDirIn, tmp);
 			r.mNeeLe = 0;
-			r.mNeePdfA = 0;
+			r.mNeePdfW = 0;
 			r.mBrdf = 0;
 			r.mDirPdfW = 0;
 			r.isSpecular = false;
@@ -76,9 +76,9 @@ extension PathTracer {
 			return r;
 		}
 		if (gHasMedia && vertex.mShadingData.isMedium())
-			return ProcessVertex(vertex, Medium(mScene, vertex.mShadingData.getMaterialAddress()), rng, sampleNext, sampleNee);
+			return ProcessVertex(vertex, Medium(mScene, vertex.mShadingData.getMaterialAddress()), rng, sampleNext);
 		else
-			return ProcessVertex(vertex, mScene.LoadMaterial(vertex.mShadingData)        , rng, sampleNext, sampleNee);
+			return ProcessVertex(vertex, mScene.LoadMaterial(vertex.mShadingData), rng, sampleNext);
 	}
 	PathVertex TraceNext(const PathVertex vertex, inout RandomSampler rng, const float3 direction, inout float3 throughput, out float transDirPdf, out float directPdfA, out float WtoA) {
 		const float3 origin = (gHasMedia && vertex.mShadingData.isMedium()) ?
@@ -111,53 +111,36 @@ extension PathTracer {
 		float3 radiance = 0;
 		float3 throughput = 1;
 		float pathPdfW = 1;
-		float pathWtoA = 1;
 		uint diffuseBounces = 0;
 		float misWeight = 1;
 
-		{
-			// handle first bounce explicitly for albedo
+        for (uint depth = 2; depth <= gPushConstants.mMaxDepth; depth++) {
+            VertexSampleRecord s;
+            if (depth == 1) {
+				// get albedo from material
+				if (gHasMedia && vertex.mShadingData.isMedium()) {
+					const Medium m = Medium(mScene, vertex.mShadingData.getMaterialAddress());
+					mFramebuffer.mAlbedo[pixelIndex] = float4(m.albedo(), 1);
+					s = ProcessVertex(vertex, m, rng, depth < gPushConstants.mMaxDepth);
+				} else {
+					const PackedMaterialData m = mScene.LoadMaterial(vertex.mShadingData);
+					mFramebuffer.mAlbedo[pixelIndex] = float4(m.albedo(), 1);
+					s = ProcessVertex(vertex, m, rng, depth < gPushConstants.mMaxDepth);
+				}
+        	} else {
+                s = ProcessVertex(vertex, rng, depth < gPushConstants.mMaxDepth);
+            }
 
-			VertexSampleRecord s;
-			if (gHasMedia && vertex.mShadingData.isMedium()) {
-				const Medium m = Medium(mScene, vertex.mShadingData.getMaterialAddress());
-				mFramebuffer.mAlbedo[pixelIndex] = float4(m.albedo(), 1);
-				s = ProcessVertex(vertex, m, rng, true, true);
-			} else {
-				const PackedMaterialData m = mScene.LoadMaterial(vertex.mShadingData);
-				mFramebuffer.mAlbedo[pixelIndex] = float4(m.albedo(), 1);
-				s = ProcessVertex(vertex, m, rng, true, false);
-			}
-
-			radiance += throughput * s.mLe;
-
-			if (!s.isSpecular)
-				diffuseBounces++;
-			if (s.mDirPdfW <= 0 || all(s.mBrdf <= 0) || diffuseBounces > gPushConstants.mMaxDiffuseBounces)
-				return radiance;
-
-			throughput *= s.mBrdf;
-			pathPdfW *= s.mDirPdfW;
-
-			float transDirPdf, directPdfA, WtoA;
-			vertex = TraceNext(vertex, rng, s.mDirection, throughput, transDirPdf, directPdfA, WtoA);
-			if (transDirPdf <= 0)
-				return radiance;
-			pathPdfW *= transDirPdf;
-			pathWtoA *= WtoA;
-
-			misWeight = s.isSpecular ? 1 : DirectMis(s.mDirPdfW * WtoA, directPdfA);
-		}
-
-		for (uint depth = 2; depth <= gPushConstants.mMaxDepth; depth++) {
-			const VertexSampleRecord s = ProcessVertex(vertex, rng, depth < gPushConstants.mMaxDepth, false);
 
 			// add emission from vertex and nee sample
-			radiance += (throughput / pathPdfW) * s.mLe;
-
+            radiance += throughput * s.mLe * misWeight / pathPdfW;
 			if (!s.isSpecular)
 				diffuseBounces++;
-			if (s.mDirPdfW <= 0 || all(s.mBrdf <= 0) || diffuseBounces > gPushConstants.mMaxDiffuseBounces)
+            if (diffuseBounces > gPushConstants.mMaxDiffuseBounces)
+                break;
+			radiance += throughput * s.mNeeLe * safe_divide(s.mNeeMisWeight, pathPdfW * s.mNeePdfW);
+
+			if (s.mDirPdfW <= 0 || all(s.mBrdf <= 0))
 				break;
 
 			throughput *= s.mBrdf;
@@ -168,9 +151,10 @@ extension PathTracer {
 			if (transDirPdf <= 0)
 				break;
 			pathPdfW *= transDirPdf;
-			pathWtoA *= WtoA;
 
-			misWeight = s.isSpecular ? 1 : DirectMis(s.mDirPdfW * WtoA, directPdfA);
+			#ifdef gNee
+			misWeight = s.isSpecular ? 1 : DirectMis(s.mDirPdfW, directPdfA / WtoA);
+			#endif
 		}
 
 		return radiance;
@@ -194,7 +178,7 @@ struct PackedVertex {
 };
 struct ReconnectionVertex {
     PackedVertex mVertex;
-    float3 mRadiance;
+    float3 mRadiance; // estimated radiance arriving at mVertex
     uint mPackedDirOut;
 
     property float3 mDirOut {
@@ -204,8 +188,9 @@ struct ReconnectionVertex {
 };
 
 struct GISample {
+    ReconnectionVertex mReconnectionVertex;
     uint4 mRng;
-    float mReplayPdfA;
+    float mReplayPdfW;
     uint mPathLength;
 };
 
@@ -213,90 +198,70 @@ struct GISample {
 struct ReservoirSampleDataGI {
     GISample mSample;
     float3 mCachedContribution;
-    float mCachedTargetPdf;
     float W;
+
+    float3 mCachedDirectRadiance, mCachedAlbedo;
+
+    property float mCachedTargetPdf { get { return luminance(mCachedContribution); } }
 
 	// randomly replaces mCachedContribution and mCachedTargetPdf using resampling
     [mutating]
-    void UpdatePath(const float3 pathContribution, const float pathPdfW, const float pathPdfA, const uint pathLength, const float rnd) {
+    void UpdatePath(const float3 pathContribution, const float pathPdfW, const uint pathLength, const float rnd) {
+        if (pathPdfW <= 0 || all(pathContribution <= 0))
+			return;
+
 		const float phat = luminance(pathContribution);
 		const float wi = phat / pathPdfW;
 
 		const float wsum = wi + W * mCachedTargetPdf;
 
 		if (rnd*wsum <= wi) {
-			mCachedContribution = pathContribution;
-            mCachedTargetPdf = phat;
-            mSample.mReplayPdfA = pathPdfA;
-			mSample.mPathLength = pathLength;
+            mCachedContribution = pathContribution;
+            mSample.mReplayPdfW = pathPdfW;
+            mSample.mPathLength = pathLength;
 		}
 
-		W = mCachedTargetPdf > 0 ? wsum / mCachedTargetPdf : 0;
+		W = safe_divide(wsum, mCachedTargetPdf);
 	}
 
     [mutating]
-    void make<let bIsCanonical : bool>(const PathTracer pt, PathVertex vertex, const uint4 x, const uint2 pixelIndex, out float3 directRadiance) {
+    void make<let bIsCanonical : bool>(const PathTracer pt, PathVertex vertex, const uint4 x, const uint2 pixelIndex) {
         mSample.mRng = x;
-        mSample.mReplayPdfA = 0;
+        mSample.mReplayPdfW = 1;
+        mSample.mReconnectionVertex.mRadiance = 0;
         mSample.mPathLength = 0;
         mCachedContribution = 0;
-		mCachedTargetPdf = 0;
         W = 0;
 
         RandomSampler rng;
         rng.mState = x;
 
         float3 throughput = 1;
-        float pdfW = 1;
-        float pathWtoA = 1;
 		uint diffuseBounces = 0;
         float misWeight = 1;
 
-        {
-            // handle first bounce explicitly for albedo and directRadiance
+        for (uint depth = 2; depth <= gPushConstants.mMaxDepth; depth++) {
+            VertexSampleRecord s;
 
-			VertexSampleRecord s;
-			if (gHasMedia && vertex.mShadingData.isMedium()) {
-				const Medium m = Medium(pt.mScene, vertex.mShadingData.getMaterialAddress());
-				if (bIsCanonical)
-					pt.mFramebuffer.mAlbedo[pixelIndex] = float4(m.albedo(), 1);
-				s = pt.ProcessVertex(vertex, m, rng, true, false);
-			} else {
-				const PackedMaterialData m = pt.mScene.LoadMaterial(vertex.mShadingData);
-				if (bIsCanonical)
-					pt.mFramebuffer.mAlbedo[pixelIndex] = float4(m.albedo(), 1);
-				s = pt.ProcessVertex(vertex, m, rng, true, false);
-            }
+            if (depth == 1) {
+				if (gHasMedia && vertex.mShadingData.isMedium()) {
+					const Medium m = Medium(pt.mScene, vertex.mShadingData.getMaterialAddress());
+					if (bIsCanonical) mCachedAlbedo = m.albedo();
+                    s = pt.ProcessVertex(vertex, m, rng, depth < gPushConstants.mMaxDepth);
+				} else {
+					const PackedMaterialData m = pt.mScene.LoadMaterial(vertex.mShadingData);
+					if (bIsCanonical) mCachedAlbedo = m.albedo();
+                    s = pt.ProcessVertex(vertex, m, rng, depth < gPushConstants.mMaxDepth);
+				}
+                if (bIsCanonical) mCachedDirectRadiance = s.mLe;
+            } else {
+				s = pt.ProcessVertex(vertex, rng, depth < gPushConstants.mMaxDepth);
+				UpdatePath(throughput * s.mLe * misWeight, mSample.mReplayPdfW, depth, rng.nextFloat().x);
+			}
 
-			directRadiance = s.mLe;
-
-			if (!s.isSpecular)
-				diffuseBounces++;
-            if (s.mDirPdfW <= 0 || all(s.mBrdf <= 0) || diffuseBounces > gPushConstants.mMaxDiffuseBounces)
-                return;
-
-            throughput *= s.mBrdf;
-			pdfW *= s.mDirPdfW;
-
-			float transDirPdf, directPdfA, WtoA;
-			vertex = pt.TraceNext(vertex, rng, s.mDirection, throughput, transDirPdf, directPdfA, WtoA);
-            if (transDirPdf <= 0)
-                return;
-            throughput /= transDirPdf;
-
-            pathWtoA *= WtoA;
-
-			misWeight = s.isSpecular ? 1 : DirectMis(s.mDirPdfW * WtoA, directPdfA);
-		}
-
-        /*for (uint depth = 2; depth <= gPushConstants.mMaxDepth; depth++)*/ {
-			const VertexSampleRecord s = pt.ProcessVertex(vertex, rng, false, false);
-
-            if (any(s.mLe > 0)) {
-                UpdatePath(throughput * s.mLe, pdfW, pdfW*pathWtoA, 2, rng.nextFloat().x);
-            }
-
-            return;
+			#ifdef gNee
+			UpdatePath(throughput * s.mNeeLe * s.mNeeMisWeight, mSample.mReplayPdfW * s.mNeePdfW, depth+1, rng.nextFloat().x);
+			#endif
 
 			if (!s.isSpecular)
 				diffuseBounces++;
@@ -304,7 +269,7 @@ struct ReservoirSampleDataGI {
                 return;
 
             throughput *= s.mBrdf;
-			pdfW *= s.mDirPdfW;
+            mSample.mReplayPdfW *= s.mDirPdfW;
 
 			float transDirPdf, directPdfA, WtoA;
 			vertex = pt.TraceNext(vertex, rng, s.mDirection, throughput, transDirPdf, directPdfA, WtoA);
@@ -312,26 +277,27 @@ struct ReservoirSampleDataGI {
                 return;
 			throughput /= transDirPdf;
 
-            pathWtoA *= WtoA;
-
-            misWeight = s.isSpecular ? 1 : DirectMis(s.mDirPdfW * WtoA, directPdfA);
+			#ifdef gNee
+            misWeight = s.isSpecular ? 1 : DirectMis(s.mDirPdfW, directPdfA / WtoA);
+			#endif
 		}
 	}
 
     // construct canonical sample at vertex
-    __init(const PathTracer pt, const PathVertex vertex, const uint4 x, const uint2 pixelIndex, out float3 directRadiance) {
-        make<true>(pt, vertex, x, pixelIndex, directRadiance);
+    __init(const PathTracer pt, const PathVertex vertex, const uint4 x, const uint2 pixelIndex) {
+        make<true>(pt, vertex, x, pixelIndex);
     }
 
     // shift sample to vertex's domain
     __init(const PathTracer pt, const PathVertex vertex, const GISample sample, out float shiftJacobian) {
-        float3 tmp;
-        make<false>(pt, vertex, sample.mRng, -1, tmp);
-        if (mSample.mReplayPdfA > 0 && sample.mPathLength == mSample.mPathLength)
-            shiftJacobian = sample.mReplayPdfA / mSample.mReplayPdfA;
-        else {
-            shiftJacobian = 0;
-        }
+        make<false>(pt, vertex, sample.mRng, -1);
+        if (sample.mPathLength != 0 && mSample.mPathLength != 0) {
+            if (sample.mPathLength == mSample.mPathLength)
+                shiftJacobian = safe_divide(sample.mReplayPdfW, mSample.mReplayPdfW);
+            else
+				shiftJacobian = 0;
+        } else
+			shiftJacobian = 1;
     }
 };
 
@@ -352,7 +318,9 @@ struct PackedReservoirGI {
         fb.mReservoirDataGI[0][idx] = reinterpret<float4>(mVertex);
         fb.mReservoirDataGI[1][idx] = float4(mCachedTargetPdf, W, M, asfloat(mPackedLocalDirIn));
         fb.mReservoirDataGI[2][idx] = reinterpret<float4>(mSample.mRng);
-        fb.mReservoirDataGI[3][idx] = float4(mSample.mReplayPdfA, asfloat(mSample.mPathLength), 0, 0);
+        fb.mReservoirDataGI[3][idx] = float4(mSample.mReplayPdfW, asfloat(mSample.mPathLength), 0, 0);
+        fb.mReservoirDataGI[4][idx] = reinterpret<float4>(mSample.mReconnectionVertex.mVertex);
+        fb.mReservoirDataGI[5][idx] = float4(mSample.mReconnectionVertex.mRadiance, asfloat(mSample.mReconnectionVertex.mPackedDirOut));
     }
 
     [mutating]
@@ -367,8 +335,13 @@ struct PackedReservoirGI {
         mSample.mRng = reinterpret<uint4>(fb.mPrevReservoirDataGI[2][idx]);
 
         const float4 data1 = fb.mPrevReservoirDataGI[3][idx];
-        mSample.mReplayPdfA = data1.x;
+        mSample.mReplayPdfW = data1.x;
         mSample.mPathLength = asuint(data1.y);
+
+		mSample.mReconnectionVertex.mVertex = reinterpret<PackedVertex>(fb.mPrevReservoirDataGI[4][idx]);
+		const float4 data2 = fb.mPrevReservoirDataGI[5][idx];
+		mSample.mReconnectionVertex.mRadiance = data2.rgb;
+		mSample.mReconnectionVertex.mPackedDirOut = asuint(data2.w);
     }
 };
 
@@ -377,11 +350,6 @@ extension PathTracer {
 		// q's sample in the current domain
 		float jac_QtoCur;
 		const ReservoirSampleDataGI newSample = ReservoirSampleDataGI(this, vertex, q.mSample, jac_QtoCur);
-
-		DebugPrintf(rng.mState.xy, "%f %f\n", newSample.mCachedTargetPdf, jac_QtoCur);
-
-		if (newSample.mCachedTargetPdf <= 0 || jac_QtoCur <= 0)
-			return;
 
 		// target pdf in q's domain of currentSample
 		float phat_from_q = 0;
@@ -399,23 +367,23 @@ extension PathTracer {
 		M += q.M;
 		// defensive pairwise mis
 		const float m0 = (1 +      safe_divide(currentSample.mCachedTargetPdf, R * currentSample.mCachedTargetPdf + (M - R) * phat_from_q)) / M;
-		const float m1 = (M - R) * safe_divide(q.mCachedTargetPdf, R * newSample.mCachedTargetPdf + (M - R) * q.mCachedTargetPdf) / M;
+		const float m1 = (M - R) * safe_divide(q.mCachedTargetPdf, R * newSample.mCachedTargetPdf*jac_QtoCur + (M - R) * q.mCachedTargetPdf) / M;
 		#elif defined(gTalbotMis)
 		// generalized talbot mis
 		const float m0 = safe_divide(M*currentSample.mCachedTargetPdf, M*currentSample.mCachedTargetPdf + q.M * phat_from_q);
-		const float m1 = safe_divide(q.M * q.mCachedTargetPdf  , q.M * q.mCachedTargetPdf   + M * newSample.mCachedTargetPdf);
+		const float m1 = safe_divide(q.M * q.mCachedTargetPdf  , q.M * q.mCachedTargetPdf   + M * newSample.mCachedTargetPdf*jac_QtoCur);
 		M += q.M;
 		#else
 		// naive mis
-		const float m0 = M   / (M   + (phat_from_q > 0 ? q.M : 0));
-		const float m1 = q.M / (q.M + (newSample.mCachedTargetPdf > 0 ? M : 0));
+		const float m0 = safe_divide(M  , M   + (phat_from_q > 0 ? q.M : 0));
+		const float m1 = safe_divide(q.M, q.M + (newSample.mCachedTargetPdf*jac_QtoCur > 0 ? M : 0));
 		M += q.M;
 		#endif
 
 		// RIS weights
 
 		const float w0 = m0 * currentSample.mCachedTargetPdf * currentSample.W;
-		const float w1 = m1 *     newSample.mCachedTargetPdf * q.W * jac_QtoCur;
+		const float w1 = m1 *     newSample.mCachedTargetPdf * safe_divide(q.W, jac_QtoCur);
 
 		// create new reservoir
 
@@ -424,10 +392,7 @@ extension PathTracer {
 			currentSample = newSample;
 		}
 
-		if (currentSample.mCachedTargetPdf > 0)
-			currentSample.W = totalWeight / currentSample.mCachedTargetPdf;
-		else
-			currentSample.W = 0;
+		currentSample.W = safe_divide(totalWeight, currentSample.mCachedTargetPdf);
 	}
 
 	float3 EstimateRadianceReSTIR(const PathVertex vertex, inout RandomSampler rng, const uint2 pixelIndex) {
@@ -436,9 +401,14 @@ extension PathTracer {
 
 		// initial ris
 
-		float3 directRadiance;
+        float3 directRadiance = 0;
+
 		for (uint i = 0; i < gPushConstants.mGICandidateSamples; i++) {
-			const ReservoirSampleDataGI xi = ReservoirSampleDataGI(this, vertex, rng.mState, pixelIndex, directRadiance);
+            const ReservoirSampleDataGI xi = ReservoirSampleDataGI(this, vertex, rng.mState, pixelIndex);
+            if (i == 0) {
+                mFramebuffer.mAlbedo[pixelIndex] = float4(xi.mCachedAlbedo, 1);
+                directRadiance = xi.mCachedDirectRadiance;
+            }
 			rng.skipNext(gPushConstants.mMaxDepth*(2 + gPushConstants.mMaxNullCollisions));
 			if (xi.mCachedTargetPdf > 0) {
 				const float wi = xi.mCachedTargetPdf * xi.W;
@@ -447,6 +417,7 @@ extension PathTracer {
 					sample = xi;
 			}
 		}
+
 
 		if (sample.mCachedTargetPdf > 0)
 			sample.W = wsum / (gPushConstants.mGICandidateSamples * sample.mCachedTargetPdf);
@@ -459,13 +430,13 @@ extension PathTracer {
 
 		float M = 1;
 
-		if (gPushConstants.mReservoirHistoryValid != 0) {
+        if (gPushConstants.mReservoirHistoryValid != 0) {
 			const float2 discRng = rng.nextFloat().xy;
-			const int2 qi = int2(gRenderParams.mPrevUVs[pixelIndex] * gPushConstants.mOutputExtent + sampleConcentricDisc(discRng.x, discRng.y) * gPushConstants.mGIReuseRadius);
+			const int2 qi = int2(mFramebuffer.mPrevUVs[pixelIndex] * gPushConstants.mOutputExtent + sampleConcentricDisc(discRng.x, discRng.y) * gPushConstants.mGIReuseRadius);
 			if (all(qi >= 0) && all(qi < gPushConstants.mOutputExtent)) {
 				PackedReservoirGI q;
 				q.LoadPrev(mFramebuffer, qi);
-				if (q.M > 0 && q.mSample.mPathLength == sample.mSample.mPathLength)
+				if (q.M > 0)
 					ReservoirReuseGI(vertex, q, sample, M, rng);
 			}
 		}
@@ -474,7 +445,7 @@ extension PathTracer {
 		{
 			PackedReservoirGI r;
 			r.mSample = sample.mSample;
-			r.mVertex.mLocalPosition = gScene.mInstanceInverseTransforms[vertex.mInstanceIndex].transformPoint(vertex.mShadingData.mPosition);
+			r.mVertex.mLocalPosition = mScene.mInstanceInverseTransforms[vertex.mInstanceIndex].transformPoint(vertex.mShadingData.mPosition);
 			r.mVertex.mInstancePrimitiveIndex = vertex.mInstancePrimitiveIndex;
 			r.mCachedTargetPdf = sample.mCachedTargetPdf;
 			r.W = sample.W;

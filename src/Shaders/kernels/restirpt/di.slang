@@ -5,15 +5,29 @@ float DirectMis(const float a, const float b) {
     return safe_divide(a2, a2 + b * b);
 }
 
+struct DirectIlluminationSample {
+    float3 mRadiance;
+    float mPdfA;
+    float G;
+    float mMisWeight;
+};
+
 extension PathTracer {
-	float3 DirectIllumination(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, out float directPdfA, out float misWeight) {
+    DirectIlluminationSample DirectIllumination(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng) {
+        DirectIlluminationSample o;
+        o.mRadiance = 0;
+        o.mPdfA = 0;
+        o.G = 0;
+        o.mMisWeight = 0;
+
 		const IlluminationSampleRecord r = mScene.SampleIllumination(rng.nextFloat(), vertex.mShadingData.mPosition);
 		if (all(r.mRadiance <= 0) || r.mPdf <= 0)
-			return 0;
+			return o;
 
-		float WtoA = 1;
 		if (r.isFinite)
-			WtoA = r.mCosLight / pow2(r.mDistanceToLight);
+            o.G = r.mCosLight / pow2(r.mDistanceToLight);
+        else
+			o.G = 1;
 
 		const bool isMedium = gHasMedia && vertex.mShadingData.isMedium();
 		const float3 localDirOut = isMedium ? r.mDirectionToLight : vertex.mShadingData.toLocal(r.mDirectionToLight);
@@ -22,10 +36,10 @@ extension PathTracer {
 		if (!isMedium)
 			f.mReflectance *= vertex.mShadingData.shadingNormalCorrection<false>(vertex.mLocalDirIn, localDirOut);
 
-		float3 contrib = (r.mRadiance * f.mReflectance) * (WtoA / r.mPdf);
+		o.mRadiance = r.mRadiance * f.mReflectance;
 
-		directPdfA = r.mPdf;
-		misWeight = DirectMis(r.mPdf, f.mFwdPdfW * WtoA);
+		o.mPdfA = r.mPdf;
+		o.mMisWeight = DirectMis(safe_divide(r.mPdf, o.G), f.mFwdPdfW);
 
 		// evaluate transmittance along shadow ray
 
@@ -34,20 +48,21 @@ extension PathTracer {
 				rayOffset(vertex.mShadingData.mPosition, vertex.mShadingData.getGeometryNormal(), r.mDirectionToLight);
 
 		float transDirPdf, transNeePdf;
-		mScene.traceVisibilityRay(
-			makeRay(rayOrigin, r.mDirectionToLight, 0, AdjustIntersectionDistance(r.mDistanceToLight)),
-			rng, vertex.mCurrentMedium, contrib, transDirPdf, transNeePdf);
+        mScene.traceVisibilityRay(
+            makeRay(rayOrigin, r.mDirectionToLight, 0, AdjustIntersectionDistance(r.mDistanceToLight)),
+            rng, vertex.mCurrentMedium, o.mRadiance, transDirPdf, transNeePdf);
 
-		if (all(contrib <= 0) || transNeePdf <= 0)
-			return 0;
+		o.mPdfA *= transNeePdf;
 
-		directPdfA *= transNeePdf;
+        if (all(o.mRadiance <= 0) || transNeePdf <= 0) {
+            o.G = 0;
+            o.mPdfA = 0;
+        }
 
-		return contrib / transNeePdf;
-	}
-	float3 DirectIllumination(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, const uint2 pixelIndex) {
-		float tmp1, tmp2;
-		return DirectIllumination(vertex, bsdf, rng, tmp1, tmp2);
+        return o;
+    }
+    DirectIlluminationSample DirectIllumination(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, const uint2 pixelIndex) {
+		return DirectIllumination(vertex, bsdf, rng);
 	}
 }
 
@@ -183,8 +198,8 @@ extension PathTracer {
 		M += q.M;
 		#else
 		// naive mis
-		const float m0 = M / (M + (phat_q > 0 ? q.M : 0));
-		const float m1 = q.M / (q.M + (newSample.mTargetPdf > 0 ? M : 0));
+		const float m0 = safe_divide(M, M + (phat_q > 0 ? q.M : 0));
+		const float m1 = safe_divide(q.M, q.M + (newSample.mTargetPdf > 0 ? M : 0));
 		M += q.M;
 		#endif
 
@@ -206,7 +221,7 @@ extension PathTracer {
 			integrationWeight = 0;
 	}
 
-	float3 DirectIlluminationReSTIR(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, const uint2 pixelIndex) {
+    DirectIlluminationSample DirectIlluminationReSTIR(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, const uint2 pixelIndex) {
 		ReservoirSampleDataDI sample;
 		float wsum = 0;
 
@@ -274,6 +289,11 @@ extension PathTracer {
 
 		#endif
 
-		return sample.mCachedContribution * integrationWeight * sample.mCachedWtoA;
+        DirectIlluminationSample o;
+        o.mRadiance = sample.mCachedContribution;
+        o.mPdfA = safe_divide(1, integrationWeight);
+        o.G = sample.mCachedWtoA;
+        o.mMisWeight = DirectMis(safe_divide(sample.mSourcePdf, sample.mCachedWtoA), sample.mCachedBsdfPdfW);
+        return o;
 	}
 }

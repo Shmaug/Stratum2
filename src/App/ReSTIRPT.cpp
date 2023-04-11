@@ -23,6 +23,8 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 		{ "gLambertian", false },
 		{ "gDebugFastBRDF", false },
 		{ "gNoGI", false },
+		{ "gNee", false },
+		{ "gPathGuiding", false },
 		{ "gReSTIR_DI", false },
 		{ "gReSTIR_DI_Reuse", false },
 		{ "gReSTIR_DI_Reuse_Visibility", false },
@@ -37,12 +39,12 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 	mPushConstants["mMaxDiffuseBounces"] = 3u;
 	mPushConstants["mMaxNullCollisions"] = 1000;
 	mPushConstants["mEnvironmentSampleProbability"] = 0.9f;
-	mPushConstants["mDICandidateSamples"] = 32;
-	mPushConstants["mGICandidateSamples"] = 4;
+	mPushConstants["mDICandidateSamples"] = 32u;
+	mPushConstants["mGICandidateSamples"] = 4u;
 	mPushConstants["mDIReuseRadius"] = 32.f;
 	mPushConstants["mGIReuseRadius"] = 16.f;
 	mPushConstants["mDIMaxM"] = 3.f;
-	mPushConstants["mGIMaxM"] = 16.f;
+	mPushConstants["mGIMaxM"] = 4.f;
 
 	Device& device = *mNode.findAncestor<Device>();
 
@@ -184,14 +186,6 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 		it = mSelectionData.erase(it);
 	}
 
-	// gpu print commands
-	for (auto it = mGpuPrintData.begin(); it != mGpuPrintData.end();) {
-		if (it->first.buffer()->inFlight())
-			break;
-		it->second->processGPUPrintCommands(it->first.data(), it->first.sizeBytes());
-		it = mGpuPrintData.erase(it);
-	}
-
 	// allocate images
 
 	const Image::View outputImage = mResourcePool.getImage(commandBuffer.mDevice, "mOutput", Image::Metadata{
@@ -247,7 +241,7 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 		if (mDefines.at("gReSTIR_DI_Reuse"))
 			reservoirData.clearColor(commandBuffer, vk::ClearColorValue{array<float,4>{0,0,0,0}});
 	}
-	for (uint32_t i = 0; i < 4; i++) {
+	for (uint32_t i = 0; i < 6; i++) {
 		const string id = "mReservoirDataGI["+to_string(i)+"]";
 		const Image::View prev = mResourcePool.getLastImage(id);
 		const Image::View reservoirData = mResourcePool.getImage(commandBuffer.mDevice, id, Image::Metadata{
@@ -410,16 +404,6 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 		return;
 	}
 
-	// gpu printing
-	const Buffer::View<byte> gpuPrintBuffer = mResourcePool.getBuffer<byte>(commandBuffer.mDevice, "mGpuPrintBuffer", 4096*1024, vk::BufferUsageFlagBits::eTransferSrc|vk::BufferUsageFlagBits::eTransferDst|vk::BufferUsageFlagBits::eStorageBuffer);
-	{
-		const auto b = Buffer::View<uint32_t>(gpuPrintBuffer.buffer(), 0, 1);
-		b.fill(commandBuffer, 0);
-		b.barrier(commandBuffer,
-			vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
-			vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
-		descriptors[{"gPrintBuffer",0}] = gpuPrintBuffer;
-	}
 	if (mDefines.at("gDebugPixel")) {
 		const ImVec2 c = ImGui::GetIO().MousePos;
 		mPushConstants["mPackedDebugPixelIndex"] = ((int)c.x & 0xFFFF) | ((int)c.y << 16);
@@ -432,17 +416,6 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 	{
 		ProfilerScope ps("Trace paths", &commandBuffer);
 		renderPipeline->dispatchTiled(commandBuffer, extent, descriptorSets, {}, mPushConstants);
-	}
-
-
-	// gpu printing
-	if (mDefines.at("gDebugPixel")) {
-		const Buffer::View<byte> cpuPrintBuffer = make_shared<Buffer>(commandBuffer.mDevice, "CpuPrintBuffer", gpuPrintBuffer.sizeBytes(), vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
-		gpuPrintBuffer.barrier(commandBuffer,
-			vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eTransfer,
-			vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead);
-		Buffer::copy(commandBuffer, gpuPrintBuffer, cpuPrintBuffer);
-		mGpuPrintData.emplace_back(make_pair(cpuPrintBuffer, renderPipeline->shader()));
 	}
 
 	// post processing

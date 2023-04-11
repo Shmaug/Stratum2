@@ -17,6 +17,7 @@ struct PushConstants {
     float mGIMaxM;
     float mDIReuseRadius;
     float mGIReuseRadius;
+    uint mGIReuseSamples;
     uint mReservoirHistoryValid;
     uint mPackedDebugPixelIndex;
 };
@@ -53,8 +54,8 @@ struct RenderParams {
     RWTexture2D<float4> mReservoirDataDI[3];
     RWTexture2D<float4> mPrevReservoirDataDI[3];
 
-    RWTexture2D<float4> mReservoirDataGI[4];
-    RWTexture2D<float4> mPrevReservoirDataGI[4];
+    RWTexture2D<float4> mReservoirDataGI[6];
+    RWTexture2D<float4> mPrevReservoirDataGI[6];
 
     void StoreAuxillaryData(const SceneParameters scene, const ShadingData shadingData, const uint2 index, const uint instancePrimitiveIndex) {
         float2 prevPixelCoord = index + 0.5;

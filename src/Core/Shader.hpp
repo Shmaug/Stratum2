@@ -5,8 +5,6 @@
 
 #include "Device.hpp"
 
-struct GPUPrinting;
-
 namespace stm2 {
 
 using Defines = unordered_map<string, string>;
@@ -44,8 +42,6 @@ public:
 	inline const unordered_map<string, Variable>& outputVariables() const { return mOutputVariables; }
 	inline const vk::Extent3D& workgroupSize() const { return mWorkgroupSize; }
 
-	void processGPUPrintCommands(const void* data, const size_t dataSize) const;
-
 private:
 	vk::raii::ShaderModule mModule;
 
@@ -55,7 +51,6 @@ private:
 	unordered_map<string, Variable> mInputVariables;
 	unordered_map<string, Variable> mOutputVariables;
 	vk::Extent3D mWorkgroupSize;
-	shared_ptr<GPUPrinting> mGPUPrinting;
 };
 
 }
