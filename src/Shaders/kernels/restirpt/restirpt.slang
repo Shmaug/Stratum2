@@ -1,5 +1,5 @@
-#ifdef gPathGuiding
-#include "pg.slang"
+#ifdef gSingleSampleMIS
+#include "gi_ssmis.slang"
 #else
 #include "gi.slang"
 #endif
@@ -51,8 +51,8 @@ extension PathTracer {
 
 		#else // gNoGI
 
-		#ifdef gPathGuiding
-		mFramebuffer.mOutput[index] = float4(throughput * EstimateRadiancePathGuiding(primaryVertex, rng, index), 1);
+		#ifdef gSingleSampleMIS
+		mFramebuffer.mOutput[index] = float4(throughput * EstimateRadianceSSMIS(primaryVertex, rng, index), 1);
 		#else
         mFramebuffer.mOutput[index] = float4(throughput * EstimateRadianceFn(primaryVertex, rng, index), 1);
 		#endif

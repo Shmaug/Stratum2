@@ -24,7 +24,7 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 		{ "gDebugFastBRDF", false },
 		{ "gNoGI", false },
 		{ "gNee", false },
-		{ "gPathGuiding", false },
+		{ "gSingleSampleMIS", false },
 		{ "gReSTIR_DI", false },
 		{ "gReSTIR_DI_Reuse", false },
 		{ "gReSTIR_DI_Reuse_Visibility", false },

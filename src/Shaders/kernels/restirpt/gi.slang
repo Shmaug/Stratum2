@@ -114,7 +114,7 @@ extension PathTracer {
 		uint diffuseBounces = 0;
 		float misWeight = 1;
 
-        for (uint depth = 2; depth <= gPushConstants.mMaxDepth; depth++) {
+        for (uint depth = 1; depth <= gPushConstants.mMaxDepth; depth++) {
             VertexSampleRecord s;
             if (depth == 1) {
 				// get albedo from material
@@ -161,7 +161,7 @@ extension PathTracer {
 	}
 }
 
-/* -------- ReSTIR -------- */
+/* -------- ReSTIR PT -------- */
 
 struct PackedVertex {
     float3 mLocalPosition;
@@ -240,7 +240,7 @@ struct ReservoirSampleDataGI {
 		uint diffuseBounces = 0;
         float misWeight = 1;
 
-        for (uint depth = 2; depth <= gPushConstants.mMaxDepth; depth++) {
+        for (uint depth = 1; depth <= gPushConstants.mMaxDepth; depth++) {
             VertexSampleRecord s;
 
             if (depth == 1) {
