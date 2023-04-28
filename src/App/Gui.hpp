@@ -1,9 +1,7 @@
 #pragma once
 
 #include <Core/Image.hpp>
-
 #include <imgui/imgui.h>
-#include <imgui/imgui_impl_vulkan.h>
 
 namespace stm2 {
 
@@ -143,21 +141,7 @@ public:
 
 	static unordered_map<Image::View, pair<vk::raii::DescriptorSet, vk::raii::Sampler>> gTextureIDs;
 	static unordered_set<Image::View> gFrameTextures;
-	static ImTextureID getTextureID(const Image::View& image) {
-		auto it = gTextureIDs.find(image);
-		if (it == gTextureIDs.end()) {
-			vk::raii::Sampler sampler(*image.image()->mDevice, vk::SamplerCreateInfo({}, vk::Filter::eNearest, vk::Filter::eLinear, vk::SamplerMipmapMode::eLinear));
-			vk::raii::DescriptorSet descriptorSet(
-				*image.image()->mDevice,
-				ImGui_ImplVulkan_AddTexture(*sampler, *image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
-				**gImGuiDescriptorPool);
-
-			it = gTextureIDs.emplace(image, pair{ move(descriptorSet), move(sampler) }).first;
-		}
-		gFrameTextures.emplace(image);
-		return (VkDescriptorSet)*it->second.first;
-
-	}
+	static ImTextureID getTextureID(const Image::View& image);
 
 	Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily, const vk::ImageLayout dstLayout, const bool clear);
 	~Gui();

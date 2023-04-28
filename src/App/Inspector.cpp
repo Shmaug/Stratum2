@@ -69,6 +69,12 @@ bool Inspector::drawNodeGui(Node& n) {
 
 	// context menu
 	if (ImGui::BeginPopupContextItem()) {
+		if (ImGui::Selectable("Add component")) {
+			ImGui::OpenPopup("Add component");
+		}
+		if (ImGui::Selectable("Add child")) {
+			ImGui::OpenPopup("Add node");
+		}
 		bool canDelete = true;
 		for (type_index c : n.components()) {
 			if (gProtectedComponents.contains(c)) {
@@ -76,16 +82,8 @@ bool Inspector::drawNodeGui(Node& n) {
 				break;
 			}
 		}
-		if (canDelete && ImGui::Button("Delete")) {
+		if (canDelete && ImGui::Selectable("Delete")) {
 			erase = true;
-		}
-
-		if (ImGui::Button("Add child")) {
-			ImGui::OpenPopup("Add node");
-		}
-
-		if (ImGui::Button("Add component")) {
-			ImGui::OpenPopup("Add component");
 		}
 
 		// add child dialog

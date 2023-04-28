@@ -224,6 +224,7 @@ struct ReservoirSampleDataGI {
 		W = safe_divide(wsum, mCachedTargetPdf);
 	}
 
+	// traces a path from vertex using the random seed x
     [mutating]
     void make<let bIsCanonical : bool>(const PathTracer pt, PathVertex vertex, const uint4 x, const uint2 pixelIndex) {
         mSample.mRng = x;
@@ -256,9 +257,11 @@ struct ReservoirSampleDataGI {
                 if (bIsCanonical) mCachedDirectRadiance = s.mLe;
             } else {
 				s = pt.ProcessVertex(vertex, rng, depth < gPushConstants.mMaxDepth);
+				// Add direct light
 				UpdatePath(throughput * s.mLe * misWeight, mSample.mReplayPdfW, depth, rng.nextFloat().x);
 			}
 
+			// Add NEE contribution
 			#ifdef gNee
 			UpdatePath(throughput * s.mNeeLe * s.mNeeMisWeight, mSample.mReplayPdfW * s.mNeePdfW, depth+1, rng.nextFloat().x);
 			#endif
@@ -277,6 +280,7 @@ struct ReservoirSampleDataGI {
                 return;
 			throughput /= transDirPdf;
 
+			// Compute MIS weight for direct light at the next vertex
 			#ifdef gNee
             misWeight = s.isSpecular ? 1 : DirectMis(s.mDirPdfW, directPdfA / WtoA);
 			#endif
@@ -358,6 +362,7 @@ extension PathTracer {
 			float jac_curToQ;
 			const ReservoirSampleDataGI currentSample_q = ReservoirSampleDataGI(this, v_q, currentSample.mSample, jac_curToQ);
 			phat_from_q = currentSample_q.mCachedTargetPdf * jac_curToQ;
+			DebugPrintf(rng.mState.xy, "%f %f", jac_QtoCur, jac_curToQ);
 		}
 
 		// Resampling MIS weights

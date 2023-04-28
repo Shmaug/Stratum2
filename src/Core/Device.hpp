@@ -116,7 +116,8 @@ private:
 		vk::PhysicalDeviceBufferDeviceAddressFeatures,
 		vk::PhysicalDeviceAccelerationStructureFeaturesKHR,
 		vk::PhysicalDeviceRayTracingPipelineFeaturesKHR,
-		vk::PhysicalDeviceRayQueryFeaturesKHR
+		vk::PhysicalDeviceRayQueryFeaturesKHR,
+		vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT
 	> mFeatureChain;
 	vk::PhysicalDeviceLimits mLimits;
 };

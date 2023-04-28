@@ -14,6 +14,22 @@ unordered_map<Image::View, pair<vk::raii::DescriptorSet, vk::raii::Sampler>> Gui
 unordered_set<Image::View> Gui::gFrameTextures;
 shared_ptr<vk::raii::DescriptorPool> Gui::gImGuiDescriptorPool;
 
+
+ImTextureID Gui::getTextureID(const Image::View& image) {
+	auto it = gTextureIDs.find(image);
+	if (it == gTextureIDs.end()) {
+		vk::raii::Sampler sampler(*image.image()->mDevice, vk::SamplerCreateInfo({}, vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eLinear));
+		vk::raii::DescriptorSet descriptorSet(
+			*image.image()->mDevice,
+			ImGui_ImplVulkan_AddTexture(*sampler, *image, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+			**gImGuiDescriptorPool);
+
+		it = gTextureIDs.emplace(image, pair{ move(descriptorSet), move(sampler) }).first;
+	}
+	gFrameTextures.emplace(image);
+	return (VkDescriptorSet)*it->second.first;
+}
+
 Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily, const vk::ImageLayout dstLayout, const bool clear)
 	: mRenderPass(nullptr), mQueueFamily(queueFamily), mDstLayout(dstLayout) {
 

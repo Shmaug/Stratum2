@@ -47,7 +47,7 @@ Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) :
 	mFeatures.wideLines = true;
 	mFeatures.largePoints = true;
 	mFeatures.sampleRateShading = true;
-	mFeatures.shaderFloat64 = true; // needed by slang?
+	//mFeatures.shaderFloat64 = true; // needed by slang?
 	mFeatures.shaderStorageBufferArrayDynamicIndexing = true;
 	mFeatures.shaderSampledImageArrayDynamicIndexing = true;
 	mFeatures.shaderStorageImageArrayDynamicIndexing = true;
@@ -67,6 +67,10 @@ Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) :
 	rtfeatures.rayTraversalPrimitiveCulling = rtfeatures.rayTracingPipeline;
 	get<vk::PhysicalDeviceRayQueryFeaturesKHR>(mFeatureChain).rayQuery = mExtensions.contains(VK_KHR_RAY_QUERY_EXTENSION_NAME);
 
+
+	auto& atomicFloatFeatures = get<vk::PhysicalDeviceShaderAtomicFloatFeaturesEXT>(mFeatureChain);
+	bool atomicFloat = mExtensions.contains(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME);
+	atomicFloatFeatures.shaderBufferFloat32AtomicAdd = atomicFloat;
 
 
 	// Create logical device

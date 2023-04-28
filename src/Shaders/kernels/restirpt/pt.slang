@@ -127,6 +127,7 @@ struct PathTracer {
     SceneParameters mScene;
     RenderParams mFramebuffer;
 
+	// samples a camera ray
 	PathVertex SampleVisibility(const uint2 index, inout RandomSampler rng, out float3 throughput) {
 		const uint viewIndex = getViewIndex(index, gPushConstants.mOutputExtent, gPushConstants.mViewCount);
 

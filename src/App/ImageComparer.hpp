@@ -17,18 +17,23 @@ public:
 	ImageComparer(Node& node);
 
 	void drawGui();
-	void update(CommandBuffer& commandBuffer);
+	void postRender(CommandBuffer& commandBuffer, const Image::View& renderTarget);
 
 private:
-	ComputePipelineCache mPipeline;
-	unordered_map<string, Buffer::View<uint32_t>> mCompareResult;
-	ImageCompareMode mMode = ImageCompareMode::eSMAPE;
-	uint32_t mQuantization = 1024;
+	Buffer::View<uint2> compare(CommandBuffer& commandBuffer, const Image::View& img0, const Image::View& img1);
 
-	// stores original image object, and a copy
-	unordered_map<string, pair<Image::View, Image::View>> mImages;
-	unordered_set<string> mComparing;
-	string mCurrent;
+	ComputePipelineCache mPipeline;
+	ImageCompareMode mMode = ImageCompareMode::eMSE;
+	float mQuantization = 16384;
+
+	Image::View mReferenceImage;
+	vector<tuple<string, Image::View, Buffer::View<uint2>>> mImages;
+	uint32_t mSelected = -1;
+
+	string mStoreLabel = "Image";
+	bool mStore;
+	optional<uint32_t> mStoreFrame;
+
 	float2 mOffset = float2::Zero();
 	float mZoom = 1;
 };

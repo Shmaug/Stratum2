@@ -26,14 +26,6 @@ if (NOT EXISTS ${SLANG_ROOT})
 	endif()
 endif()
 
-# store path to slang compiler
-set(SLANGC "")
-if (WIN32)
-	set(SLANGC "${SLANG_ROOT}/bin/windows-x64/release/slangc.exe")
-else()
-	set(SLANGC "${SLANG_ROOT}/bin/linux-x64/release/slangc")
-endif()
-
 include_directories(extern)
 include_directories(src)
 

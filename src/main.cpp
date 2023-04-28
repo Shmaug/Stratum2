@@ -212,7 +212,6 @@ struct App {
 		drawGui();
 		mInspector->draw();
 
-		mImageComparer->update(commandBuffer);
 		mScene->update(commandBuffer, deltaTime);
 		mFlyCamera->update(deltaTime);
 	}
@@ -226,8 +225,13 @@ struct App {
 		}
 
 		visit(
-			[&](const auto& renderer){ renderer->render(commandBuffer, renderTarget); },
+			[&](const auto& renderer){
+				renderer->render(commandBuffer, renderTarget);
+			},
 			mRenderer);
+
+		mImageComparer->postRender(commandBuffer, renderTarget);
+
 		mGui->render(commandBuffer, renderTarget);
 	}
 

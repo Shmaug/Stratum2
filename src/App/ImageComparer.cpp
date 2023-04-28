@@ -1,6 +1,7 @@
 #include "ImageComparer.hpp"
 #include "Inspector.hpp"
 #include "Renderer.hpp"
+#include "Denoiser.hpp"
 
 #include <Core/Instance.hpp>
 #include <Core/Profiler.hpp>
@@ -15,155 +16,187 @@ ImageComparer::ImageComparer(Node& node) : mNode(node) {
 	mPipeline = ComputePipelineCache(shaderPath / "image_compare.slang");
 }
 
-void ImageComparer::update(CommandBuffer& commandBuffer) {
+Buffer::View<uint2> ImageComparer::compare(CommandBuffer& commandBuffer, const Image::View& img0, const Image::View& img1) {
+	ProfilerScope ps("Image compare", &commandBuffer);
+	const Buffer::View<uint2> resultBuffer    = make_shared<Buffer>(commandBuffer.mDevice, "ImageComparer/ResultBufferGpu", sizeof(uint2), vk::BufferUsageFlagBits::eStorageBuffer|vk::BufferUsageFlagBits::eTransferSrc|vk::BufferUsageFlagBits::eTransferDst);
+	const Buffer::View<uint2> resultBufferCpu = make_shared<Buffer>(commandBuffer.mDevice, "ImageComparer/ResultBuffer"   , sizeof(uint2), vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
+
+	resultBuffer.fill(commandBuffer, 0);
+	resultBuffer.barrier(commandBuffer,
+		vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
+		vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite);
+
+	mPipeline.get(commandBuffer.mDevice, {
+		{ "gMode", to_string((uint32_t)mMode) }
+	})->dispatchTiled(commandBuffer, img0.extent(), Descriptors{
+		{ {"gImage1",0}, ImageDescriptor(img0, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}) },
+		{ {"gImage2",0}, ImageDescriptor(img1, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}) },
+		{ {"gOutput",0}, resultBuffer },
+	}, {}, PushConstants{
+		{ "mExtent", PushConstantValue(uint2(img0.extent().width, img0.extent().height)) },
+		{ "mQuantization", PushConstantValue(mQuantization) },
+	});
+
+	resultBuffer.barrier(commandBuffer,
+		vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eTransfer,
+		vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eTransferRead);
+
+	Buffer::copy(commandBuffer, resultBuffer, resultBufferCpu);
+
+	return resultBufferCpu;
+}
+
+void ImageComparer::postRender(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
 	ProfilerScope ps("ImageComparer::update");
 
-	// copy images
-	for (auto&[original, img] : mImages|views::values) {
-		if (img) continue;
-
-		Image::Metadata md = original.image()->metadata();
-		md.mUsage = vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eTransferSrc|vk::ImageUsageFlagBits::eTransferDst;
-		img = make_shared<Image>(commandBuffer.mDevice, original.image()->resourceName() + "/ImageComparer Copy", md);
-
-
-		{
-			ProfilerScope ps("Image compare", &commandBuffer);
-			const Defines defines {
-				{ "COPY_KERNEL", "" },
-				{ "CONVERT_SRGB", "" },
-			};
-			mPipeline.get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, original.extent(), Descriptors{
-				{ {"gInput",0}, ImageDescriptor(original, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}) },
-				{ {"gOutput",0}, ImageDescriptor(img, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {}) },
-			});
+	string storeSuffix;
+	if (mStoreFrame) {
+		auto denoiser = mNode.root()->findDescendant<Denoiser>();
+		if (denoiser) {
+			if (denoiser->accumulatedFrames() == *mStoreFrame) {
+				mStore = true;
+				storeSuffix = "_" + to_string(denoiser->accumulatedFrames());
+			}
 		}
-
-		img.image()->generateMipMaps(commandBuffer);
 	}
 
-	if (mComparing.empty()) return;
+	// store/copy the renderTarget
+	if (mStore) {
+		Image::Metadata md = renderTarget.image()->metadata();
+		md.mUsage = vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eTransferSrc|vk::ImageUsageFlagBits::eTransferDst;
+		const Image::View image = make_shared<Image>(commandBuffer.mDevice, "ImageComparer/" + mStoreLabel + storeSuffix, md);
 
-	if (ImGui::Begin("Compare result")) {
-		if (mComparing.size() == 1 || mImages.find(mCurrent) == mImages.end()) {
-			mCurrent = *mComparing.begin();
-		} else {
-			bool s = false;
-			for (auto c : mComparing) {
-				if (s) ImGui::SameLine();
-				s = true;
-				if (ImGui::Button(c.c_str()))
-					mCurrent = c;
-			}
+		Image::copy(commandBuffer, renderTarget, image);
+		image.image()->generateMipMaps(commandBuffer);
 
-			// if two images are selected, compute the error between them
-			if (mComparing.size() == 2) {
-				const string& img0 = *mComparing.begin();
-				const string& img1 = *(++mComparing.begin());
-				Buffer::View<uint32_t>& resultBuffer = mCompareResult[ img0 + "_" + img1];
+		mImages.emplace_back(mStoreLabel+storeSuffix, image, Buffer::View<uint2>{});
+		mStore = false;
+	}
 
-				bool update = !resultBuffer.buffer();
-				ImGui::SameLine();
-				ImGui::SetNextItemWidth(80);
-				if (ImGui::DragScalar("Quantization", ImGuiDataType_U32, &mQuantization)) update = true;
-				ImGui::SameLine();
-				ImGui::SetNextItemWidth(160);
-				if (Gui::enumDropdown<ImageCompareMode>("Error mode", mMode, (uint32_t)ImageCompareMode::eCompareMetricCount))
-					update = true;
-
-				if (update) {
-					if (!resultBuffer.buffer())
-						resultBuffer = make_shared<Buffer>(commandBuffer.mDevice, "ImageComparer/ResultBuffer", 2*sizeof(uint32_t), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
-					resultBuffer[0] = 0;
-					resultBuffer[1] = 0;
-
-					{
-						ProfilerScope ps("Image compare", &commandBuffer);
-						const Defines defines {
-							{ "gMode", to_string((uint32_t)mMode) },
-							{ "gQuantization", to_string(mQuantization) }
-						};
-						mPipeline.get(commandBuffer.mDevice, defines)->dispatchTiled(commandBuffer, mImages.at(img0).second.extent(), Descriptors{
-							{ {"gImage1",0}, ImageDescriptor(mImages.at(img0).second, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}) },
-							{ {"gImage2",0}, ImageDescriptor(mImages.at(img1).second, vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}) },
-							{ {"gOutput",0}, resultBuffer },
-						});
-					}
-				}
-
-				if (resultBuffer && !resultBuffer.buffer()->inFlight()) {
-					ImGui::SameLine();
-					if (resultBuffer[1])
-						ImGui::Text("OVERFLOW");
-					else
-						ImGui::Text("%f", mMode == ImageCompareMode::eMSE ? sqrt(resultBuffer[0]/(float)mQuantization) : resultBuffer[0]/(float)mQuantization);
-				}
+	// compute comparisons
+	if (mReferenceImage && !mReferenceImage.image()->inFlight()) {
+		for (auto&[label, img, resultBuffer] : mImages) {
+			if (img != mReferenceImage && !resultBuffer && img && !img.image()->inFlight()) {
+				resultBuffer = compare(commandBuffer, mReferenceImage, img);
 			}
 		}
+	}
 
-		// image pan/zoom
-		const uint32_t w = ImGui::GetWindowSize().x - 4;
-		Image::View& img = mImages.at(mCurrent).second;
-		commandBuffer.trackResource(img.image());
-		const float aspect = (float)img.extent().height / (float)img.extent().width;
-		ImVec2 uvMin(mOffset[0], mOffset[1]);
-		ImVec2 uvMax(mOffset[0] + mZoom, mOffset[1] + mZoom);
-		ImGui::Image(Gui::getTextureID(img), ImVec2(w, w * aspect), uvMin, uvMax);
-		if (ImGui::IsItemHovered()) {
-			mZoom *= 1 - 0.05f*ImGui::GetIO().MouseWheel;
-			mZoom = clamp(mZoom, 0.f, 1.f);
-			mOffset[0] = clamp(mOffset[0], 0.f, 1 - mZoom);
-			mOffset[1] = clamp(mOffset[1], 0.f, 1 - mZoom);
-			if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-				const ImGuiIO& io = ImGui::GetIO();
-				mOffset[0] -= (uvMax.x - uvMin.x) * io.MouseDelta.x / w;
-				mOffset[1] -= (uvMax.y - uvMin.y) * io.MouseDelta.y / (w*aspect);
+	// show comparison window
+	if (mSelected < mImages.size()) {
+		const Image::View currentImage = get<Image::View>(mImages[mSelected]);
+		if (ImGui::Begin("Image compare")) {
+			// image pan/zoom
+			const uint32_t w = ImGui::GetWindowSize().x - 4;
+			commandBuffer.trackResource(currentImage.image());
+			const float aspect = (float)currentImage.extent().height / (float)currentImage.extent().width;
+			ImVec2 uvMin(mOffset[0], mOffset[1]);
+			ImVec2 uvMax(mOffset[0] + mZoom, mOffset[1] + mZoom);
+			ImGui::Image(Gui::getTextureID(currentImage), ImVec2(w, w * aspect), uvMin, uvMax);
+			if (ImGui::IsItemHovered()) {
+				mZoom *= 1 - 0.05f*ImGui::GetIO().MouseWheel;
+				mZoom      = clamp(mZoom, 0.f, 1.f);
 				mOffset[0] = clamp(mOffset[0], 0.f, 1 - mZoom);
 				mOffset[1] = clamp(mOffset[1], 0.f, 1 - mZoom);
+				if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+					const ImGuiIO& io = ImGui::GetIO();
+					mOffset[0] -= (uvMax.x - uvMin.x) * io.MouseDelta.x / w;
+					mOffset[1] -= (uvMax.y - uvMin.y) * io.MouseDelta.y / (w*aspect);
+					mOffset[0] = clamp(mOffset[0], 0.f, 1 - mZoom);
+					mOffset[1] = clamp(mOffset[1], 0.f, 1 - mZoom);
+				}
 			}
 		}
+		ImGui::End();
 	}
-
-	ImGui::End();
 }
 
 void ImageComparer::drawGui() {
 	if (ImGui::Button("Clear")) {
 		mImages.clear();
-		mComparing.clear();
-		mCurrent.clear();
+		mReferenceImage = {};
 	}
-
-	static char label[64];
-	ImGui::InputText("##", label, sizeof(label));
 	ImGui::SameLine();
-	if (ImGui::Button("Save") && !string(label).empty()) {
-		Image::View img;
-		if (auto pt = mNode.root()->findDescendant<VCM>())
-			img = pt->resultImage();
-		if (img)
-			mImages.emplace(label, pair<Image::View, Image::View>{ img, {} });
+	if (ImGui::Button("Reload shaders")) {
+		mPipeline.clear();
 	}
 
-	for (auto it = mImages.begin(); it != mImages.end(); ) {
-		ImGui::PushID(&it->second);
-		const bool d = ImGui::Button("x");
-		bool c = mComparing.find(it->first) != mComparing.end();
-		ImGui::PopID();
-		if (d) {
-			if (it->first == mCurrent) mCurrent.clear();
-			if (c) mComparing.erase(it->first);
-			it = mImages.erase(it);
-			continue;
-		}
+	// properties
+	{
+		bool changed = false;
+		ImGui::SetNextItemWidth(80);
+		if (ImGui::DragFloat("Quantization", &mQuantization))
+			changed = true;
+		ImGui::SetNextItemWidth(160);
+		if (Gui::enumDropdown<ImageCompareMode>("Error mode", mMode, (uint32_t)ImageCompareMode::eCompareMetricCount))
+			changed = true;
+
+		if (changed)
+			for (auto& [label,img,resultBuffer] : mImages)
+				resultBuffer.reset();
+	}
+
+	// save button
+	{
+		mStoreLabel.reserve(64);
+		ImGui::InputText("##StoreLabel", mStoreLabel.data(), mStoreLabel.capacity());
 		ImGui::SameLine();
-		if (ImGui::Checkbox(it->first.c_str(), &c)) {
-			if (c)
-				mComparing.emplace(it->first);
-			else
-				mComparing.erase(it->first);
+		if (ImGui::Button("Save"))
+			mStore = true;
+	}
+
+	bool v = mStoreFrame.has_value();
+	ImGui::Checkbox("Store frame number", &v);
+	if (v) {
+		if (!mStoreFrame) mStoreFrame = 0;
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(30);
+		ImGui::DragScalar("##StoreFrame", ImGuiDataType_U32, &mStoreFrame.value());
+	} else {
+		mStoreFrame = nullopt;
+	}
+
+	// list images and mse values
+	for (auto it = mImages.begin(); it != mImages.end();) {
+		auto&[label,img,resultBuffer] = *it;
+		const uint32_t index = it - mImages.begin();
+
+		ImGui::PushID(hashArgs(int64_t(this), index));
+		if (ImGui::Selectable(label.c_str(), mSelected == index)) {
+			mSelected = mSelected == index ? -1 : index;
 		}
-		it++;
+		bool d = false;
+		if (ImGui::BeginPopupContextItem()) {
+			if (mReferenceImage != img && ImGui::Selectable("Set as reference")) {
+				mReferenceImage = img;
+				for (auto& [label,img,resultBuffer] : mImages)
+					resultBuffer.reset();
+			}
+			d = ImGui::Selectable("Delete");
+			ImGui::EndPopup();
+		}
+
+		if (resultBuffer) {
+			const bool overflowed = resultBuffer[0][1] > 0;
+			float result = ((overflowed ? ~uint32_t(0) : resultBuffer[0][0]) / mQuantization) / (3 * img.extent().width * img.extent().height);
+			if (mMode == ImageCompareMode::eMSE)
+				result = sqrt(result);
+			ImGui::SameLine();
+			ImGui::Text("%s%f", overflowed ? ">" : "", result);
+		}
+
+		ImGui::PopID();
+
+		if (d) {
+			if (mReferenceImage == img)
+				mReferenceImage = {};
+			if (mSelected == index)
+				mSelected = -1;
+			else if (mSelected < mImages.size() && mSelected > index)
+				mSelected--;
+			it = mImages.erase(it);
+		} else
+			it++;
 	}
 }
 
