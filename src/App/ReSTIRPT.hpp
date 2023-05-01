@@ -2,6 +2,7 @@
 
 #include "GpuHashGrid.hpp"
 #include "Node.hpp"
+#include "GuiProperty.hpp"
 
 #include <Shaders/compat/transform.h>
 
@@ -25,6 +26,8 @@ private:
 	PushConstants mPushConstants;
 
 	unordered_map<string, bool> mDefines;
+
+	vector<shared_ptr<GuiProperty>> mProperties;
 
 	bool mRandomPerFrame = true;
 

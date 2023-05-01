@@ -16,35 +16,43 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 	if (shared_ptr<Inspector> inspector = mNode.root()->findDescendant<Inspector>())
 		inspector->setInspectCallback<ReSTIRPT>();
 
-	mDefines = {
-		{ "gAlphaTest", true },
-		{ "gNormalMaps", true },
-		{ "gShadingNormals", true },
-		{ "gLambertian", false },
-		{ "gDebugFastBRDF", false },
-		{ "gNoGI", false },
-		{ "gNee", false },
-		{ "gSingleSampleMIS", false },
-		{ "gReSTIR_DI", false },
-		{ "gReSTIR_DI_Reuse", false },
-		{ "gReSTIR_DI_Reuse_Visibility", false },
-		{ "gReSTIR_GI", false },
-		{ "gReSTIR_GI_Reuse", false },
-		{ "gPairwiseMis", false },
-		{ "gTalbotMis", false },
-		{ "gDebugPixel", false },
-	};
+	mProperties = {
+		initialize_property<bool>    ("Alpha testing",                  true, [this](){ return &mDefines["gAlphaTest"]; }),
+		initialize_property<bool>    ("Shading normals",                true, [this](){ return &mDefines["gShadingNormals"]; }),
+		initialize_property<bool>    ("Normal maps",                    true, [this](){ return &mDefines["gNormalMaps"]; }),
+		initialize_property<bool>    ("Lambertian",                    false, [this](){ return &mDefines["gLambertian"]; }),
+		initialize_property<bool>    ("No GI",                         false, [this](){ return &mDefines["gNoGI"]; }),
+		initialize_property<bool>    ("Nee",                           false, [this](){ return &mDefines["gNee"]; }),
+		initialize_property<bool>    ("Single sample MIS",             false, [this](){ return &mDefines["gSingleSampleMIS"]; }),
+		initialize_property<bool>    ("Debug fast BRDF",               false, [this](){ return &mDefines["gDebugFastBRDF"]; }),
+		initialize_property<bool>    ("DebugPixel",                    false, [this](){ return &mDefines["gDebugPixel"]; }),
+		initialize_property<bool>    ("Random per frame",              false, [this](){ return &mRandomPerFrame; }),
 
-	mPushConstants["mMaxDepth"] = 8u;
-	mPushConstants["mMaxDiffuseBounces"] = 3u;
-	mPushConstants["mMaxNullCollisions"] = 1000;
-	mPushConstants["mEnvironmentSampleProbability"] = 0.9f;
-	mPushConstants["mDICandidateSamples"] = 32u;
-	mPushConstants["mGICandidateSamples"] = 4u;
-	mPushConstants["mDIReuseRadius"] = 32.f;
-	mPushConstants["mGIReuseRadius"] = 16.f;
-	mPushConstants["mDIMaxM"] = 3.f;
-	mPushConstants["mGIMaxM"] = 4.f;
+		initialize_property<uint32_t>("Max depth",                         8, [this](){ return &mPushConstants["mMaxDepth"].get<uint32_t>(); }, 1, 0, 0.1f),
+		initialize_property<uint32_t>("Max diffuse bounces",               3, [this](){ return &mPushConstants["mMaxDiffuseBounces"].get<uint32_t>(); }, 1, 0, 0.1f),
+		initialize_property<uint32_t>("Max null collisions",            1000, [this](){ return &mPushConstants["mMaxNullCollisions"].get<uint32_t>(); }),
+		initialize_property<float>   ("Environment sample probability", 0.9f, [this](){ return &mPushConstants["mEnvironmentSampleProbability"].get<float>(); }, 0, 1, 0),
+
+		initialize_property<bool>    ("ReSTIR DI",                     false, [this](){ return &mDefines["gReSTIR_DI"]; }),
+		initialize_property<uint32_t>("DI candidate samples",             32, [this](){ return &mPushConstants["mDICandidateSamples"].get<uint32_t>(); }, 0, 128, 0.25f),
+		initialize_property<bool>    ("ReSTIR DI reuse",               false, [this](){ return &mDefines["gReSTIR_DI_Reuse"]; }),
+		initialize_property<bool>    ("ReSTIR DI reuse visibility",    false, [this](){ return &mDefines["gReSTIR_DI_Reuse_Visibility"]; }),
+		initialize_property<float>   ("DI max M",                          3, [this](){ return &mPushConstants["mDIMaxM"].get<float>(); }, 0, 10, .1f),
+		initialize_property<float>   ("DI reuse radius",                  32, [this](){ return &mPushConstants["mDIReuseRadius"].get<float>(); }, 0, 1000),
+
+		initialize_property<bool>    ("ReSTIR GI",                     false, [this](){ return &mDefines["gReSTIR_GI"]; }),
+		initialize_property<uint32_t>("GI candidate samples",              4, [this](){ return &mPushConstants["mGICandidateSamples"].get<uint32_t>(); }, 0, 128, 0.25f),
+		initialize_property<bool>    ("ReSTIR GI reuse",               false, [this](){ return &mDefines["gReSTIR_GI_Reuse"]; }),
+		initialize_property<float>   ("GI max M",                          4, [this](){ return &mPushConstants["mGIMaxM"].get<float>(); }, 0, 10, .1f),
+		initialize_property<float>   ("GI reuse radius",                  16, [this](){ return &mPushConstants["mGIReuseRadius"].get<float>(); }, 0, 1000),
+		initialize_property<uint32_t>("GI reuse samples",                  3, [this](){ return &mPushConstants["mGIReuseSamples"].get<uint32_t>(); }, 0, 100),
+
+		initialize_property<bool>    ("PairwiseMis",                   false, [this](){ return &mDefines["gPairwiseMis"]; }),
+		initialize_property<bool>    ("TalbotMis",                     false, [this](){ return &mDefines["gTalbotMis"]; }),
+
+		initialize_property<bool>    ("Denoise",                       false, [this](){ return &mDenoise; }),
+		initialize_property<bool>    ("Tonemap",                       false, [this](){ return &mTonemap; }),
+	};
 
 	Device& device = *mNode.findAncestor<Device>();
 
@@ -100,39 +108,9 @@ void ReSTIRPT::drawGui() {
 		changed = true;
 	}
 
-	if (ImGui::CollapsingHeader("Defines")) {
-		for (auto&[define, enabled] : mDefines) {
-			if (ImGui::Checkbox(define.c_str(), &enabled)) changed = true;
-		}
-	}
-
-	if (ImGui::CollapsingHeader("Configuration")) {
-		if (ImGui::Checkbox("Random frame seed", &mRandomPerFrame)) changed = true;
-		ImGui::PushItemWidth(40);
-		uint32_t one = 1;
-		if (ImGui::DragScalar("Max depth", ImGuiDataType_U32, &mPushConstants["mMaxDepth"].get<uint32_t>(), .1f, &one)) changed = true;
-		if (ImGui::DragScalar("Max diffuse bounces", ImGuiDataType_U32, &mPushConstants["mMaxDiffuseBounces"].get<uint32_t>(), .1f, &one)) changed = true;
-		if (ImGui::SliderFloat("Environment sample p", &mPushConstants["mEnvironmentSampleProbability"].get<float>(), 0, 1)) changed = true;
-
-		if (mDefines.at("gReSTIR_DI")) {
-			if (ImGui::DragScalar("DI candidate samples", ImGuiDataType_U32, &mPushConstants["mDICandidateSamples"].get<uint32_t>())) changed = true;
-			if (mDefines.at("gReSTIR_DI_Reuse")) {
-				if (ImGui::DragFloat("DI max M", &mPushConstants["mDIMaxM"].get<float>(), .01f, 0, 1000)) changed = true;
-				if (ImGui::DragFloat("DI reuse radius", &mPushConstants["mDIReuseRadius"].get<float>(), .01f, 0, 200)) changed = true;
-			}
-		}
-		if (mDefines.at("gReSTIR_GI")) {
-			if (ImGui::DragScalar("GI candidate samples", ImGuiDataType_U32, &mPushConstants["mGICandidateSamples"].get<uint32_t>())) changed = true;
-			if (mDefines.at("gReSTIR_GI_Reuse")) {
-				if (ImGui::DragFloat("GI max M", &mPushConstants["mGIMaxM"].get<float>(), .01f, 0, 1000)) changed = true;
-				if (ImGui::DragFloat("GI reuse radius", &mPushConstants["mGIReuseRadius"].get<float>(), .01f, 0, 200)) changed = true;
-			}
-		}
-		ImGui::PopItemWidth();
-
-		if (ImGui::Checkbox("Enable denoiser", &mDenoise)) changed = true;
-		if (ImGui::Checkbox("Enable tonemapper", &mTonemap)) changed = true;
-	}
+	for (const auto& p : mProperties)
+		if (p->drawGui())
+			changed = true;
 
 	if (changed && mDenoise) {
 		const shared_ptr<Denoiser> denoiser = mNode.findDescendant<Denoiser>();

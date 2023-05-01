@@ -1,5 +1,6 @@
 #include "di.slang"
 
+// Use the Vulkan Configurator to redirect DebugPrintf to stdout (requires --debugMessenger)
 #ifdef gDebugPixel
 #define DebugPrintf(pixel, ...) if ((pixel.y<<16 | (pixel.x&0xFFFF)) == gPushConstants.mPackedDebugPixelIndex) { printf(__VA_ARGS__); }
 #else
@@ -436,14 +437,16 @@ extension PathTracer {
 		float M = 1;
 
         if (gPushConstants.mReservoirHistoryValid != 0) {
-			const float2 discRng = rng.nextFloat().xy;
-			const int2 qi = int2(mFramebuffer.mPrevUVs[pixelIndex] * gPushConstants.mOutputExtent + sampleConcentricDisc(discRng.x, discRng.y) * gPushConstants.mGIReuseRadius);
-			if (all(qi >= 0) && all(qi < gPushConstants.mOutputExtent)) {
-				PackedReservoirGI q;
-				q.LoadPrev(mFramebuffer, qi);
-				if (q.M > 0)
-					ReservoirReuseGI(vertex, q, sample, M, rng);
-			}
+            for (uint i = 0; i < gPushConstants.mGIReuseSamples; i++) {
+				const float2 discRng = rng.nextFloat().xy;
+				const int2 qi = int2(mFramebuffer.mPrevUVs[pixelIndex] * gPushConstants.mOutputExtent + sampleConcentricDisc(discRng.x, discRng.y) * gPushConstants.mGIReuseRadius);
+				if (all(qi >= 0) && all(qi < gPushConstants.mOutputExtent)) {
+					PackedReservoirGI q;
+					q.LoadPrev(mFramebuffer, qi);
+					if (q.M > 0)
+						ReservoirReuseGI(vertex, q, sample, M, rng);
+				}
+            }
 		}
 
 		// store for reuse
