@@ -17,21 +17,23 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 		inspector->setInspectCallback<ReSTIRPT>();
 
 	mProperties = {
-		initialize_property<bool>    ("Alpha testing",                  true, [this](){ return &mDefines["gAlphaTest"]; }),
+		initialize_property<bool>    ("Alpha testing",                 false, [this](){ return &mDefines["gAlphaTest"]; }),
 		initialize_property<bool>    ("Shading normals",                true, [this](){ return &mDefines["gShadingNormals"]; }),
 		initialize_property<bool>    ("Normal maps",                    true, [this](){ return &mDefines["gNormalMaps"]; }),
-		initialize_property<bool>    ("Lambertian",                    false, [this](){ return &mDefines["gLambertian"]; }),
-		initialize_property<bool>    ("No GI",                         false, [this](){ return &mDefines["gNoGI"]; }),
-		initialize_property<bool>    ("Nee",                           false, [this](){ return &mDefines["gNee"]; }),
-		initialize_property<bool>    ("Single sample MIS",             false, [this](){ return &mDefines["gSingleSampleMIS"]; }),
+		initialize_property<bool>    ("Force lambertian",              false, [this](){ return &mDefines["gLambertian"]; }),
+		initialize_property<bool>    ("DI Only",                       false, [this](){ return &mDefines["gNoGI"]; }),
 		initialize_property<bool>    ("Debug fast BRDF",               false, [this](){ return &mDefines["gDebugFastBRDF"]; }),
 		initialize_property<bool>    ("DebugPixel",                    false, [this](){ return &mDefines["gDebugPixel"]; }),
-		initialize_property<bool>    ("Random per frame",              false, [this](){ return &mRandomPerFrame; }),
 
+		initialize_separator(),
+
+		initialize_property<bool>    ("Fix random seed",               false, [this](){ return &mFixSeed; }),
 		initialize_property<uint32_t>("Max depth",                         8, [this](){ return &mPushConstants["mMaxDepth"].get<uint32_t>(); }, 1, 0, 0.1f),
 		initialize_property<uint32_t>("Max diffuse bounces",               3, [this](){ return &mPushConstants["mMaxDiffuseBounces"].get<uint32_t>(); }, 1, 0, 0.1f),
 		initialize_property<uint32_t>("Max null collisions",            1000, [this](){ return &mPushConstants["mMaxNullCollisions"].get<uint32_t>(); }),
 		initialize_property<float>   ("Environment sample probability", 0.9f, [this](){ return &mPushConstants["mEnvironmentSampleProbability"].get<float>(); }, 0, 1, 0),
+
+		initialize_separator(),
 
 		initialize_property<bool>    ("ReSTIR DI",                     false, [this](){ return &mDefines["gReSTIR_DI"]; }),
 		initialize_property<uint32_t>("DI candidate samples",             32, [this](){ return &mPushConstants["mDICandidateSamples"].get<uint32_t>(); }, 0, 128, 0.25f),
@@ -40,6 +42,8 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 		initialize_property<float>   ("DI max M",                          3, [this](){ return &mPushConstants["mDIMaxM"].get<float>(); }, 0, 10, .1f),
 		initialize_property<float>   ("DI reuse radius",                  32, [this](){ return &mPushConstants["mDIReuseRadius"].get<float>(); }, 0, 1000),
 
+		initialize_separator(),
+
 		initialize_property<bool>    ("ReSTIR GI",                     false, [this](){ return &mDefines["gReSTIR_GI"]; }),
 		initialize_property<uint32_t>("GI candidate samples",              4, [this](){ return &mPushConstants["mGICandidateSamples"].get<uint32_t>(); }, 0, 128, 0.25f),
 		initialize_property<bool>    ("ReSTIR GI reuse",               false, [this](){ return &mDefines["gReSTIR_GI_Reuse"]; }),
@@ -47,11 +51,15 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 		initialize_property<float>   ("GI reuse radius",                  16, [this](){ return &mPushConstants["mGIReuseRadius"].get<float>(); }, 0, 1000),
 		initialize_property<uint32_t>("GI reuse samples",                  3, [this](){ return &mPushConstants["mGIReuseSamples"].get<uint32_t>(); }, 0, 100),
 
+		initialize_separator(),
+
 		initialize_property<bool>    ("PairwiseMis",                   false, [this](){ return &mDefines["gPairwiseMis"]; }),
 		initialize_property<bool>    ("TalbotMis",                     false, [this](){ return &mDefines["gTalbotMis"]; }),
 
-		initialize_property<bool>    ("Denoise",                       false, [this](){ return &mDenoise; }),
-		initialize_property<bool>    ("Tonemap",                       false, [this](){ return &mTonemap; }),
+		initialize_separator(),
+
+		initialize_property<bool>    ("Denoise",                        true, [this](){ return &mDenoise; }),
+		initialize_property<bool>    ("Tonemap",                        true, [this](){ return &mTonemap; }),
 	};
 
 	Device& device = *mNode.findAncestor<Device>();
@@ -338,14 +346,14 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 		sphere[3] = length<float,3>(sceneData.mAabbMax - sphere.head<3>());
 		mPushConstants["mSceneSphere"] = sphere;
 
-		if (changed && mRandomPerFrame && mDenoise && denoiser && !denoiser->reprojection()) {
+		if (changed && !mFixSeed && mDenoise && denoiser && !denoiser->reprojection()) {
 			denoiser->resetAccumulation();
 		}
 
-		if (mRandomPerFrame)
-			mPushConstants["mRandomSeed"] = (mDenoise && denoiser) ? denoiser->accumulatedFrames() : (uint32_t)rand();
-		else
+		if (mFixSeed)
 			mPushConstants["mRandomSeed"] = 0u;
+		else
+			mPushConstants["mRandomSeed"] = (mDenoise && denoiser) ? denoiser->accumulatedFrames() : (uint32_t)rand();
 	}
 
 	// setup shader defines
@@ -401,7 +409,7 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 	Image::View processedOutput = outputImage;
 
 	// run denoiser
-	if (mDenoise && denoiser && mRandomPerFrame) {
+	if (mDenoise && denoiser && !mFixSeed) {
 		processedOutput = denoiser->denoise(
 			commandBuffer,
 			outputImage,

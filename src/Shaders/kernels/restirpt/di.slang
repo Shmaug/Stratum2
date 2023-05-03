@@ -61,9 +61,6 @@ extension PathTracer {
 
         return o;
     }
-    DirectIlluminationSample DirectIllumination(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, const uint2 pixelIndex) {
-		return DirectIllumination(vertex, bsdf, rng);
-	}
 }
 
 /* -------- ReSTIR -------- */
@@ -221,7 +218,7 @@ extension PathTracer {
 			integrationWeight = 0;
 	}
 
-    DirectIlluminationSample DirectIlluminationReSTIR(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, const uint2 pixelIndex) {
+    DirectIlluminationSample DirectIlluminationReSTIR(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng) {
 		ReservoirSampleDataDI sample;
 		float wsum = 0;
 
@@ -257,7 +254,7 @@ extension PathTracer {
 
 		if (gPushConstants.mReservoirHistoryValid != 0) {
 			const float2 discRng = rng.nextFloat().xy;
-			const int2 qi = int2(mFramebuffer.mPrevUVs[pixelIndex] * gPushConstants.mOutputExtent + sampleConcentricDisc(discRng.x, discRng.y) * gPushConstants.mDIReuseRadius);
+			const int2 qi = int2(mFramebuffer.mPrevUVs[sPixelIndex] * gPushConstants.mOutputExtent + sampleConcentricDisc(discRng.x, discRng.y) * gPushConstants.mDIReuseRadius);
 			if (all(qi >= 0) && all(qi < gPushConstants.mOutputExtent)) {
 				PackedReservoirDI q;
 				q.LoadPrev(mFramebuffer, qi);
@@ -277,7 +274,7 @@ extension PathTracer {
 			r.W = integrationWeight;
 			r.M = min(M, gPushConstants.mDIMaxM * gPushConstants.mDICandidateSamples);
 			r.mPackedLocalDirIn = vertex.mPackedLocalDirIn;
-			r.Store(mFramebuffer, pixelIndex);
+			r.Store(mFramebuffer, sPixelIndex);
 		}
 
 		#ifndef gReSTIR_DI_Reuse_Visibility

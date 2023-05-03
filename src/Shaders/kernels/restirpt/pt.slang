@@ -23,6 +23,12 @@ struct PushConstants {
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> gPushConstants;
 
+// Use the Vulkan Configurator to redirect DebugPrintf to stdout (requires --debugMessenger)
+#ifdef gDebugPixel
+#define DebugPrintf(pixel, ...) if ((pixel.y<<16 | (pixel.x&0xFFFF)) == gPushConstants.mPackedDebugPixelIndex) { printf(__VA_ARGS__); }
+#else
+#define DebugPrintf(pixel, ...)
+#endif
 
 #define gMaxNullCollisions            gPushConstants.mMaxNullCollisions
 #define gLightCount                   gPushConstants.mLightCount
@@ -127,6 +133,8 @@ struct PathTracer {
     SceneParameters mScene;
     RenderParams mFramebuffer;
 
+	static uint2 sPixelIndex;
+
 	// samples a camera ray
 	PathVertex SampleVisibility(const uint2 index, inout RandomSampler rng, out float3 throughput) {
 		const uint viewIndex = getViewIndex(index, gPushConstants.mOutputExtent, gPushConstants.mViewCount);
@@ -161,7 +169,7 @@ interface Interaction {
     float continuationProb();
 
     ReflectanceEvalRecord evaluateReflectance<let Adjoint : bool>(const float3 dirIn, const float3 dirOut);
-    DirectionSampleRecord sampleDirection<let Adjoint : bool>(const float3 rnd, const float3 dirIn);
+    DirectionSampleRecord sampleDirection    <let Adjoint : bool>(const float3 rnd  , const float3 dirIn);
 
     float3 evaluateReflectanceFast<let Adjoint : bool>(const float3 localDirIn, const float3 localDirOut);
 };

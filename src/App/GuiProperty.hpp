@@ -5,7 +5,6 @@
 
 namespace stm2 {
 
-
 class GuiProperty {
 public:
 	virtual bool drawGui() = 0;
@@ -119,6 +118,17 @@ public:
 };
 
 
+class SeparatorProperty : public GuiProperty {
+public:
+	bool drawGui() {
+		ImGui::Separator();
+		return false;
+	}
+};
+
+
+// these allow variable initiailization + GUI setup in one line
+
 template<typename T> requires(is_scalar_v<T>)
 inline shared_ptr<GuiProperty> initialize_property(const string& label, const T& defaultValue, T& value, const T vmin = 0, const T vmax = 0, const float vspeed = 1) {
 	value = defaultValue;
@@ -139,6 +149,10 @@ template<>
 inline shared_ptr<GuiProperty> initialize_property<bool>(const string& label, const bool& defaultValue, const Func<bool*>& accessor, const bool vmin, const bool vmax, const float vspeed) {
 	*accessor() = defaultValue;
 	return make_shared<AccessorProperty<bool>>(label, accessor);
+}
+
+inline shared_ptr<GuiProperty> initialize_separator() {
+	return make_shared<SeparatorProperty>();
 }
 
 }

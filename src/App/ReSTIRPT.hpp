@@ -29,10 +29,9 @@ private:
 
 	vector<shared_ptr<GuiProperty>> mProperties;
 
-	bool mRandomPerFrame = true;
-
-	bool mDenoise = true;
-	bool mTonemap = true;
+	bool mFixSeed;
+	bool mDenoise;
+	bool mTonemap;
 
 	chrono::high_resolution_clock::time_point mLastSceneVersion;
 
