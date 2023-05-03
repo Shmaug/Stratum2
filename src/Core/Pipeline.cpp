@@ -501,7 +501,7 @@ shared_ptr<ComputePipeline> ComputePipelineCache::getAsync(Device& device, const
 	}
 
 	// compile the pipeline asynchronously
-	mCompileJobs.emplace(key, move(async(launch::async, [=, &device]() {
+	mCompileJobs.emplace(key, move(async(launch::async, [=, this, &device]() {
 		const shared_ptr<Shader> shader = make_shared<Shader>(device, mSourceFile, mEntryPoint, mProfile, mCompileArgs, defines);
 		return make_shared<ComputePipeline>(mSourceFile.stem().string() + "_" + mEntryPoint, shader, mPipelineMetadata, descriptorSetLayouts);
 	})));

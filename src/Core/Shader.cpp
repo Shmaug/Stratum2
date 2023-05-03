@@ -11,6 +11,7 @@
 
 namespace stm2 {
 
+#if 0
 string exec(const char* cmd) {
 	FILE* pipe = _popen(cmd, "r");
     if (pipe == nullptr)
@@ -23,6 +24,7 @@ string exec(const char* cmd) {
 	_pclose(pipe);
     return result;
 }
+#endif
 
 Shader::Shader(Device& device, const filesystem::path& sourceFile, const string& entryPoint, const string& profile, const vector<string>& compileArgs, const unordered_map<string, string>& defines)
 	: Device::Resource(device, sourceFile.stem().string() + "_" + entryPoint), mModule(nullptr) {

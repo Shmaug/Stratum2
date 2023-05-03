@@ -1,7 +1,9 @@
+#include <stdexcept>
+#include <utility>
+#include <memory>
+
 #include "Window.hpp"
 #include "Instance.hpp"
-
-#include <stdexcept>
 
 // vulkan.h needed by glfw.h
 #include <vulkan/vulkan.h>
@@ -22,7 +24,7 @@ void Window::dropCallback(GLFWwindow* window, int count, const char** paths) {
 
 void errorCallback(int code, const char* msg) {
 	cerr << msg;
-	throw runtime_error(msg);
+	//throw runtime_error(msg);
 }
 
 Window::Window(Instance& instance, const string& title, const vk::Extent2D& extent) : mInstance(instance), mTitle(title), mSurface(nullptr), mClientExtent(extent) {

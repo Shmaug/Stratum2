@@ -5,26 +5,67 @@
 
 namespace stm2 {
 
+#define RESET       "\033[0m"
+#define BLACK       "\033[30m"
+#define RED         "\033[31m"
+#define GREEN       "\033[32m"
+#define YELLOW      "\033[33m"
+#define BLUE        "\033[34m"
+#define MAGENTA     "\033[35m"
+#define CYAN        "\033[36m"
+#define WHITE       "\033[37m"
+#define BOLDBLACK   "\033[1m\033[30m"
+#define BOLDRED     "\033[1m\033[31m"
+#define BOLDGREEN   "\033[1m\033[32m"
+#define BOLDYELLOW  "\033[1m\033[33m"
+#define BOLDBLUE    "\033[1m\033[34m"
+#define BOLDMAGENTA "\033[1m\033[35m"
+#define BOLDCYAN    "\033[1m\033[36m"
+#define BOLDWHITE   "\033[1m\033[37m"
+
 bool Instance::sDisableDebugCallback = false;
 
 // Debug messenger functions
 VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageType, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData) {
 	if (Instance::sDisableDebugCallback) return VK_FALSE;
 
-	if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-		cerr << pCallbackData->pMessageIdName << ": " << pCallbackData->pMessage << endl;
-		throw logic_error(pCallbackData->pMessage);
-	} else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
-		cerr << pCallbackData->pMessageIdName << ": " << pCallbackData->pMessage << endl;
+	string msgstr = pCallbackData->pMessage;
+	
+	{ // skip past ' ... | MessageID = ... | '
+		const size_t offset = msgstr.find_last_of("|");
+		if (offset != string::npos)
+			msgstr = msgstr.substr(offset + 2); // skip '| '
+	}
+
+	string specstr;
+	{ // Separately print 'The Vulkan spec states: '
+		const size_t offset = msgstr.find("The Vulkan spec states:");
+		if (offset != string::npos) {
+			specstr = msgstr.substr(offset);
+			msgstr = msgstr.substr(0, offset);
+		}
+	}
+
+	auto print_fn = [&](ostream& stream) {
+		stream << pCallbackData->pMessageIdName << ": " << endl;
+		stream << "\t" << BOLDWHITE << msgstr << RESET << endl;
+		if (!specstr.empty())
+			stream << "\t" << specstr << endl;
+	};
+
+	if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+		print_fn(cerr << BOLDRED);
+	else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
+		print_fn(cerr << BOLDYELLOW);
 	else
-		cout << pCallbackData->pMessageIdName << ": " << pCallbackData->pMessage << endl;
+		print_fn(cout << BOLDCYAN);
 
 	return VK_FALSE;
 }
 
 Instance::Instance(const vector<string>& args) : mInstance(nullptr), mDebugMessenger(nullptr), mCommandLine(args) {
 	mContext = vk::raii::Context();
-
+	
 	for (const string& arg : mCommandLine | views::drop(1)) {
 		size_t o = 0;
 		if (arg.starts_with("--"))
@@ -50,11 +91,14 @@ Instance::Instance(const vector<string>& args) : mInstance(nullptr), mDebugMesse
 	// Parse instance extensions
 
 	unordered_set<string> instanceExtensions = { VK_KHR_SURFACE_EXTENSION_NAME };
-	for (const auto& ext : findArguments("instanceExtension"))
-		instanceExtensions.emplace(ext);
 #ifdef _WIN32
 	instanceExtensions.emplace(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
 #endif
+#ifdef __linux
+	instanceExtensions.emplace(VK_KHR_XCB_SURFACE_EXTENSION_NAME);
+#endif
+	for (const auto& ext : findArguments("instanceExtension"))
+		instanceExtensions.emplace(ext);
 
 	uint32_t count;
 	const char** exts = glfwGetRequiredInstanceExtensions(&count);

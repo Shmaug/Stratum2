@@ -401,7 +401,7 @@ void Scene::update(CommandBuffer& commandBuffer, const float deltaTime) {
 		const filesystem::path filepath = file;
 		Device& device = commandBuffer.mDevice;
 		const uint32_t family = device.findQueueFamily(vk::QueueFlagBits::eTransfer|vk::QueueFlagBits::eCompute);
-		mLoading.emplace_back( move(async(launch::async, [=,&device]() {
+		mLoading.emplace_back( move(async(launch::async, [&,filepath,family]() {
 			shared_ptr<CommandBuffer> cb = make_shared<CommandBuffer>(device, "scene load", family);
 			(*cb)->begin(vk::CommandBufferBeginInfo{});
 			shared_ptr<Node> node = load(*cb, filepath);

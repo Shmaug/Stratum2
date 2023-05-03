@@ -21,8 +21,8 @@ Device::Device(Instance& instance, vk::raii::PhysicalDevice physicalDevice) :
 	mExtensions.emplace(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 	if (mExtensions.contains(VK_KHR_RAY_QUERY_EXTENSION_NAME)) {
 		mExtensions.emplace(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME);
-		mExtensions.emplace(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
-		mExtensions.emplace(VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
+		//mExtensions.emplace(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
+		//mExtensions.emplace(VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
 	}
 	if (mExtensions.contains(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME))
 		mExtensions.emplace(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);

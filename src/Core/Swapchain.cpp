@@ -39,6 +39,8 @@ bool Swapchain::create() {
 	if (mExtent.width == 0 || mExtent.height == 0 || mExtent.width > mDevice.limits().maxImageDimension2D || mExtent.height > mDevice.limits().maxImageDimension2D)
 		return false;
 
+	mMinImageCount = max(mMinImageCount, capabilities.minImageCount);
+
 	auto oldSwapchain = mSwapchain;
 	mSwapchain.reset();
 
