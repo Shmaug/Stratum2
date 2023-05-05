@@ -658,11 +658,9 @@ void VCM::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) 
 	// visualize paths
 	if (mVisualizeLightPaths && mAlgorithm != VcmAlgorithmType::kPathTrace)
 		rasterLightPaths(commandBuffer, renderTarget);
-
 }
 
 void VCM::rasterLightPaths(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
-#if 0
 	if (renderTarget.image()->format() != mRasterLightPathPipeline.pipelineMetadata().mDynamicRenderingState->mColorFormats[0])
 		createRasterPipeline(commandBuffer.mDevice, vk::Extent2D(renderTarget.extent().width, renderTarget.extent().height), renderTarget.image()->format());
 
@@ -674,19 +672,18 @@ void VCM::rasterLightPaths(CommandBuffer& commandBuffer, const Image::View& rend
 		"mViewInverseTransforms",
 		"mLightVertices",
 		"mLightPathLengths" }) {
-		descriptors[{string("gParams.")+d,0}] = frame.mBuffers.at(d);
+		descriptors[{string("gParams.")+d,0}] = mResourcePool.getLastBuffer<byte>(string(d));
 	}
-	descriptors[{"gParams.mDepth",0}] = ImageDescriptor{get<Image::View>(frame.mImages.at("mDepth")), vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}};
+	descriptors[{"gParams.mDepth",0}] = ImageDescriptor{mResourcePool.getLastImage("mDepth"), vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits::eShaderRead, {}};
+	for (auto [name, d] : mNode.findAncestor<Scene>()->frameData().mDescriptors)
+		descriptors[{ "gScene." + name.first, name.second }] = d;
 
 	const vk::Extent3D extent = renderTarget.extent();
 
-	if (!frame.mRasterDepthBuffer || extent.width > frame.mRasterDepthBuffer.extent().width || extent.height > frame.mRasterDepthBuffer.extent().height) {
-		Image::Metadata md = {};
-		md.mExtent = extent;
-		md.mFormat = vk::Format::eD32Sfloat;
-		md.mUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment|vk::ImageUsageFlagBits::eTransferDst;
-		frame.mRasterDepthBuffer = make_shared<Image>(commandBuffer.mDevice, "gRasterDepthBuffer", md);
-	}
+	const Image::View depthBuffer = mResourcePool.getImage(commandBuffer.mDevice, "gRasterDepthBuffer", Image::Metadata{
+		.mFormat = vk::Format::eD32Sfloat,
+		.mExtent = extent,
+		.mUsage = vk::ImageUsageFlagBits::eDepthStencilAttachment|vk::ImageUsageFlagBits::eTransferDst });
 
 	auto lightPathPipeline = mRasterLightPathPipeline.get(commandBuffer.mDevice);
 	auto descriptorSets = lightPathPipeline->getDescriptorSets(descriptors);
@@ -694,7 +691,7 @@ void VCM::rasterLightPaths(CommandBuffer& commandBuffer, const Image::View& rend
 	// render light paths
 	{
 		renderTarget.barrier(commandBuffer, vk::ImageLayout::eColorAttachmentOptimal, vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::AccessFlagBits::eColorAttachmentWrite);
-		frame.mRasterDepthBuffer.barrier(commandBuffer, vk::ImageLayout::eDepthStencilAttachmentOptimal, vk::PipelineStageFlagBits::eEarlyFragmentTests, vk::AccessFlagBits::eDepthStencilAttachmentRead|vk::AccessFlagBits::eDepthStencilAttachmentWrite);
+		depthBuffer.barrier(commandBuffer, vk::ImageLayout::eDepthStencilAttachmentOptimal, vk::PipelineStageFlagBits::eEarlyFragmentTests, vk::AccessFlagBits::eDepthStencilAttachmentRead|vk::AccessFlagBits::eDepthStencilAttachmentWrite);
 
 		descriptorSets->transitionImages(commandBuffer);
 
@@ -705,7 +702,7 @@ void VCM::rasterLightPaths(CommandBuffer& commandBuffer, const Image::View& rend
 			vk::AttachmentStoreOp::eStore,
 			vk::ClearValue{});
 		vk::RenderingAttachmentInfo depthAttachment(
-			*frame.mRasterDepthBuffer, vk::ImageLayout::eDepthStencilAttachmentOptimal,
+			*depthBuffer, vk::ImageLayout::eDepthStencilAttachmentOptimal,
 			vk::ResolveModeFlagBits::eNone,	{}, vk::ImageLayout::eUndefined,
 			vk::AttachmentLoadOp::eClear,
 			vk::AttachmentStoreOp::eDontCare,
@@ -721,12 +718,8 @@ void VCM::rasterLightPaths(CommandBuffer& commandBuffer, const Image::View& rend
 		commandBuffer->bindPipeline(vk::PipelineBindPoint::eGraphics, ***lightPathPipeline);
 		descriptorSets->bind(commandBuffer);
 		lightPathPipeline->pushConstants(commandBuffer, {
-			{ "mLightSubPathCount", mPushConstants.mLightSubPathCount },
-			{ "mHashGridCellCount", mPushConstants.mHashGridCellCount },
-			{ "mSegmentIndex", mVisualizeSegmentIndex },
 			{ "mLineRadius", mVisualizeLightPathRadius },
 			{ "mLineLength", mVisualizeLightPathLength },
-			{ "mMergeRadius", frame.mBuffers.at("mVcmConstants").cast<VcmConstants>()[0].mMergeRadius },
 		});
 		commandBuffer->draw((mPushConstants.mMaxPathLength+1)*6, min(mVisualizeLightPathCount, mPushConstants.mLightSubPathCount), 0, 0);
 
@@ -735,7 +728,6 @@ void VCM::rasterLightPaths(CommandBuffer& commandBuffer, const Image::View& rend
 
 		commandBuffer->endRendering();
 	}
-#endif
 }
 
 }

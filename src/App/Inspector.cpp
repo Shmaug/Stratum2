@@ -11,7 +11,7 @@
 
 namespace stm2 {
 
-// dont allow deletion of core components
+// dont allow ceration/deletion of core components
 static unordered_set<type_index> gProtectedComponents = {
 	typeid(Window),
 	typeid(Instance),
@@ -53,11 +53,20 @@ bool Inspector::drawNodeGui(Node& n) {
 		ImGui::EndDragDropSource();
 	}
 	if (ImGui::BeginDragDropTarget()) {
-		const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SceneNode");
-		if (payload) {
+		if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SceneNode")) {
 			Node* nodeptr = *(Node**)payload->Data;
 			if (nodeptr) {
 				n.addChild(nodeptr->getPtr());
+				if (auto s = n.findAncestor<Scene>())
+					s->markDirty();
+			}
+		}
+		if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SceneComponent")) {
+			const auto&[nodeptr, type] = *(pair<Node*, type_index>*)payload->Data;
+			if (nodeptr && !n.hasComponent(type)) {
+				shared_ptr<void> component = nodeptr->getComponent(type);
+				nodeptr->removeComponent(type);
+				n.addComponent(type, component);
 				if (auto s = n.findAncestor<Scene>())
 					s->markDirty();
 			}
@@ -69,10 +78,10 @@ bool Inspector::drawNodeGui(Node& n) {
 
 	// context menu
 	if (ImGui::BeginPopupContextItem()) {
-		if (ImGui::Selectable("Add component")) {
+		if (ImGui::Selectable("Add component", false, ImGuiSelectableFlags_DontClosePopups)) {
 			ImGui::OpenPopup("Add component");
 		}
-		if (ImGui::Selectable("Add child")) {
+		if (ImGui::Selectable("Add child", false, ImGuiSelectableFlags_DontClosePopups)) {
 			ImGui::OpenPopup("Add node");
 		}
 		bool canDelete = true;
@@ -82,8 +91,19 @@ bool Inspector::drawNodeGui(Node& n) {
 				break;
 			}
 		}
-		if (canDelete && ImGui::Selectable("Delete")) {
+		if (ImGui::Selectable("Delete", false, canDelete ? 0 : ImGuiSelectableFlags_Disabled)) {
 			erase = true;
+		}
+
+		// add component dialog
+		if (ImGui::BeginPopup("Add component")) {
+			for (auto[type, ctor] : mInspectorConstructFns) {
+				if (!gProtectedComponents.contains(type) && ImGui::Selectable(type.name(), n.hasComponent(type) ? ImGuiSelectableFlags_Disabled : 0)) {
+					n.addComponent(type, ctor(n));
+					ImGui::CloseCurrentPopup();
+				}
+			}
+			ImGui::EndPopup();
 		}
 
 		// add child dialog
@@ -93,20 +113,6 @@ bool Inspector::drawNodeGui(Node& n) {
 			if (ImGui::Button("Done")) {
 				n.addChild(mInputChildName);
 				ImGui::CloseCurrentPopup();
-			}
-			ImGui::EndPopup();
-		}
-
-		// add component dialog
-		if (ImGui::BeginPopup("Add component")) {
-			for (auto[type, ctor] : mInspectorConstructFns) {
-				if (n.hasComponent(type))
-					continue;
-
-				if (ImGui::Button(type.name())) {
-					n.addComponent(type, ctor(n));
-					ImGui::CloseCurrentPopup();
-				}
 			}
 			ImGui::EndPopup();
 		}
@@ -144,64 +150,64 @@ void Inspector::draw() {
 	ProfilerScope ps("Inspector::draw");
 
 	if (ImGui::Begin("Node Graph")) {
+		const float s = ImGui::GetStyle().IndentSpacing;
+		ImGui::GetStyle().IndentSpacing = s/2;
 		drawNodeGui(*mNode.root());
+		ImGui::GetStyle().IndentSpacing = s;
 	}
 	ImGui::End();
 
 	if (ImGui::Begin("Inspector")) {
 		if (auto sel = selected()) {
 			ImGui::PushID(sel.get());
-			bool deleteNode = ImGui::Button("x");
 
-			{
-				// inspect selected node
+			// inspect selected node
 
-				ImGui::SameLine();
-				ImGui::Text("%s", sel->name().c_str());
-				ImGui::SetNextItemWidth(40);
+			ImGui::PushFont(Gui::gHeaderFont);
+			ImGui::Text("%s", sel->name().c_str());
+			ImGui::PopFont();
 
-				// inspect components in node
+			// components
 
-				type_index to_erase = typeid(nullptr_t);
-				for (type_index type : sel->components()) {
-					if (gProtectedComponents.contains(type)) {
-						deleteNode = false;
-					} else {
-						ImGui::PushID(type.hash_code());
-						if (ImGui::Button("x"))
-							to_erase = type;
-						ImGui::PopID();
-						ImGui::SameLine();
+			type_index to_erase = typeid(nullptr_t);
+			for (type_index type : sel->components()) {
+				ImGui::PushID(type.hash_code());
+
+				ImGui::PushFont(Gui::gHeaderFont);
+				ImGui::SetWindowFontScale(0.85f);
+				const bool open = ImGui::CollapsingHeader(type.name(), ImGuiTreeNodeFlags_DefaultOpen);
+				ImGui::SetWindowFontScale(1.0f);
+				ImGui::PopFont();
+
+				if (!gProtectedComponents.contains(type) && ImGui::BeginDragDropSource()) {
+					const pair<Node*, type_index> payload { sel.get(), type };
+					ImGui::SetDragDropPayload("SceneComponent", &payload, sizeof(payload));
+					ImGui::Text("%s", type.name());
+					ImGui::EndDragDropSource();
+				}
+
+				// context menu
+				if (ImGui::BeginPopupContextItem()) {
+					if (ImGui::Selectable("Delete", false, gProtectedComponents.contains(type) ? ImGuiSelectableFlags_Disabled : 0)) {
+						to_erase = type;
 					}
+					ImGui::EndPopup();
+				}
 
-					if (ImGui::CollapsingHeader(type.name(), ImGuiTreeNodeFlags_DefaultOpen)) {
-						if (auto it = mInspectorGuiFns.find(type); it != mInspectorGuiFns.end()) {
-							// draw gui for component
-							ImGui::Indent();
-							ImGui::Indent();
-							it->second(*sel);
-							ImGui::Unindent();
-							ImGui::Unindent();
-						}
+				if (open) {
+					if (auto it = mInspectorGuiFns.find(type); it != mInspectorGuiFns.end()) {
+						// draw gui for component
+						ImGui::Indent();
+						it->second(*sel);
+						ImGui::Unindent();
 					}
 				}
-				if (to_erase != typeid(nullptr_t)) {
-					sel->removeComponent(to_erase);
-					if (auto scene = sel->findAncestor<Scene>())
-						scene->markDirty();
-				}
+
+				ImGui::PopID();
 			}
-
-			if (deleteNode) {
-				if (const shared_ptr<Node> p = sel->parent(); p && ImGui::GetIO().KeyAlt) {
-					for (const shared_ptr<Node>& c : sel->children())
-						p->addChild(c);
-				}
-				// detach from tree
-				sel->removeParent();
-				auto scene = sel->findAncestor<Scene>();
-				select(nullptr);
-				if (scene)
+			if (to_erase != typeid(nullptr_t)) {
+				sel->removeComponent(to_erase);
+				if (auto scene = sel->findAncestor<Scene>())
 					scene->markDirty();
 			}
 

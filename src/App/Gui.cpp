@@ -13,6 +13,7 @@ namespace stm2 {
 unordered_map<Image::View, pair<vk::raii::DescriptorSet, vk::raii::Sampler>> Gui::gTextureIDs;
 unordered_set<Image::View> Gui::gFrameTextures;
 shared_ptr<vk::raii::DescriptorPool> Gui::gImGuiDescriptorPool;
+ImFont* Gui::gHeaderFont;
 
 
 ImTextureID Gui::getTextureID(const Image::View& image) {
@@ -54,8 +55,45 @@ Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily
 	// Setup Dear ImGui style
 	ImGui::StyleColorsDark();
 	ImGui::GetStyle().WindowRounding = 4.0f;
-	ImGui::GetStyle().GrabRounding = 4.0f;
+	ImGui::GetStyle().GrabRounding   = 4.0f;
 	ImGui::GetStyle().IndentSpacing *= 0.75f;
+
+	{
+		auto& colors = ImGui::GetStyle().Colors;
+		colors[ImGuiCol_WindowBg] = ImVec4{ 0.1f, 0.1f, 0.1f, 0.9f };
+		colors[ImGuiCol_DockingEmptyBg] = colors[ImGuiCol_WindowBg];
+
+		colors[ImGuiCol_Header] = colors[ImGuiCol_WindowBg];
+		colors[ImGuiCol_HeaderActive]  = ImVec4{ 0.15f, 0.15f, 0.15f, 1.0f };
+		colors[ImGuiCol_HeaderHovered] = ImVec4{ 0.20f, 0.20f, 0.20f, 1.0f };
+
+		colors[ImGuiCol_TitleBg]          = ImVec4{ 0.15f, 0.15f, 0.15f, 1.0f };
+		colors[ImGuiCol_TitleBgActive]    = ImVec4{ 0.2f, 0.2f, 0.2f, 1.0f };
+		colors[ImGuiCol_TitleBgCollapsed] = colors[ImGuiCol_TitleBg];
+
+		colors[ImGuiCol_Tab]                = colors[ImGuiCol_TitleBgActive];
+		colors[ImGuiCol_TabHovered]         = ImVec4{ 0.45f, 0.45f, 0.45f, 1.0f };
+		colors[ImGuiCol_TabActive]          = ImVec4{ 0.35f, 0.35f, 0.35f, 1.0f };
+		colors[ImGuiCol_TabUnfocused]       = colors[ImGuiCol_TitleBg];
+		colors[ImGuiCol_TabUnfocusedActive] = colors[ImGuiCol_TitleBg];
+
+		colors[ImGuiCol_FrameBg]            = ImVec4{ 0.15f, 0.15f, 0.15f, 1.0f };
+		colors[ImGuiCol_FrameBgHovered]     = ImVec4{ 0.19f, 0.19f, 0.19f, 1.0f };
+		colors[ImGuiCol_FrameBgActive]      = ImVec4{ 0.18f, 0.18f, 0.18f, 1.0f };
+
+		colors[ImGuiCol_Button]             = ImVec4{ 0.2f, 0.2f, 0.2f, 1.0f };
+		colors[ImGuiCol_ButtonHovered]      = ImVec4{ 0.25f, 0.25f, 0.25f, 1.0f };
+		colors[ImGuiCol_ButtonActive]       = ImVec4{ 0.175f, 0.175f, 0.175f, 1.0f };
+		colors[ImGuiCol_CheckMark]          = ImVec4{ 0.75f, 0.75f, 0.75f, 1.0f };
+		colors[ImGuiCol_SliderGrab]         = ImVec4{ 0.75f, 0.75f, 0.75f, 1.0f };
+		colors[ImGuiCol_SliderGrabActive]   = ImVec4{ 0.8f, 0.8f, 0.8f, 1.0f };
+
+		colors[ImGuiCol_ResizeGrip]        = colors[ImGuiCol_ButtonActive];
+		colors[ImGuiCol_ResizeGripActive]  = colors[ImGuiCol_ButtonActive];
+		colors[ImGuiCol_ResizeGripHovered] = colors[ImGuiCol_ButtonActive];
+
+		colors[ImGuiCol_DragDropTarget]    = colors[ImGuiCol_ButtonActive];
+	}
 
 	ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 	ImGui::GetIO().ConfigWindowsMoveFromTitleBarOnly = true;
@@ -81,7 +119,7 @@ Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily
 	ImGui_ImplVulkan_Init(&init_info, *mRenderPass);
 
 	float scale = 1;
-	if (auto arg = swapchain.mDevice.mInstance.findArgument("guiScale"); arg) {
+	if (auto arg = swapchain.mDevice.mInstance.findArgument("guiScale")) {
 		scale = stof(*arg);
 		ImGui::GetStyle().ScaleAllSizes(scale);
 		ImGui::GetStyle().IndentSpacing /= scale;
@@ -89,15 +127,11 @@ Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily
 
 	// Upload Fonts
 
-	for (auto fontstr : swapchain.mDevice.mInstance.findArguments("font")) {
-		const size_t delim = fontstr.find(',');
-		if (delim == string::npos)
-			ImGui::GetIO().Fonts->AddFontFromFileTTF(fontstr.c_str(), scale*16.f);
-		else {
-			string font = fontstr.substr(0, delim);
-			ImGui::GetIO().Fonts->AddFontFromFileTTF(font.c_str(), scale*(float)atof(fontstr.c_str() + delim + 1));
-		}
-	}
+	if (auto arg = swapchain.mDevice.mInstance.findArgument("font")) {
+		ImGui::GetIO().Fonts->AddFontFromFileTTF(arg->c_str(), scale*16.f);
+		gHeaderFont = ImGui::GetIO().Fonts->AddFontFromFileTTF(arg->c_str(), scale*20.f);
+	} else
+		gHeaderFont = ImGui::GetFont();
 
 	shared_ptr<CommandBuffer> commandBufferPtr = make_shared<CommandBuffer>(swapchain.mDevice, "ImGui CreateFontsTexture", swapchain.mDevice.findQueueFamily());
 	CommandBuffer& commandBuffer = *commandBufferPtr;

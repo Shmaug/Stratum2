@@ -2,7 +2,6 @@
 
 #include "GpuHashGrid.hpp"
 #include "Node.hpp"
-#include "GuiProperty.hpp"
 
 #include <Shaders/compat/transform.h>
 
@@ -24,14 +23,14 @@ private:
 	shared_ptr<vk::raii::Sampler> mStaticSampler;
 	unordered_map<string, ComputePipelineCache> mPipelines;
 	PushConstants mPushConstants;
-
+	PushConstants mRasterPushConstants;
 	unordered_map<string, bool> mDefines;
-
-	vector<shared_ptr<GuiProperty>> mProperties;
 
 	bool mFixSeed;
 	bool mDenoise;
 	bool mTonemap;
+	bool mShowRcVertices;
+	GraphicsPipelineCache mRasterPipeline;
 
 	chrono::high_resolution_clock::time_point mLastSceneVersion;
 

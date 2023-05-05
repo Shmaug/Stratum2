@@ -10,126 +10,88 @@ private:
 	static shared_ptr<vk::raii::DescriptorPool> gImGuiDescriptorPool;
 
 public:
-	inline static void scalarField(const char* label, const vk::Format format, void* data) {
-		switch (format) {
-		default:
-			cerr << "Unsupported scalar format " << to_string(format) << endl;
-			break;
-		case vk::Format::eR8Uint:
-			ImGui::InputScalarN(label, ImGuiDataType_U8, data, 1);
-			break;
-		case vk::Format::eR8G8Uint:
-			ImGui::InputScalarN(label, ImGuiDataType_U8, data, 2);
-			break;
-		case vk::Format::eR8G8B8Uint:
-			ImGui::InputScalarN(label, ImGuiDataType_U8, data, 3);
-			break;
-		case vk::Format::eR8G8B8A8Uint:
-			ImGui::InputScalarN(label, ImGuiDataType_U8, data, 4);
-			break;
+	template<typename T>
+	inline static ImGuiDataType getImGuiDataType() {
+		if constexpr(is_floating_point_v<T>)
+			return sizeof(T) == sizeof(float) ? ImGuiDataType_Float : ImGuiDataType_Double;
+		else if constexpr (sizeof(T) == sizeof(uint64_t))
+			return is_signed_v<T> ? ImGuiDataType_S64 : ImGuiDataType_U64;
+		else if constexpr (sizeof(T) == sizeof(uint32_t))
+			return is_signed_v<T> ? ImGuiDataType_S32 : ImGuiDataType_U32;
+		else if constexpr (sizeof(T) == sizeof(uint16_t))
+			return is_signed_v<T> ? ImGuiDataType_S16 : ImGuiDataType_U16;
+		else
+			return ImGuiDataType_COUNT;
+	}
 
-		case vk::Format::eR8Sint:
-			ImGui::InputScalarN(label, ImGuiDataType_S8, data, 1);
-			break;
-		case vk::Format::eR8G8Sint:
-			ImGui::InputScalarN(label, ImGuiDataType_S8, data, 2);
-			break;
-		case vk::Format::eR8G8B8Sint:
-			ImGui::InputScalarN(label, ImGuiDataType_S8, data, 3);
-			break;
-		case vk::Format::eR8G8B8A8Sint:
-			ImGui::InputScalarN(label, ImGuiDataType_S8, data, 4);
-			break;
-
-		case vk::Format::eR16Uint:
-			ImGui::InputScalarN(label, ImGuiDataType_U16, data, 1);
-			break;
-		case vk::Format::eR16G16Uint:
-			ImGui::InputScalarN(label, ImGuiDataType_U16, data, 2);
-			break;
-		case vk::Format::eR16G16B16Uint:
-			ImGui::InputScalarN(label, ImGuiDataType_U16, data, 3);
-			break;
-		case vk::Format::eR16G16B16A16Uint:
-			ImGui::InputScalarN(label, ImGuiDataType_U16, data, 4);
-			break;
-
-		case vk::Format::eR16Sint:
-			ImGui::InputScalarN(label, ImGuiDataType_S16, data, 1);
-			break;
-		case vk::Format::eR16G16Sint:
-			ImGui::InputScalarN(label, ImGuiDataType_S16, data, 2);
-			break;
-		case vk::Format::eR16G16B16Sint:
-			ImGui::InputScalarN(label, ImGuiDataType_S16, data, 3);
-			break;
-		case vk::Format::eR16G16B16A16Sint:
-			ImGui::InputScalarN(label, ImGuiDataType_S16, data, 4);
-			break;
-
-		case vk::Format::eR32Uint:
-			ImGui::InputScalarN(label, ImGuiDataType_U32, data, 1);
-			break;
-		case vk::Format::eR32G32Uint:
-			ImGui::InputScalarN(label, ImGuiDataType_U32, data, 2);
-			break;
-		case vk::Format::eR32G32B32Uint:
-			ImGui::InputScalarN(label, ImGuiDataType_U32, data, 3);
-			break;
-		case vk::Format::eR32G32B32A32Uint:
-			ImGui::InputScalarN(label, ImGuiDataType_U32, data, 4);
-			break;
-
-		case vk::Format::eR32Sint:
-			ImGui::InputScalarN(label, ImGuiDataType_S32, data, 1);
-			break;
-		case vk::Format::eR32G32Sint:
-			ImGui::InputScalarN(label, ImGuiDataType_S32, data, 2);
-			break;
-		case vk::Format::eR32G32B32Sint:
-			ImGui::InputScalarN(label, ImGuiDataType_S32, data, 3);
-			break;
-		case vk::Format::eR32G32B32A32Sint:
-			ImGui::InputScalarN(label, ImGuiDataType_S32, data, 4);
-			break;
-
-		case vk::Format::eR32Sfloat:
-			ImGui::InputScalarN(label, ImGuiDataType_Float, data, 1);
-			break;
-		case vk::Format::eR32G32Sfloat:
-			ImGui::InputScalarN(label, ImGuiDataType_Float, data, 2);
-			break;
-		case vk::Format::eR32G32B32Sfloat:
-			ImGui::InputScalarN(label, ImGuiDataType_Float, data, 3);
-			break;
-		case vk::Format::eR32G32B32A32Sfloat:
-			ImGui::InputScalarN(label, ImGuiDataType_Float, data, 4);
-			break;
-
-		case vk::Format::eR64Sfloat:
-			ImGui::InputScalarN(label, ImGuiDataType_Double, data, 1);
-			break;
-		case vk::Format::eR64G64Sfloat:
-			ImGui::InputScalarN(label, ImGuiDataType_Double, data, 2);
-			break;
-		case vk::Format::eR64G64B64Sfloat:
-			ImGui::InputScalarN(label, ImGuiDataType_Double, data, 3);
-			break;
-		case vk::Format::eR64G64B64A64Sfloat:
-			ImGui::InputScalarN(label, ImGuiDataType_Double, data, 4);
-			break;
+	template<typename T>
+	inline static bool scalarField(const string& label, T* ptr, const T& mn = 0, const T& mx = 0, const float dragSpeed = 1) {
+		if (dragSpeed == 0 && mn != mx) {
+			ImGui::SetNextItemWidth(75);
+			return ImGui::SliderScalar(label.c_str(), getImGuiDataType<T>(), ptr, &mn, &mx);
+		} else {
+			ImGui::SetNextItemWidth(50);
+			return ImGui::DragScalar(label.c_str(), getImGuiDataType<T>(), ptr, dragSpeed, &mn, &mx);
 		}
 	}
 
-	template<typename T, typename Ty>
-	inline static bool enumDropdown(const char* label, Ty& selected, const uint32_t count) {
+	inline static bool scalarField(const char* label, const vk::Format format, void* data) {
+		static unordered_map<vk::Format, pair<ImGuiDataType, int>> sFormatMap = {
+			{ vk::Format::eR8Uint,             { ImGuiDataType_U8, 1 } },
+			{ vk::Format::eR8G8Uint,           { ImGuiDataType_U8, 2 } },
+			{ vk::Format::eR8G8B8Uint,         { ImGuiDataType_U8, 3 } },
+			{ vk::Format::eR8G8B8A8Uint,       { ImGuiDataType_U8, 4 } },
+
+			{ vk::Format::eR8Sint,             { ImGuiDataType_S8, 1 } },
+			{ vk::Format::eR8G8Sint,           { ImGuiDataType_S8, 2 } },
+			{ vk::Format::eR8G8B8Sint,         { ImGuiDataType_S8, 3 } },
+			{ vk::Format::eR8G8B8A8Sint,       { ImGuiDataType_S8, 4 } },
+
+			{ vk::Format::eR16Uint,            { ImGuiDataType_U16, 1 } },
+			{ vk::Format::eR16G16Uint,         { ImGuiDataType_U16, 2 } },
+			{ vk::Format::eR16G16B16Uint,      { ImGuiDataType_U16, 3 } },
+			{ vk::Format::eR16G16B16A16Uint,   { ImGuiDataType_U16, 4 } },
+
+			{ vk::Format::eR16Sint,            { ImGuiDataType_S16, 1 } },
+			{ vk::Format::eR16G16Sint,         { ImGuiDataType_S16, 2 } },
+			{ vk::Format::eR16G16B16Sint,      { ImGuiDataType_S16, 3 } },
+			{ vk::Format::eR16G16B16A16Sint,   { ImGuiDataType_S16, 4 } },
+
+			{ vk::Format::eR32Uint,            { ImGuiDataType_U32, 1 } },
+			{ vk::Format::eR32G32Uint,         { ImGuiDataType_U32, 2 } },
+			{ vk::Format::eR32G32B32Uint,      { ImGuiDataType_U32, 3 } },
+			{ vk::Format::eR32G32B32A32Uint,   { ImGuiDataType_U32, 4 } },
+
+			{ vk::Format::eR32Sint,            { ImGuiDataType_S32, 1 } },
+			{ vk::Format::eR32G32Sint,         { ImGuiDataType_S32, 2 } },
+			{ vk::Format::eR32G32B32Sint,      { ImGuiDataType_S32, 3 } },
+			{ vk::Format::eR32G32B32A32Sint,   { ImGuiDataType_S32, 4 } },
+
+			{ vk::Format::eR32Sfloat,          { ImGuiDataType_Float, 1 } },
+			{ vk::Format::eR32G32Sfloat,       { ImGuiDataType_Float, 2 } },
+			{ vk::Format::eR32G32B32Sfloat,    { ImGuiDataType_Float, 3 } },
+			{ vk::Format::eR32G32B32A32Sfloat, { ImGuiDataType_Float, 4 } },
+
+			{ vk::Format::eR64Sfloat,          { ImGuiDataType_Double, 1 } },
+			{ vk::Format::eR64G64Sfloat,       { ImGuiDataType_Double, 2 } },
+			{ vk::Format::eR64G64B64Sfloat,    { ImGuiDataType_Double, 3 } },
+			{ vk::Format::eR64G64B64A64Sfloat, { ImGuiDataType_Double, 4 } }
+		};
+		const auto&[dataType, components] = sFormatMap.at(format);
+		ImGui::SetNextItemWidth(50);
+		return ImGui::InputScalarN(label, dataType, data, components);
+
+	}
+
+	template<typename EnumType, typename T>
+	inline static bool enumDropdown(const char* label, T& selected, const uint32_t count) {
 		bool ret = false;
-		const string previewstr = to_string((T)selected);
+		const string previewstr = to_string((EnumType)selected);
 		if (ImGui::BeginCombo(label, previewstr.c_str())) {
 			for (uint32_t i = 0; i < count; i++) {
-				const string stri = to_string((T)i);
+				const string stri = to_string((EnumType)i);
 				if (ImGui::Selectable(stri.c_str(), (uint32_t)selected == i)) {
-					selected = (Ty)i;
+					selected = (T)i;
 					ret = true;
 				}
 			}
@@ -139,6 +101,7 @@ public:
 	}
 
 
+	static ImFont* gHeaderFont;
 	static unordered_map<Image::View, pair<vk::raii::DescriptorSet, vk::raii::Sampler>> gTextureIDs;
 	static unordered_set<Image::View> gFrameTextures;
 	static ImTextureID getTextureID(const Image::View& image);

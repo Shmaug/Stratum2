@@ -115,6 +115,12 @@ public:
 			return nullptr;
 		return static_pointer_cast<T>(it->second);
 	}
+	inline shared_ptr<void> getComponent(const type_index type) const {
+		auto it = mComponents.find(type);
+		if (it == mComponents.end())
+			return nullptr;
+		return it->second;
+	}
 
 	// forEach
 

@@ -1,6 +1,8 @@
 #include "compat/scene.h"
 #include "common/shading_data.hlsli"
 
+ParameterBlock<SceneParameters> gScene;
+
 struct PackedLightVertex {
     float3 mLocalPosition;
     uint mInstancePrimitiveIndex;
@@ -35,7 +37,7 @@ struct Params {
 ParameterBlock<Params> gParams;
 
 struct PushConstants {
-    uint mDepth;
+    uint  mDepth;
     float mVertexPercent;
     float mLineRadius;
     float mLineLength;
@@ -44,8 +46,8 @@ struct PushConstants {
 
 struct VSOut {
     float4 position : SV_Position;
-    float3 color : COLOR0;
-    float3 camPos : TEXCOORD0;
+    float3 color    : COLOR0;
+    float3 camPos   : TEXCOORD0;
 };
 
 [shader("vertex")]

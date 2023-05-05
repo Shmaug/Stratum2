@@ -19,13 +19,13 @@ struct PushConstants {
     float mGIReuseRadius;
     uint mGIReuseSamples;
     uint mReservoirHistoryValid;
-    uint mPackedDebugPixelIndex;
+    uint mDebugPixelIndex;
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> gPushConstants;
 
 // Use the Vulkan Configurator to redirect DebugPrintf to stdout (requires --debugMessenger)
 #ifdef gDebugPixel
-#define DebugPrintf(pixel, ...) if ((pixel.y<<16 | (pixel.x&0xFFFF)) == gPushConstants.mPackedDebugPixelIndex) { printf(__VA_ARGS__); }
+#define DebugPrintf(pixel, ...) if ((pixel.y * gPushConstants.mOutputExtent.x + pixel.x) == gPushConstants.mDebugPixelIndex) { printf(__VA_ARGS__); }
 #else
 #define DebugPrintf(pixel, ...)
 #endif
@@ -45,49 +45,10 @@ struct PushConstants {
 #include "common/intersection.hlsli"
 #include "common/lights.hlsli"
 
-struct RenderParams {
-    StructuredBuffer<ViewData> mViews;
-    StructuredBuffer<TransformData> mViewTransforms;
-    StructuredBuffer<TransformData> mViewInverseTransforms;
-    StructuredBuffer<TransformData> mPrevViewInverseTransforms;
-    StructuredBuffer<uint> mViewMediumIndices;
-    RWTexture2D<float4> mOutput;
-    RWTexture2D<float4> mAlbedo;
-	RWTexture2D<float2> mPrevUVs;
-    RWTexture2D<uint2> mVisibility;
-	RWTexture2D<float4> mDepth;
-
-    RWTexture2D<float4> mReservoirDataDI[3];
-    RWTexture2D<float4> mPrevReservoirDataDI[3];
-
-    RWTexture2D<float4> mReservoirDataGI[6];
-    RWTexture2D<float4> mPrevReservoirDataGI[6];
-
-    void StoreAuxillaryData(const SceneParameters scene, const ShadingData shadingData, const uint2 index, const uint instancePrimitiveIndex) {
-        float2 prevPixelCoord = index + 0.5;
-
-		const float depth = length(mViewInverseTransforms[0].transformPoint(shadingData.mPosition));
-
-        float prevDepth = depth;
-        if (BF_GET(instancePrimitiveIndex, 0, 16) != INVALID_INSTANCE) {
-            const float3 prevCameraPos = mPrevViewInverseTransforms[0].transformPoint(scene.mInstanceMotionTransforms[BF_GET(instancePrimitiveIndex, 0, 16)].transformPoint(shadingData.mPosition));
-			prevDepth = length(prevCameraPos);
-			mViews[0].toRaster(prevCameraPos, prevPixelCoord);
-		}
-
-        mPrevUVs[index] = prevPixelCoord / gPushConstants.mOutputExtent;
-
-		VisibilityData v;
-		v.mInstancePrimitiveIndex = instancePrimitiveIndex;
-        v.mPackedNormal = shadingData.mPackedShadingNormal;
-        mVisibility[index] = reinterpret<uint2>(v);
-
-		DepthData d;
-		d.mDepth = depth;
-		d.mPrevDepth = prevDepth;
-        d.mDepthDerivative = 1;
-        mDepth[index] = reinterpret<float4>(d);
-    }
+enum ReuseMISType : uint {
+    eTalbot,
+    ePairwise,
+    eSimple
 };
 
 struct PathVertex {
@@ -154,7 +115,35 @@ struct PathTracer {
 			throughput /= transDirPdf;
 
 		isect.mShadingData.mTexcoordScreenSize = 0; // disable mipmaps for now
-		return PathVertex(mScene, isect.mShadingData, isect.mInstancePrimitiveIndex, medium, -direction);
+		const PathVertex vertex = PathVertex(mScene, isect.mShadingData, isect.mInstancePrimitiveIndex, medium, -direction);
+
+        {
+			float2 prevPixelCoord = index + 0.5;
+
+			const float depth = length(mFramebuffer.mViewInverseTransforms[0].transformPoint(vertex.mShadingData.mPosition));
+
+			float prevDepth = depth;
+			if (vertex.mInstanceIndex != INVALID_INSTANCE) {
+				const float3 prevCameraPos = mFramebuffer.mPrevViewInverseTransforms[0].transformPoint(mScene.mInstanceMotionTransforms[vertex.mPrimitiveIndex].transformPoint(vertex.mShadingData.mPosition));
+				prevDepth = length(prevCameraPos);
+				mFramebuffer.mViews[0].toRaster(prevCameraPos, prevPixelCoord);
+			}
+
+			mFramebuffer.mPrevUVs[index] = prevPixelCoord / gPushConstants.mOutputExtent;
+
+			VisibilityData v;
+			v.mInstancePrimitiveIndex = vertex.mInstancePrimitiveIndex;
+			v.mPackedNormal = vertex.mShadingData.mPackedShadingNormal;
+			mFramebuffer.mVisibility[index] = reinterpret<uint2>(v);
+
+			DepthData d;
+			d.mDepth = depth;
+			d.mPrevDepth = prevDepth;
+			d.mDepthDerivative = 1;
+			mFramebuffer.mDepth[index] = reinterpret<float4>(d);
+		}
+
+        return vertex;
 	}
 };
 

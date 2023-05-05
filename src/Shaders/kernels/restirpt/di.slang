@@ -1,5 +1,9 @@
 #include "pt.slang"
 
+#ifndef gDIMis
+#define gDIMis ReuseMISType::eSimple
+#endif
+
 float DirectMis(const float a, const float b) {
     const float a2 = a * a;
     return safe_divide(a2, a2 + b * b);
@@ -182,23 +186,21 @@ extension PathTracer {
 
 		// Resampling MIS weights
 
-		#ifdef gPairwiseMis
-		const float R = M;
-		M += q.M;
-		// defensive pairwise mis
-		const float m0 = (1 +      safe_divide(currentSample.mTargetPdf, R * currentSample.mTargetPdf + (M - R) * phat_q)) / M;
-		const float m1 = (M - R) * safe_divide(q.mCachedTargetPdf, R * newSample.mTargetPdf + (M - R) * q.mCachedTargetPdf) / M;
-		#elif defined(gTalbotMis)
-		// generalized talbot mis
-		const float m0 = safe_divide(M*currentSample.mTargetPdf, M*currentSample.mTargetPdf + q.M * phat_q);
-		const float m1 = safe_divide(q.M * q.mCachedTargetPdf  , q.M * q.mCachedTargetPdf   + M * newSample.mTargetPdf);
-		M += q.M;
-		#else
-		// naive mis
-		const float m0 = safe_divide(M, M + (phat_q > 0 ? q.M : 0));
-		const float m1 = safe_divide(q.M, q.M + (newSample.mTargetPdf > 0 ? M : 0));
-		M += q.M;
-		#endif
+        float m0, m1;
+        if (gDIMis == ReuseMISType::ePairwise) {
+			const float R = M;
+			M += q.M;
+			m0 = (1 +      safe_divide(currentSample.mTargetPdf, R * currentSample.mTargetPdf + (M - R) * phat_q)) / M;
+            m1 = (M - R) * safe_divide(q.mCachedTargetPdf, R * newSample.mTargetPdf + (M - R) * q.mCachedTargetPdf) / M;
+        } else if (gDIMis == ReuseMISType::eTalbot) {
+			m0 = safe_divide(M*currentSample.mTargetPdf, M*currentSample.mTargetPdf + q.M * phat_q);
+			m1 = safe_divide(q.M * q.mCachedTargetPdf  , q.M * q.mCachedTargetPdf   + M * newSample.mTargetPdf);
+            M += q.M;
+        } else /*if (gDIMis == ReuseMISType::eSimple)*/ {
+			m0 = safe_divide(M, M + (phat_q > 0 ? q.M : 0));
+			m1 = safe_divide(q.M, q.M + (newSample.mTargetPdf > 0 ? M : 0));
+			M += q.M;
+        }
 
 		// RIS weights
 

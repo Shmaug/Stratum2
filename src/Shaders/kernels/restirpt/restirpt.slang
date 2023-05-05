@@ -23,8 +23,6 @@ extension PathTracer {
 		float3 throughput;
 		const PathVertex primaryVertex = SampleVisibility(sPixelIndex, rng, throughput);
 
-		mFramebuffer.StoreAuxillaryData(mScene, primaryVertex.mShadingData, sPixelIndex, primaryVertex.mInstancePrimitiveIndex);
-
 		if (primaryVertex.mShadingData.isEnvironment()) {
 			float tmp;
 			mFramebuffer.mAlbedo[sPixelIndex] = float4(0, 0, 0, 1);
