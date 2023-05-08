@@ -4,7 +4,7 @@
 #define gDIMis ReuseMISType::eSimple
 #endif
 
-float DirectMis(const float a, const float b) {
+float NeeMis(const float a, const float b) {
     const float a2 = a * a;
     return safe_divide(a2, a2 + b * b);
 }
@@ -43,17 +43,13 @@ extension PathTracer {
 		o.mRadiance = r.mRadiance * f.mReflectance;
 
 		o.mPdfA = r.mPdf;
-		o.mMisWeight = DirectMis(safe_divide(r.mPdf, o.G), f.mFwdPdfW);
+		o.mMisWeight = NeeMis(safe_divide(r.mPdf, o.G), f.mFwdPdfW);
 
 		// evaluate transmittance along shadow ray
 
-		const float3 rayOrigin = isMedium ?
-				vertex.mShadingData.mPosition :
-				rayOffset(vertex.mShadingData.mPosition, vertex.mShadingData.getGeometryNormal(), r.mDirectionToLight);
-
 		float transDirPdf, transNeePdf;
         mScene.traceVisibilityRay(
-            makeRay(rayOrigin, r.mDirectionToLight, 0, AdjustIntersectionDistance(r.mDistanceToLight)),
+            makeRay(rayOffset(vertex.mShadingData, r.mDirectionToLight), r.mDirectionToLight, 0, AdjustIntersectionDistance(r.mDistanceToLight)),
             rng, vertex.mCurrentMedium, o.mRadiance, transDirPdf, transNeePdf);
 
 		o.mPdfA *= transNeePdf;
@@ -100,10 +96,7 @@ struct ReservoirSampleDataDI {
 
             mCachedContribution = f.mReflectance * r.mRadiance;
             mCachedWtoA = r.isFinite ? r.mCosLight / pow2(r.mDistanceToLight) : 1;
-            const float3 rayOrigin = isMedium ?
-					vertex.mShadingData.mPosition :
-					rayOffset(vertex.mShadingData.mPosition, vertex.mShadingData.getGeometryNormal(), r.mDirectionToLight);
-            mVisibilityRay = makeRay(rayOrigin, r.mDirectionToLight, 0, AdjustIntersectionDistance(r.mDistanceToLight));
+            mVisibilityRay = makeRay(rayOffset(vertex.mShadingData, r.mDirectionToLight), r.mDirectionToLight, 0, AdjustIntersectionDistance(r.mDistanceToLight));
         }
     }
 };
@@ -292,7 +285,7 @@ extension PathTracer {
         o.mRadiance = sample.mCachedContribution;
         o.mPdfA = safe_divide(1, integrationWeight);
         o.G = sample.mCachedWtoA;
-        o.mMisWeight = DirectMis(safe_divide(sample.mSourcePdf, sample.mCachedWtoA), sample.mCachedBsdfPdfW);
+        o.mMisWeight = NeeMis(safe_divide(sample.mSourcePdf, sample.mCachedWtoA), sample.mCachedBsdfPdfW);
         return o;
 	}
 }

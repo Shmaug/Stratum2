@@ -270,7 +270,7 @@ extension VertexCM {
 
             if (bVisibility && targetPdf > 0) {
                 IntersectionResult isect;
-                if (gScene.traceRay(makeRay(rayOffset(aRefPos.mPosition, aRefPos.getGeometryNormal(), oSampleRecord.mDirectionToLight), oSampleRecord.mDirectionToLight, 0, AdjustDistance(oSampleRecord.mDistance)), false, isect)) {
+                if (gScene.traceRay(makeRay(rayOffset(aRefPos, oSampleRecord.mDirectionToLight), oSampleRecord.mDirectionToLight, 0, AdjustDistance(oSampleRecord.mDistance)), false, isect)) {
                     return 0;
                 }
             }

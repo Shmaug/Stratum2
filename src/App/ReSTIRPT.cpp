@@ -44,6 +44,7 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 		mPushConstants["mGIMaxM"]         = 4.f;
 		mPushConstants["mGIReuseRadius"]  = 16.f;
 		mPushConstants["mGIReuseSamples"] = 3u;
+		mDefines["gReSTIR_GI_Shift_Test"] = false;
 
 		mDenoise = true;
 		mTonemap = true;
@@ -149,14 +150,16 @@ void ReSTIRPT::drawGui() {
 		} else {
 			defineCheckbox("ReSTIR GI", "gReSTIR_GI");
 			if (mDefines.at("gReSTIR_GI")) {
-			ImGui::Indent();
-			pushConstantField.operator()<uint32_t>("GI candidate samples", "mGICandidateSamples", 0, 128, 0.25f);
-			defineCheckbox("ReSTIR GI reuse", "gReSTIR_GI_Reuse");
-			pushConstantField.operator()<float>   ("GI max M", "mGIMaxM", 0, 10, .1f);
-			pushConstantField.operator()<float>   ("GI reuse radius", "mGIReuseRadius", 0, 1000);
-			pushConstantField.operator()<uint32_t>("GI reuse samples", "mGIReuseSamples", 0, 100);
-			ImGui::Unindent();
-		}
+				ImGui::Indent();
+				pushConstantField.operator()<uint32_t>("GI candidate samples", "mGICandidateSamples", 0, 128, 0.25f);
+				defineCheckbox("ReSTIR GI reuse", "gReSTIR_GI_Reuse");
+				pushConstantField.operator()<float>   ("GI max M", "mGIMaxM", 0, 10, .1f);
+				pushConstantField.operator()<float>   ("GI reuse radius", "mGIReuseRadius", 0, 1000);
+				pushConstantField.operator()<uint32_t>("GI reuse samples", "mGIReuseSamples", 0, 32);
+				if (mDefines.at("gReSTIR_GI_Reuse"))
+					defineCheckbox("Debug shift map", "gReSTIR_GI_Shift_Test");
+				ImGui::Unindent();
+			}
 		}
 		ImGui::Separator();
 
@@ -410,7 +413,7 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 
 		if (mDefines.at("gDebugPixel")) {
 			const ImVec2 c = ImGui::GetIO().MousePos;
-			mPushConstants["mDebugPixelIndex"] = (int)c.y * extent.width + (int)c.x;
+			mPushConstants["mDebugPixelIndex"] = (int)(c.y * extent.width) + (int)c.x;
 		}
 	}
 

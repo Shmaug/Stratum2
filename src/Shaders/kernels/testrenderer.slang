@@ -431,11 +431,7 @@ void ConnectToLightSubpath(const Interaction bsdf, const ShadingData shadingData
 
 	const float misWeight = 1 / (wLight + 1.f + wCamera);
 
-    const float3 rayOrigin = isMedium ?
-		shadingData.mPosition :
-		rayOffset(shadingData.mPosition, shadingData.getGeometryNormal(), r.mDirectionToLight);
-
-    TraceConnectionRay(rayOrigin, r.mDirectionToLight, AdjustIntersectionDistance(r.mDistanceToLight), contrib, misWeight, sPathState.mPathLength+1, r.mSubpathLength+1);
+    TraceConnectionRay(rayOffset(shadingData, r.mDirectionToLight), r.mDirectionToLight, AdjustIntersectionDistance(r.mDistanceToLight), contrib, misWeight, sPathState.mPathLength+1, r.mSubpathLength+1);
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -499,13 +495,11 @@ void ConnectToCamera(const Interaction bsdf, const ShadingData shadingData, cons
     const float misWeight = 1;
 	#endif
 
-    const float3 rayOrigin = isMedium ? shadingData.mPosition : rayOffset(shadingData.mPosition, shadingData.getGeometryNormal(), toCamera);
-
     #ifdef gDeferShadowRays
         ShadowRay ray;
         ray.mContribution = contrib;
         ray.mWeight = misWeight;
-        ray.mRayOrigin = rayOrigin;
+        ray.mRayOrigin = rayOffset(shadingData, toCamera);
         ray.mViewVertices = 1;
         ray.mRayDirection = toCamera;
         ray.mDistance = dist;
@@ -517,7 +511,7 @@ void ConnectToCamera(const Interaction bsdf, const ShadingData shadingData, cons
     #else
         float transDirPdf, transNeePdf;
         gScene.traceVisibilityRay(
-            makeRay(rayOrigin, toCamera, 0, dist),
+            makeRay(rayOffset(shadingData, toCamera), toCamera, 0, dist),
             sPathState.mRng, sPathState.mCurrentMedium, contrib, transDirPdf, transNeePdf);
 
         if (all(contrib <= 0) || transNeePdf <= 0)
@@ -606,10 +600,7 @@ struct ReservoirSampleDataDI {
 			const float AtoW = r.isFinite ? pow2(r.mDistanceToLight) / r.mCosLight : 1;
 			mCachedMisWeight = ComputeMIS_DI(r, f, mSourcePdf * AtoW, isMedium ? 1 : abs(localDirOut.z), AtoW);
 
-			const float3 rayOrigin = isMedium ?
-				shadingData.mPosition :
-				rayOffset(shadingData.mPosition, shadingData.getGeometryNormal(), r.mDirectionToLight);
-			mVisibilityRay = makeRay(rayOrigin, r.mDirectionToLight, 0, AdjustIntersectionDistance(r.mDistanceToLight));
+            mVisibilityRay = makeRay(rayOffset(shadingData, r.mDirectionToLight), r.mDirectionToLight, 0, AdjustIntersectionDistance(r.mDistanceToLight));
        }
     }
 };
@@ -784,11 +775,7 @@ void ConnectToLight(const Interaction bsdf, const ShadingData shadingData, const
 
 	// evaluate transmittance along shadow ray
 
-    const float3 rayOrigin = isMedium ?
-		shadingData.mPosition :
-		rayOffset(shadingData.mPosition, shadingData.getGeometryNormal(), r.mDirectionToLight);
-
-    TraceConnectionRay(rayOrigin, r.mDirectionToLight, AdjustIntersectionDistance(r.mDistanceToLight), contrib, misWeight, sPathState.mPathLength + 1, 1);
+    TraceConnectionRay(rayOffset(shadingData, r.mDirectionToLight), r.mDirectionToLight, AdjustIntersectionDistance(r.mDistanceToLight), contrib, misWeight, sPathState.mPathLength + 1, 1);
 }
 
 #endif

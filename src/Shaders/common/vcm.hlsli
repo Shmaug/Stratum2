@@ -146,7 +146,7 @@ extension VcmVertex {
     }
 
     float3 OffsetRay(const float3 direction) {
-        return rayOffset(mShadingData.mPosition, mShadingData.getGeometryNormal(), direction);
+        return rayOffset(mShadingData, direction);
     }
 }
 

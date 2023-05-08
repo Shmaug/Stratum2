@@ -44,6 +44,7 @@ struct PushConstants {
 
 #include "common/intersection.hlsli"
 #include "common/lights.hlsli"
+#include "rcv.slang"
 
 enum ReuseMISType : uint {
     eTalbot,

@@ -27,8 +27,11 @@ float3 rayOffset(const float3 P, const float3 Ng) {
                 abs(P.y) < origin ? P.y + float_scale * Ng.y : asfloat(asint(P.y) + ((P.y < 0.0) ? -of_i.y : of_i.y)),
                 abs(P.z) < origin ? P.z + float_scale * Ng.z : asfloat(asint(P.z) + ((P.z < 0.0) ? -of_i.z : of_i.z)));
 }
-float3 rayOffset(const float3 P, const float3 Ng, float3 dir) {
+float3 rayOffset(const float3 P, const float3 Ng, const float3 dir) {
 	return rayOffset(P, dot(Ng, dir) < 0 ? -Ng : Ng);
+}
+float3 rayOffset(const ShadingData sd, const float3 dir) {
+    return sd.isSurface() ? rayOffset(sd.mPosition, sd.getGeometryNormal(), dir) : sd.mPosition;
 }
 
 RayDesc makeRay(const float3 origin, const float3 direction, const float tmin = 0, const float tmax = POS_INFINITY) {
