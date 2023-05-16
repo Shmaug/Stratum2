@@ -219,13 +219,6 @@ extension PathTracer {
             }
 		}
 
-        if (all(p.mContribution <= 0)) {
-            p.mContribution = 0;
-            p.mPdfW = 0;
-            p.mLength = -1;
-            p.mDiffuseBounces = -1;
-		}
-
 		return p;
     }
     Path GenerateShiftedPath(const PathVertex vertex, RandomSampler rng, const Optional<ReconnectionVertex> rcv, const uint baseLength, const uint baseDiffuseBounces, const float basePdfW, out float jacobian) {
@@ -235,6 +228,10 @@ extension PathTracer {
 			jacobian = safe_divide(basePdfW, p.mPdfW);
 		else
 			jacobian = 0;
+
+		InterlockedAdd(mFramebuffer.mDebugCounters[0], 1);
+        if (jacobian > 0)
+            InterlockedAdd(mFramebuffer.mDebugCounters[1], 1);
 
         return p;
 	}

@@ -14,6 +14,8 @@ struct RenderParams {
     RWTexture2D<uint2> mVisibility;
     RWTexture2D<float4> mDepth;
 
+    RWStructuredBuffer<uint> mDebugCounters;
+
     RWTexture2D<float4> mReservoirDataDI[3];
     RWTexture2D<float4> mPrevReservoirDataDI[3];
 

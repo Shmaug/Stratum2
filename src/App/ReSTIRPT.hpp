@@ -36,8 +36,16 @@ private:
 
 	DeviceResourcePool mResourcePool;
 	list<pair<Buffer::View<byte>, bool>> mSelectionData;
-	list<pair<Buffer::View<byte>, shared_ptr<Shader>>> mGpuPrintData;
 	vector<TransformData> mPrevViewTransforms;
+
+	struct CounterData {
+		Buffer::View<uint32_t> mBuffer;
+		vector<uint32_t> mLastValue;
+		vector<uint32_t> mCurrentValue;
+	};
+	CounterData mRayCount, mDebugCounters;
+	chrono::high_resolution_clock::time_point mCounterTimer;
+	float mCounterDt;
 };
 
 };

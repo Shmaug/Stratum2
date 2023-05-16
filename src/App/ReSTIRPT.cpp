@@ -17,6 +17,7 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 		inspector->setInspectCallback<ReSTIRPT>();
 
 	{
+		mDefines["gCountRays"]      = false;
 		mDefines["gAlphaTest"]      = false;
 		mDefines["gShadingNormals"] = true;
 		mDefines["gNormalMaps"]     = true;
@@ -94,6 +95,19 @@ void ReSTIRPT::drawGui() {
 
 	ImGui::PushID(this);
 
+	if (mDefines.at("gCountRays") && mRayCount.mBuffer) {
+
+		const auto[rps,rpsUnit] = formatNumber(mRayCount.mCurrentValue[0]/mCounterDt);
+		const auto[shift,shiftUnit] = formatNumber(mDebugCounters.mCurrentValue[0]/mCounterDt);
+
+		ImGui::Text("%.1f%s rays/s (%.1f%% occlusion)",
+			rps, rpsUnit,
+			100*(mRayCount.mCurrentValue[1]/(float)mRayCount.mCurrentValue[0]));
+		ImGui::Text("%.1f%s shifts/s (%.1f%% success)",
+			shift, shiftUnit,
+			100*(mDebugCounters.mCurrentValue[1]/(float)mDebugCounters.mCurrentValue[0]));
+	}
+
 	if (ImGui::Button("Clear resources")) {
 		Device& device = *mNode.findAncestor<Device>();
 		device->waitIdle();
@@ -127,6 +141,7 @@ void ReSTIRPT::drawGui() {
 		defineCheckbox("Disable GI",       "gNoGI");
 		defineCheckbox("Debug fast BRDF",  "gDebugFastBRDF");
 		defineCheckbox("DebugPixel",       "gDebugPixel");
+		defineCheckbox("Count rays",       "gCountRays");
 		ImGui::Separator();
 
 		ImGui::Checkbox("Fix random seed", &mFixSeed);
@@ -197,6 +212,41 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 
 	mResourcePool.clean();
 
+	if (!mRayCount.mBuffer) {
+		mRayCount = {
+			make_shared<Buffer>(commandBuffer.mDevice, "mRayCount", 2*sizeof(uint32_t), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent),
+			vector<uint32_t>(2),
+			vector<uint32_t>(2) };
+		ranges::fill(mRayCount.mBuffer, 0);
+		ranges::fill(mRayCount.mLastValue, 0);
+	}
+	if (!mDebugCounters.mBuffer) {
+		mDebugCounters = {
+			make_shared<Buffer>(commandBuffer.mDevice, "mDebugCounters", 2*sizeof(uint32_t), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent),
+			vector<uint32_t>(2),
+			vector<uint32_t>(2) };
+		ranges::fill(mDebugCounters.mBuffer, 0);
+		ranges::fill(mDebugCounters.mLastValue, 0);
+	}
+	if (mDefines.at("gCountRays")) {
+		const auto t1 = chrono::high_resolution_clock::now();
+		const auto dt = t1 - mCounterTimer;
+		if (dt > 1s) {
+			mCounterTimer = t1;
+			mCounterDt = chrono::duration_cast<chrono::duration<float>>(dt).count();
+
+			auto updateCounter = [](auto& c) {
+				for (uint32_t i = 0; i < c.mBuffer.size(); i++) {
+					if (c.mBuffer[i] > c.mLastValue[i])
+						c.mCurrentValue[i] = c.mBuffer[i] - c.mLastValue[i];
+					c.mLastValue[i] = c.mBuffer[i];
+				}
+			};
+			updateCounter(mRayCount);
+			updateCounter(mDebugCounters);
+		}
+	}
+
 	const vk::Extent3D extent = renderTarget.extent();
 
 	const shared_ptr<Scene>      scene      = mNode.findAncestor<Scene>();
@@ -266,6 +316,8 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 	descriptors[{ "gPathTracer.mFramebuffer.mPrevUVs", 0 }]    = ImageDescriptor{ prevUVsImage   , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 	descriptors[{ "gPathTracer.mFramebuffer.mVisibility", 0 }] = ImageDescriptor{ visibilityImage, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
 	descriptors[{ "gPathTracer.mFramebuffer.mDepth", 0 }]      = ImageDescriptor{ depthImage     , vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+	descriptors[{ "gPathTracer.mFramebuffer.mDebugCounters", 0u }] = mDebugCounters.mBuffer;
+	descriptors[{ "gPathTracer.mScene.mRayCount", 0u }]            = mRayCount.mBuffer;
 
 	mPushConstants["mReservoirHistoryValid"] = 1u;
 	for (uint32_t i = 0; i < 3; i++) {
@@ -327,7 +379,6 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 
 		for (auto& [name, d] : sceneData.mDescriptors)
 			descriptors[{ "gPathTracer.mScene." + name.first, name.second }] = d;
-		descriptors[{ "gPathTracer.mScene.mRayCount", 0u }] = make_shared<Buffer>(commandBuffer.mDevice, "mRayCount", 2*sizeof(uint32_t), vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
 
 		// track resources which are not held by the descriptorset
 		commandBuffer.trackResource(sceneData.mAccelerationStructureBuffer.buffer());
