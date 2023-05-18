@@ -27,6 +27,7 @@ struct Path {
     uint mDiffuseBounces;
     ReconnectionVertex mReconnectionVertex;
     float3 mThroughputAtReconnectionVertex; // Used in GeneratePath to cancel the contribution before the reconnection vertex
+    float mReconnectionG;
     bool mIsPrevVertexDiffuse;
     bool mTerminated;
 
@@ -35,6 +36,7 @@ struct Path {
 		mContribution = 1;
         mPdfW = 1;
         mLength = 1;
+        mReconnectionG = 1;
         mDiffuseBounces = 0;
         mReconnectionVertex = ReconnectionVertex();
         mThroughputAtReconnectionVertex = 0;
@@ -65,6 +67,38 @@ struct Path {
         }
         mTerminated = true;
 	}
+};
+
+struct PathReuseData {
+    RandomSampler mRngSeed;
+    PackedVertex mVertex;
+    uint4 mPacked; // { pathLength | diffuseBounces<<8 | M<<16, pdfPdfW, W, localDirIn  }
+    Optional<ReconnectionVertex> mReconnectionVertex;
+
+    property uint mPathLength {
+        get { return BF_GET(mPacked[0],            0, 8); }
+        set {        BF_SET(mPacked[0], newValue,  0, 8); }
+    };
+    property uint mDiffuseBounces {
+        get { return BF_GET(mPacked[0],           8, 8); }
+        set {        BF_SET(mPacked[0], newValue, 8, 8); }
+    };
+    property float M {
+        get { return f16tof32(BF_GET(mPacked[0],     16, 16)); }
+        set { BF_SET(mPacked[0], f32tof16(newValue), 16, 16); }
+    };
+    property float mPathPdfW {
+        get { return asfloat(mPacked[1]); }
+        set { mPacked[1] = asuint(newValue); }
+    };
+    property float W {
+        get { return asfloat(mPacked[2]); }
+        set { mPacked[2] = asuint(newValue); }
+    };
+    property uint mPackedLocalDirIn {
+        get { return mPacked[3]; }
+        set { mPacked[3] = newValue; }
+    };
 };
 
 extension PathTracer {
@@ -105,16 +139,20 @@ extension PathTracer {
 			}
         }
 
+		// trace visibility ray
         {
             float transDirPdf, transNeePdf;
             mScene.traceVisibilityRay(makeRay(rayOffset(vertex.mShadingData, dirOut), dirOut, 0, AdjustIntersectionDistance(dist)), rng, vertex.mCurrentMedium, f, transDirPdf, transNeePdf);
             f *= safe_divide(1, transNeePdf);
 		}
 
+		// terminate path
+
         const float G = cos_rcv / dist2;
         if (any(f > 0) && cos_rcv > 0) {
 			// manually Terminate path
             p.mContribution *= f * G;
+			p.mReconnectionG = G;
             p.mReconnectionVertex = rcv;
             p.mReconnectionVertex.mReconnectionLength = p.mLength + 1;
             p.mReconnectionVertex.mPathLength = p.mLength + 1 + (rcv.mPathLength - rcv.mReconnectionLength);
@@ -161,8 +199,8 @@ extension PathTracer {
             	return 0;
 		}
 
-		// sample direction, modify throughput
-		DirectionSampleRecord s = bsdf.sampleDirection<false>(rng.nextFloat().xyz, vertex.mLocalDirIn);
+        // sample direction, modify throughput
+        DirectionSampleRecord s = bsdf.sampleDirection<false>(rng.nextFloat().xyz, vertex.mLocalDirIn);
 		p.mContribution *= s.mReflectance;
 		p.mPdfW         *= s.mFwdPdfW;
         if (!isMedium)
@@ -224,14 +262,13 @@ extension PathTracer {
     Path GenerateShiftedPath(const PathVertex vertex, RandomSampler rng, const Optional<ReconnectionVertex> rcv, const uint baseLength, const uint baseDiffuseBounces, const float basePdfW, out float jacobian) {
         const Path p = GeneratePath(vertex, rng, rcv);
 
-        if (p.mLength == baseLength && p.mDiffuseBounces == baseDiffuseBounces)
-			jacobian = safe_divide(basePdfW, p.mPdfW);
-		else
-			jacobian = 0;
+		jacobian = safe_divide(basePdfW, p.mPdfW);
 
-		InterlockedAdd(mFramebuffer.mDebugCounters[0], 1);
-        if (jacobian > 0)
+		#ifdef gCountRays
+        InterlockedAdd(mFramebuffer.mDebugCounters[0], 1);
+        if (jacobian > 0 && p.mLength == baseLength && p.mDiffuseBounces == baseDiffuseBounces)
             InterlockedAdd(mFramebuffer.mDebugCounters[1], 1);
+		#endif
 
         return p;
 	}
@@ -242,43 +279,11 @@ extension PathTracer {
 		return p.mContribution * safe_divide(1, p.mPdfW);
 	}
 
-
-    struct PathReuseData {
-        RandomSampler mRngSeed;
-        PackedVertex mVertex;
-        uint4 mPacked;
-        Optional<ReconnectionVertex> mReconnectionVertex;
-
-        property uint mPathLength {
-            get { return BF_GET(mPacked[0],            0, 8); }
-            set {        BF_SET(mPacked[0], newValue,  0, 8); }
-        };
-        property uint mDiffuseBounces {
-            get { return BF_GET(mPacked[0],           8, 8); }
-            set {        BF_SET(mPacked[0], newValue, 8, 8); }
-        };
-        property float M {
-            get { return f16tof32(BF_GET(mPacked[0],     16, 16)); }
-            set { BF_SET(mPacked[0], f32tof16(newValue), 16, 16); }
-        };
-        property float mPathPdfW {
-            get { return asfloat(mPacked[1]); }
-            set { mPacked[1] = asuint(newValue); }
-		};
-        property float W {
-            get { return asfloat(mPacked[2]); }
-            set { mPacked[2] = asuint(newValue); }
-		};
-        property uint mPackedLocalDirIn {
-            get { return mPacked[3]; }
-            set { mPacked[3] = newValue; }
-		};
-    };
     PathReuseData LoadForReuse(const uint2 pixelIndex) {
         PathReuseData r;
         r.mRngSeed = reinterpret<RandomSampler>(mFramebuffer.mPrevReservoirDataGI[0][pixelIndex]);
-        r.mVertex = reinterpret<PackedVertex>(mFramebuffer.mPrevReservoirDataGI[1][pixelIndex]);
-        r.mPacked = reinterpret<uint4>(mFramebuffer.mPrevReservoirDataGI[2][pixelIndex]);
+        r.mVertex =  reinterpret<PackedVertex> (mFramebuffer.mPrevReservoirDataGI[1][pixelIndex]);
+        r.mPacked =  reinterpret<uint4>        (mFramebuffer.mPrevReservoirDataGI[2][pixelIndex]);
         if (IsReconnectionShift(gShiftType))
             r.mReconnectionVertex = LoadPrevReconnectionVertex(mFramebuffer, pixelIndex);
         else
@@ -312,23 +317,79 @@ extension PathTracer {
             return GenerateShiftedPath(vertex_i, p.mRngSeed, none, p.mLength, p.mDiffuseBounces, p.mPdfW, jacobian);
     }
 
-	// ReSTIR estimator
-	float3 EstimateRadianceReSTIR(const PathVertex vertex, inout RandomSampler rng) {
-		// sample canonical path
+	// shift estimator, simply averages shifted paths from neighbors
+	float3 EstimateRadianceShift(const PathVertex vertex, inout RandomSampler rng) {
+        // sample canonical path
         Path p = GeneratePath(vertex, rng);
-        float3 f = p.mContribution;
         float W = safe_divide(1, p.mPdfW);
-        float M = 1;
+
+		float3 f = p.mContribution * W;
 
 		#ifdef gReSTIR_GI_Reuse
 
-		#ifdef gReSTIR_GI_Shift_Test
-		// store the path before modifying
-		if (any(p.mContribution > 0))
-        	StoreForReuse(p, W, M, vertex);
+        // store the sampled path
+        StoreForReuse(p, W, 1, vertex);
+
+        if (gPushConstants.mReservoirHistoryValid != 0 && p.mLength > 1) {
+            const float2 prevPixel = mFramebuffer.mPrevUVs[sPixelIndex] * gPushConstants.mOutputExtent;
+
+            float norm = 1;
+
+            for (uint i = 0; i < gPushConstants.mGIReuseSamples; i++) {
+                const float2 discRng = rng.nextFloat().xy;
+                const int2 candidatePixel = int2(prevPixel + sampleConcentricDisc(discRng.x, discRng.y) * gPushConstants.mGIReuseRadius);
+                if (any(candidatePixel < 0) || any(candidatePixel >= gPushConstants.mOutputExtent))
+                    continue;
+
+                const PathReuseData data = LoadForReuse(candidatePixel);
+
+                if (data.M <= 0 || data.mPathLength == 1) // invalid sample
+                    continue;
+
+				// shift candidatePixel's path to vertex
+                float jacobian_from_i;
+                const Path xi = ShiftPathToVertex(data, vertex, jacobian_from_i);
+
+                if (xi.mLength != p.mLength || xi.mDiffuseBounces != p.mDiffuseBounces)
+                    continue;
+
+                norm++;
+
+                // add radiance from shifted path
+                f += xi.mContribution * data.W * jacobian_from_i;
+            }
+
+            // average canonical and shifted samples
+            f /= norm;
+		}
+
 		#endif
 
-        if (gPushConstants.mReservoirHistoryValid != 0) {
+		return f;
+	}
+
+	// ReSTIR estimator, resamples shifted paths from neighbors
+	float3 EstimateRadianceReSTIR(const PathVertex vertex, inout RandomSampler rng) {
+		// sample canonical paths
+        Path p = GeneratePath(vertex, rng);
+        float W = safe_divide(1, p.mPdfW);
+        if (gPushConstants.mGICandidateSamples > 1) {
+            float wsum = luminance(p.mContribution) * W;
+            for (uint i = 1; i < gPushConstants.mGICandidateSamples; i++) {
+                const Path pi = GeneratePath(vertex, rng);
+                const float wi = safe_divide(luminance(pi.mContribution), pi.mPdfW);
+                wsum += wi;
+                if (wsum * rng.nextFloat().x <= wi)
+                    p = pi;
+            }
+            W = safe_divide(wsum, luminance(p.mContribution) * gPushConstants.mGICandidateSamples);
+        }
+
+        float M = max(1, gPushConstants.mGICandidateSamples);
+
+		#ifdef gReSTIR_GI_Reuse
+
+        if (gPushConstants.mReservoirHistoryValid != 0 && p.mLength > 1) {
             const float2 prevPixel = mFramebuffer.mPrevUVs[sPixelIndex] * gPushConstants.mOutputExtent;
             const RandomSampler spatialRng = rng;
             rng.skipNext(gPushConstants.mGIReuseSamples);
@@ -336,7 +397,8 @@ extension PathTracer {
 			float wsum = M * luminance(p.mContribution) * W;
 
         	uint sampleMask = 0;
-			uint selectedIndex = -1;
+            uint selectedIndex = -1;
+            float newM = M;
 
             for (uint i = 0; i < gPushConstants.mGIReuseSamples; i++) {
                 float2 discRng;
@@ -358,16 +420,10 @@ extension PathTracer {
                 float jacobian_from_i;
                 const Path xi = ShiftPathToVertex(data, vertex, jacobian_from_i);
 
-                if (jacobian_from_i <= 0) continue;
-                SET_BIT(sampleMask, i);
+                if (xi.mLength != p.mLength || xi.mDiffuseBounces != p.mDiffuseBounces)
+                    continue;
 
-				#ifdef gReSTIR_GI_Shift_Test
-
-				// replace sample with shifted sample
-				f = xi.mContribution;
-				W = data.W * jacobian_from_i;
-
-				#else // gReSTIR_GI_Shift_Test
+				SET_BIT(sampleMask, i);
 
                 // RIS weight
                 const float wi = data.M * luminance(xi.mContribution) * data.W * jacobian_from_i;
@@ -378,15 +434,14 @@ extension PathTracer {
                     selectedIndex = i;
                 }
 
-				#endif
+                newM += data.M;
             }
-
-			#ifndef gReSTIR_GI_Shift_Test
 
 			W = safe_divide(wsum, luminance(p.mContribution));
 
 			// compute resampling MIS weight
             float Z = M;
+            M = newM;
 
             for (uint i = 0; i < gPushConstants.mGIReuseSamples; i++) {
                 if ((sampleMask & BIT(i)) == 0) continue;
@@ -398,13 +453,8 @@ extension PathTracer {
                     discRng = tmp_rng.nextFloat().xy;
                 }
                 const int2 candidatePixel = int2(prevPixel + sampleConcentricDisc(discRng.x, discRng.y) * gPushConstants.mGIReuseRadius);
-                if (any(candidatePixel < 0) || any(candidatePixel >= gPushConstants.mOutputExtent))
-                    continue;
 
                 const PathReuseData data = LoadForReuse(candidatePixel);
-
-                if (data.M <= 0)
-                    continue;
 
                 if (selectedIndex == i) {
                     Z += data.M;
@@ -420,17 +470,13 @@ extension PathTracer {
             }
 
             W = safe_divide(W, Z);
-
-			#endif
 		}
 
-		#ifndef gReSTIR_GI_Shift_Test
         if (any(p.mContribution > 0))
             StoreForReuse(p, W, min(M, gPushConstants.mGICandidateSamples * gPushConstants.mGIMaxM), vertex);
-		#endif
 
 		#endif
 
-		return f * W;
+		return p.mContribution * W;
 	}
 }

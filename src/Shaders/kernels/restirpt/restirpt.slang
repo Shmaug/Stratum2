@@ -1,18 +1,24 @@
 #include "gi.slang"
-
-#ifdef gReSTIR_DI
-#define DirectIlluminationFn DirectIlluminationReSTIR
-#else
-#define DirectIlluminationFn DirectIllumination
-#endif
-
-#ifdef gReSTIR_GI
-#define EstimateRadianceFn EstimateRadianceReSTIR
-#else
-#define EstimateRadianceFn EstimateRadiance
-#endif
+#include "di.slang"
 
 extension PathTracer {
+    DirectIlluminationSample SampleRadianceDI(const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng) {
+		#ifdef gReSTIR_DI
+		return DirectIlluminationReSTIR(vertex, bsdf, rng);
+		#else
+		return DirectIllumination(vertex, bsdf, rng);
+		#endif
+    }
+	float3 SampleRadianceGI(const PathVertex vertex, inout RandomSampler rng) {
+		#ifndef gReSTIR_GI
+		return EstimateRadiance(vertex, rng);
+		#elif defined(gReSTIR_GI_Reuse) && defined(gReSTIR_GI_Shift_Test)
+		return EstimateRadianceShift(vertex, rng);
+		#else
+		return EstimateRadianceReSTIR(vertex, rng);
+		#endif
+	}
+
 	void Render(const uint2 pixelIndex) {
 		sPixelIndex = pixelIndex;
 		if (any(sPixelIndex >= gPushConstants.mOutputExtent))
@@ -38,17 +44,17 @@ extension PathTracer {
 		if (gHasMedia && primaryVertex.mShadingData.isMedium()) {
 			const Medium m = Medium(mScene, primaryVertex.mShadingData.getMaterialAddress());
 			mFramebuffer.mAlbedo[sPixelIndex] = float4(m.albedo(), 1);
-			s = DirectIlluminationFn(primaryVertex, m, rng);
+			s = SampleRadianceDI(primaryVertex, m, rng);
 		} else {
 			const PackedMaterialData m = mScene.LoadMaterial(primaryVertex.mShadingData);
 			mFramebuffer.mAlbedo[sPixelIndex] = float4(m.albedo(), 1);
-			s = DirectIlluminationFn(primaryVertex, m, rng);
+			s = SampleRadianceDI(primaryVertex, m, rng);
 		}
 		mFramebuffer.mOutput[sPixelIndex] = float4(throughput * s.mRadiance * safe_divide(s.G, s.mPdfA), 1);
 
 		#else // gNoGI
 
-        mFramebuffer.mOutput[sPixelIndex] = float4(throughput * EstimateRadianceFn(primaryVertex, rng), 1);
+        mFramebuffer.mOutput[sPixelIndex] = float4(throughput * SampleRadianceGI(primaryVertex, rng), 1);
 
 		#endif
 	}

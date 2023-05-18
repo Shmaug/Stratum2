@@ -30,8 +30,8 @@ private:
 	vector<tuple<string, Image::View, Buffer::View<uint2>>> mImages;
 	uint32_t mSelected = -1;
 
-	string mStoreLabel = "Image";
-	bool mStore;
+	vector<char> mStoreLabel;
+	bool mStore = false;
 	optional<uint32_t> mStoreFrame;
 
 	float2 mOffset = float2::Zero();

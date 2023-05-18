@@ -62,14 +62,15 @@ void ImageComparer::postRender(CommandBuffer& commandBuffer, const Image::View& 
 
 	// store/copy the renderTarget
 	if (mStore) {
+		const string name = string(mStoreLabel.data()) + storeSuffix;
 		Image::Metadata md = renderTarget.image()->metadata();
 		md.mUsage = vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eTransferSrc|vk::ImageUsageFlagBits::eTransferDst;
-		const Image::View image = make_shared<Image>(commandBuffer.mDevice, "ImageComparer/" + mStoreLabel + storeSuffix, md);
+		const Image::View image = make_shared<Image>(commandBuffer.mDevice, "ImageComparer/" + name, md);
 
 		Image::copy(commandBuffer, renderTarget, image);
 		image.image()->generateMipMaps(commandBuffer);
 
-		mImages.emplace_back(mStoreLabel+storeSuffix, image, Buffer::View<uint2>{});
+		mImages.emplace_back(name, image, Buffer::View<uint2>{});
 		mStore = false;
 	}
 
@@ -138,8 +139,8 @@ void ImageComparer::drawGui() {
 
 	// save button
 	{
-		mStoreLabel.reserve(64);
-		ImGui::InputText("##StoreLabel", mStoreLabel.data(), mStoreLabel.capacity());
+		mStoreLabel.resize(64);
+		ImGui::InputText("##StoreLabel", mStoreLabel.data(), mStoreLabel.size());
 		ImGui::SameLine();
 		if (ImGui::Button("Save"))
 			mStore = true;
