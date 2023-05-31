@@ -25,8 +25,10 @@ struct PushConstants {
 
 // Use the Vulkan Configurator to redirect DebugPrintf to stdout (requires --debugMessenger)
 #ifdef gDebugPixel
-#define DebugPrintf(pixel, ...) if ((pixel.y * gPushConstants.mOutputExtent.x + pixel.x) == gPushConstants.mDebugPixelIndex) { printf(__VA_ARGS__); }
+#define IsDebugPixel(pixel) ((pixel.y * gPushConstants.mOutputExtent.x + pixel.x) == gPushConstants.mDebugPixelIndex)
+#define DebugPrintf(pixel, ...) if (IsDebugPixel(pixel)) { printf(__VA_ARGS__); }
 #else
+#define IsDebugPixel(pixel) (false)
 #define DebugPrintf(pixel, ...)
 #endif
 
@@ -118,6 +120,7 @@ struct PathTracer {
 		isect.mShadingData.mTexcoordScreenSize = 0; // disable mipmaps for now
 		const PathVertex vertex = PathVertex(mScene, isect.mShadingData, isect.mInstancePrimitiveIndex, medium, -direction);
 
+		// store aux data (depth/normals/etc)
         {
 			float2 prevPixelCoord = index + 0.5;
 

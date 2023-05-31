@@ -6,7 +6,6 @@ ParameterBlock<RenderParams> gFramebuffer;
 struct RasterPushConstants {
     uint2 mOutputExtent;
     uint mPixelIndex;
-    uint mDepth;
     float mLineRadius;
     float mLineLength;
 };
@@ -43,21 +42,21 @@ VSOut ShowReconnectionVertexVS(float3 p: POSITION, uint vertexID: SV_VertexID) {
 
     const ReconnectionVertex rcv = LoadPrevReconnectionVertex(gFramebuffer, uint2(pixelIndex1d%gRasterPushConstants.mOutputExtent.x, pixelIndex1d/gRasterPushConstants.mOutputExtent.x));
 
-    if ((gRasterPushConstants.mDepth != -1 && rcv.mReconnectionLength != gRasterPushConstants.mDepth) || all(rcv.mRadiance <= 0)) {
+    if (all(rcv.mRadiance <= 0)) {
         o.position = float4(0, 0, 0, 0);
         o.color = 0;
         o.camPos = 0;
         return o;
 	}
 
-    const ShadingData sd = rcv.getShadingData(gScene);
+    const ShadingData sd = rcv.mVertex.getShadingData(gScene);
 
     const float3 pos = gFramebuffer.mViewInverseTransforms[0].transformPoint(sd.mPosition);
     const float2 p = gStripVertices[vertexID % 6];
 
     o.color = rcv.mRadiance / luminance(rcv.mRadiance);
 
-    const float3 worldDir = rcv.mPathLength == rcv.mReconnectionLength ? sd.getShadingNormal() : sd.toWorld(rcv.mLocalDirOut);
+    const float3 worldDir = rcv.mPackedData[3] == 0 ? sd.getShadingNormal() : sd.toWorld(rcv.mLocalDirOut);
     const float3 dir = gFramebuffer.mViewInverseTransforms[0].transformVector(worldDir);
     float3 up = cross(dir, float3(0,0,1));
     up.z = 0;

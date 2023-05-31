@@ -46,12 +46,12 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 		mPushConstants["mGIReuseRadius"]  = 16.f;
 		mPushConstants["mGIReuseSamples"] = 3u;
 		mDefines["gReSTIR_GI_Shift_Test"] = false;
+		mDefines["gUseReconnection"] = false;
 
 		mDenoise = true;
 		mTonemap = true;
 
 		mShowRcVertices = false;
-		mRasterPushConstants["mDepth"] = -1;
 		mRasterPushConstants["mLineRadius"] = .0025f;
 		mRasterPushConstants["mLineLength"] = .02f;
 	}
@@ -103,9 +103,11 @@ void ReSTIRPT::drawGui() {
 		ImGui::Text("%.1f%s rays/s (%.1f%% occlusion)",
 			rps, rpsUnit,
 			100*(mRayCount.mCurrentValue[1]/(float)mRayCount.mCurrentValue[0]));
-		ImGui::Text("%.1f%s shifts/s (%.1f%% success)",
+		ImGui::Text("%.1f%s shifts/s (%.1f%% success, %.1f%% reconnections, %.1f%% stored)",
 			shift, shiftUnit,
-			100*(mDebugCounters.mCurrentValue[1]/(float)mDebugCounters.mCurrentValue[0]));
+			100*(mDebugCounters.mCurrentValue[1]/(float)mDebugCounters.mCurrentValue[0]),
+			100*(mDebugCounters.mCurrentValue[2]/(float)mDebugCounters.mCurrentValue[0]),
+			100*(mDebugCounters.mCurrentValue[3]/(float)mDebugCounters.mCurrentValue[4]));
 	}
 
 	if (ImGui::Button("Clear resources")) {
@@ -134,14 +136,14 @@ void ReSTIRPT::drawGui() {
 				changed = true;
 		};
 
-		defineCheckbox("Alpha testing",    "gAlphaTest");
-		defineCheckbox("Shading normals",  "gShadingNormals");
-		defineCheckbox("Normal maps",      "gNormalMaps");
-		defineCheckbox("Force lambertian", "gLambertian");
-		defineCheckbox("Disable GI",       "gNoGI");
-		defineCheckbox("Debug fast BRDF",  "gDebugFastBRDF");
-		defineCheckbox("DebugPixel",       "gDebugPixel");
-		defineCheckbox("Count rays",       "gCountRays");
+		defineCheckbox("Alpha testing",      "gAlphaTest");
+		defineCheckbox("Shading normals",    "gShadingNormals");
+		defineCheckbox("Normal maps",        "gNormalMaps");
+		defineCheckbox("Force lambertian",   "gLambertian");
+		defineCheckbox("Disable GI",         "gNoGI");
+		defineCheckbox("Debug fast BRDF",    "gDebugFastBRDF");
+		defineCheckbox("Debug pixel (ctrl)", "gDebugPixel");
+		defineCheckbox("Count rays",         "gCountRays");
 		ImGui::Separator();
 
 		ImGui::Checkbox("Fix random seed", &mFixSeed);
@@ -171,8 +173,10 @@ void ReSTIRPT::drawGui() {
 				pushConstantField.operator()<float>   ("GI max M", "mGIMaxM", 0, 10, .1f);
 				pushConstantField.operator()<float>   ("GI reuse radius", "mGIReuseRadius", 0, 1000);
 				pushConstantField.operator()<uint32_t>("GI reuse samples", "mGIReuseSamples", 0, 32);
-				if (mDefines.at("gReSTIR_GI_Reuse"))
+				if (mDefines.at("gReSTIR_GI_Reuse")) {
+					defineCheckbox("Enable reconnection", "gUseReconnection");
 					defineCheckbox("Debug shift map", "gReSTIR_GI_Shift_Test");
+				}
 				ImGui::Unindent();
 			}
 		}
@@ -185,7 +189,6 @@ void ReSTIRPT::drawGui() {
 		ImGui::Checkbox("Visualize reconnection vertices", &mShowRcVertices);
 		if (mShowRcVertices && !mDefines.at("gNoGI") && mDefines.at("gReSTIR_GI")) {
 			ImGui::Indent();
-			Gui::scalarField("Depth", &mRasterPushConstants.at("mDepth").get<int32_t>());
 			Gui::scalarField<float>("Line radius", &mRasterPushConstants.at("mLineRadius").get<float>(), 0, 1, .01f);
 			Gui::scalarField<float>("Line length", &mRasterPushConstants.at("mLineLength").get<float>(), 0, 1, .01f);
 			ImGui::Unindent();
@@ -222,9 +225,9 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 	}
 	if (!mDebugCounters.mBuffer) {
 		mDebugCounters = {
-			make_shared<Buffer>(commandBuffer.mDevice, "mDebugCounters", 2*sizeof(uint32_t), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent),
-			vector<uint32_t>(2),
-			vector<uint32_t>(2) };
+			make_shared<Buffer>(commandBuffer.mDevice, "mDebugCounters", 8*sizeof(uint32_t), vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent),
+			vector<uint32_t>(8),
+			vector<uint32_t>(8) };
 		ranges::fill(mDebugCounters.mBuffer, 0);
 		ranges::fill(mDebugCounters.mLastValue, 0);
 	}
@@ -237,7 +240,7 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 
 			auto updateCounter = [](auto& c) {
 				for (uint32_t i = 0; i < c.mBuffer.size(); i++) {
-					if (c.mBuffer[i] > c.mLastValue[i])
+					if (c.mBuffer[i] >= c.mLastValue[i])
 						c.mCurrentValue[i] = c.mBuffer[i] - c.mLastValue[i];
 					c.mLastValue[i] = c.mBuffer[i];
 				}
@@ -464,7 +467,7 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 
 		if (mDefines.at("gDebugPixel")) {
 			const ImVec2 c = ImGui::GetIO().MousePos;
-			mPushConstants["mDebugPixelIndex"] = (int)(c.y * extent.width) + (int)c.x;
+			mPushConstants["mDebugPixelIndex"] = ImGui::GetIO().KeyCtrl ? (int)(c.y * extent.width) + (int)c.x : -1;
 		}
 	}
 
