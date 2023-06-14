@@ -12,8 +12,6 @@ extension PathTracer {
 	float3 SampleRadianceGI(const PathVertex vertex, inout RandomSampler rng) {
 		#ifndef gReSTIR_GI
 		return EstimateRadiance(vertex, rng);
-		#elif defined(gReSTIR_GI_Reuse) && defined(gReSTIR_GI_Shift_Test)
-		return EstimateRadianceShift(vertex, rng);
 		#else
 		return EstimateRadianceReSTIR(vertex, rng);
 		#endif

@@ -45,7 +45,6 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 		mPushConstants["mGIMaxM"]         = 4.f;
 		mPushConstants["mGIReuseRadius"]  = 16.f;
 		mPushConstants["mGIReuseSamples"] = 3u;
-		mDefines["gReSTIR_GI_Shift_Test"] = false;
 		mDefines["gUseReconnection"] = false;
 
 		mDenoise = true;
@@ -125,6 +124,7 @@ void ReSTIRPT::drawGui() {
 		mRasterPipeline.clear();
 		changed = true;
 	}
+	ImGui::SliderFloat("Render scale", &mRenderScale, 0.01f, 2.f);
 
 	{
 		auto defineCheckbox = [&](const char* label, const char* name) {
@@ -170,12 +170,11 @@ void ReSTIRPT::drawGui() {
 				ImGui::Indent();
 				pushConstantField.operator()<uint32_t>("GI candidate samples", "mGICandidateSamples", 0, 128, 0.25f);
 				defineCheckbox("ReSTIR GI reuse", "gReSTIR_GI_Reuse");
-				pushConstantField.operator()<float>   ("GI max M", "mGIMaxM", 0, 10, .1f);
-				pushConstantField.operator()<float>   ("GI reuse radius", "mGIReuseRadius", 0, 1000);
-				pushConstantField.operator()<uint32_t>("GI reuse samples", "mGIReuseSamples", 0, 32);
 				if (mDefines.at("gReSTIR_GI_Reuse")) {
+					pushConstantField.operator()<float>   ("GI max M", "mGIMaxM", 0, 10, .1f);
+					pushConstantField.operator()<float>   ("GI reuse radius", "mGIReuseRadius", 0, 1000);
+					pushConstantField.operator()<uint32_t>("GI reuse samples", "mGIReuseSamples", 0, 32);
 					defineCheckbox("Enable reconnection", "gUseReconnection");
-					defineCheckbox("Debug shift map", "gReSTIR_GI_Shift_Test");
 				}
 				ImGui::Unindent();
 			}
@@ -250,7 +249,9 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 		}
 	}
 
-	const vk::Extent3D extent = renderTarget.extent();
+	vk::Extent3D extent = renderTarget.extent();
+	extent.width  = max<uint32_t>(1, extent.width * mRenderScale);
+	extent.height = max<uint32_t>(1, extent.height * mRenderScale);
 
 	const shared_ptr<Scene>      scene      = mNode.findAncestor<Scene>();
 	const shared_ptr<Denoiser>   denoiser   = mNode.findDescendant<Denoiser>();
@@ -390,7 +391,10 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 
 		vector<pair<ViewData, TransformData>> views;
 		mNode.root()->forEachDescendant<Camera>([&](Node& node, const shared_ptr<Camera>& camera) {
-			views.emplace_back(pair{ camera->view(), nodeToWorld(node) });
+			ViewData v = camera->view();
+			v.mImageMin = (v.mImageMin.cast<float>() * mRenderScale).cast<int32_t>();
+			v.mImageMax = (v.mImageMax.cast<float>() * mRenderScale).cast<int32_t>();
+			views.emplace_back(pair{ v, nodeToWorld(node) });
 		});
 
 		if (views.empty()) {
@@ -448,7 +452,7 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 	{
 		const Scene::FrameData& sceneData = scene->frameData();
 
-		mPushConstants["mOutputExtent"] = uint2(renderTarget.extent().width, renderTarget.extent().height);
+		mPushConstants["mOutputExtent"] = uint2(extent.width, extent.height);
 		mPushConstants["mViewCount"] = (uint32_t)viewsBufferData.size();
 		mPushConstants["mEnvironmentMaterialAddress"] = sceneData.mEnvironmentMaterialAddress;
 		mPushConstants["mLightCount"] = sceneData.mLightCount;
@@ -466,8 +470,8 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 			mPushConstants["mRandomSeed"] = (mDenoise && denoiser) ? denoiser->accumulatedFrames() : (uint32_t)rand();
 
 		if (mDefines.at("gDebugPixel")) {
-			const ImVec2 c = ImGui::GetIO().MousePos;
-			mPushConstants["mDebugPixelIndex"] = ImGui::GetIO().KeyCtrl ? (int)(c.y * extent.width) + (int)c.x : -1;
+			const float2 c = float2(ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y) * mRenderScale;
+			mPushConstants["mDebugPixelIndex"] = ImGui::GetIO().KeyCtrl ? int(c[1]) * extent.width + int(c[0]) : -1;
 		}
 	}
 
@@ -494,13 +498,18 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 		return p;
 	};
 
-	shared_ptr<ComputePipeline> renderPipeline;
-	{
-		renderPipeline = loadPipeline("Render", defines);
-	}
+	shared_ptr<ComputePipeline> renderPipeline = loadPipeline("Render", defines);
 	if (loading) {
 		// compiling shaders...
 		renderTarget.clearColor(commandBuffer, vk::ClearColorValue(array<float, 4>{ 0.5f, 0.5f, 0.5f, 0 }));
+
+		const ImVec2 size = ImGui::GetMainViewport()->WorkSize;
+		ImGui::SetNextWindowPos(ImVec2(size.x/2, size.y/2));
+		if (ImGui::Begin("Compiling shaders", nullptr, ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoNav|ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoInputs)) {
+			ImGui::Text("Compiling shaders...");
+			Gui::progressSpinner("Compiling shaders");
+		}
+		ImGui::End();
 		return;
 	}
 
@@ -533,28 +542,28 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 		if (mTonemap && tonemapper) {
 			tonemapper->render(commandBuffer, processedOutput, outputImage, (mDenoise && denoiser && denoiser->demodulateAlbedo()) ? albedoImage : Image::View{});
 			// copy outputImage to renderTarget
-			if (outputImage.image()->format() == renderTarget.image()->format())
+			if (outputImage.image()->format() == renderTarget.image()->format() && outputImage.extent() == renderTarget.extent())
 				Image::copy(commandBuffer, outputImage, renderTarget);
 			else
-				Image::blit(commandBuffer, outputImage, renderTarget);
+				Image::blit(commandBuffer, outputImage, renderTarget, vk::Filter::eNearest);
 		} else {
 			// copy processedOutput to renderTarget
-			if (processedOutput.image()->format() == renderTarget.image()->format())
+			if (processedOutput.image()->format() == renderTarget.image()->format() && processedOutput.extent() == renderTarget.extent())
 				Image::copy(commandBuffer, processedOutput, renderTarget);
 			else
-				Image::blit(commandBuffer, processedOutput, renderTarget);
+				Image::blit(commandBuffer, processedOutput, renderTarget, vk::Filter::eNearest);
 		}
 	}
 
 	// scene object picking
 	if (!ImGui::GetIO().WantCaptureMouse && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsUsing()) {
 		// copy VisibilityData for selected pixel ()
-		const ImVec2 c = ImGui::GetIO().MousePos;
+		const int2 c = (float2(ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y) * mRenderScale).cast<int32_t>();
 		for (const ViewData& view : viewsBufferData)
-			if (view.isInside(int2(c.x, c.y))) {
+			if (view.isInside(c)) {
 				Buffer::View<VisibilityData> selectionBuffer = make_shared<Buffer>(commandBuffer.mDevice, "SelectionData", sizeof(uint2), vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent);
 				visibilityImage.barrier(commandBuffer, vk::ImageLayout::eTransferSrcOptimal, vk::PipelineStageFlagBits::eTransfer, vk::AccessFlagBits::eTransferRead);
-				selectionBuffer.copyFromImage(commandBuffer, visibilityImage.image(), visibilityImage.subresourceLayer(), vk::Offset3D{int(c.x), int(c.y), 0}, vk::Extent3D{1,1,1});
+				selectionBuffer.copyFromImage(commandBuffer, visibilityImage.image(), visibilityImage.subresourceLayer(), vk::Offset3D{c[0], c[1], 0}, vk::Extent3D{1,1,1});
 				mSelectionData.push_back(make_pair(selectionBuffer, ImGui::GetIO().KeyShift));
 				break;
 			}

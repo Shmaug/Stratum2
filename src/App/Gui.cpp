@@ -6,6 +6,7 @@
 
 #include <imgui/imgui_impl_vulkan.h>
 #include <imgui/imgui_impl_glfw.h>
+#include <imgui/imgui_internal.h>
 #include <ImGuizmo.h>
 
 namespace stm2 {
@@ -29,6 +30,42 @@ ImTextureID Gui::getTextureID(const Image::View& image) {
 	}
 	gFrameTextures.emplace(image);
 	return (VkDescriptorSet)*it->second.first;
+}
+
+void Gui::progressSpinner(const char* label, const float radius, const float thickness, bool center) {
+	ImGuiWindow* window = ImGui::GetCurrentWindow();
+	ImDrawList* drawList = window->DrawList;
+	const ImGuiStyle& style = ImGui::GetStyle();
+
+	ImVec2 pos = window->DC.CursorPos;
+	if (center)
+    	pos.x += (ImGui::GetContentRegionAvail().x - 2*radius) * .5f;
+
+	const ImRect bb(pos, ImVec2(pos.x + radius*2, pos.y + (radius + style.FramePadding.y)*2));
+	ImGui::ItemSize(bb, style.FramePadding.y);
+	if (!ImGui::ItemAdd(bb, window->GetID(label)))
+		return;
+
+	const float t = ImGui::GetCurrentContext()->Time;
+
+	const int num_segments = drawList->_CalcCircleAutoSegmentCount(radius);
+
+	const int start = abs(sin(t * 1.8f))*(num_segments-5);
+	const float a_min = float(M_PI*2) * ((float)start) / (float)num_segments;
+	const float a_max = float(M_PI*2) * ((float)num_segments-3) / (float)num_segments;
+
+	const ImVec2 c = ImVec2(pos.x + radius, pos.y + radius + style.FramePadding.y);
+
+	drawList->PathClear();
+
+	for (int i = 0; i < num_segments; i++) {
+		const float a = a_min + ((float)i / (float)num_segments) * (a_max - a_min);
+		drawList->PathLineTo(ImVec2(
+			c.x + cos(a + t*8) * radius,
+			c.y + sin(a + t*8) * radius));
+	}
+
+	drawList->PathStroke(ImGui::GetColorU32(ImGuiCol_Text), 0, thickness);
 }
 
 Gui::Gui(Swapchain& swapchain, vk::raii::Queue queue, const uint32_t queueFamily, const vk::ImageLayout dstLayout, const bool clear)

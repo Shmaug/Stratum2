@@ -100,6 +100,7 @@ public:
 		return ret;
 	}
 
+	static void progressSpinner(const char* label, const float radius = 15, const float thickness = 6, const bool center = true);
 
 	static ImFont* gHeaderFont;
 	static unordered_map<Image::View, pair<vk::raii::DescriptorSet, vk::raii::Sampler>> gTextureIDs;

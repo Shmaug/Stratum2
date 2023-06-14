@@ -26,6 +26,8 @@ private:
 	PushConstants mRasterPushConstants;
 	unordered_map<string, bool> mDefines;
 
+	float mRenderScale = 1.f;
+
 	bool mFixSeed;
 	bool mDenoise;
 	bool mTonemap;
