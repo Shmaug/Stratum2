@@ -46,6 +46,7 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 		mPushConstants["mGIReuseRadius"]  = 16.f;
 		mPushConstants["mGIReuseSamples"] = 3u;
 		mDefines["gUseReconnection"] = false;
+		mDefines["gTemporalReuse"] = false;
 
 		mDenoise = true;
 		mTonemap = true;
@@ -175,6 +176,7 @@ void ReSTIRPT::drawGui() {
 					pushConstantField.operator()<float>   ("GI reuse radius", "mGIReuseRadius", 0, 1000);
 					pushConstantField.operator()<uint32_t>("GI reuse samples", "mGIReuseSamples", 0, 32);
 					defineCheckbox("Enable reconnection", "gUseReconnection");
+					defineCheckbox("Temporal reuse", "gTemporalReuse");
 				}
 				ImGui::Unindent();
 			}
