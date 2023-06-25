@@ -22,7 +22,6 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 		mDefines["gShadingNormals"] = true;
 		mDefines["gNormalMaps"]     = true;
 		mDefines["gLambertian"]     = false;
-		mDefines["gNoGI"]           = false;
 		mDefines["gDebugFastBRDF"]  = false;
 		mDefines["gDebugPixel"]     = false;
 
@@ -30,13 +29,6 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 		mPushConstants["mMaxDiffuseBounces"] = 3u;
 		mPushConstants["mMaxNullCollisions"] = 1000u;
 		mPushConstants["mEnvironmentSampleProbability"] = 0.f;
-
-		mDefines["gReSTIR_DI"] = false;
-		mPushConstants["mDICandidateSamples"] = 32u;
-		mDefines["gReSTIR_DI_Reuse"] = false;
-		mDefines["gReSTIR_DI_Reuse_Visibility"] = false;
-		mPushConstants["mDIMaxM"] = 3.f;
-		mPushConstants["mDIReuseRadius"] = 32.f;
 
 		mDefines["gReSTIR_GI"] = false;
 		mPushConstants["mGICandidateSamples"] = 4u;
@@ -91,7 +83,6 @@ void ReSTIRPT::drawGui() {
 	ImGui::PushID(this);
 
 	if (mDefines.at("gCountRays") && mRayCount.mBuffer) {
-
 		const auto[rps,rpsUnit] = formatNumber(mRayCount.mCurrentValue[0]/mCounterDt);
 		const auto[shift,shiftUnit] = formatNumber(mDebugCounters.mCurrentValue[0]/mCounterDt);
 
@@ -154,7 +145,6 @@ void ReSTIRPT::drawGui() {
 		defineCheckbox("Shading normals",    "gShadingNormals");
 		defineCheckbox("Normal maps",        "gNormalMaps");
 		defineCheckbox("Force lambertian",   "gLambertian");
-		defineCheckbox("Disable GI",         "gNoGI");
 		defineCheckbox("Debug fast BRDF",    "gDebugFastBRDF");
 		defineCheckbox("Debug pixel (ctrl)", "gDebugPixel");
 		defineCheckbox("Count rays",         "gCountRays");
@@ -167,29 +157,19 @@ void ReSTIRPT::drawGui() {
 		pushConstantField.operator()<float>   ("Environment sample probability", "mEnvironmentSampleProbability", 0, 1, 0);
 		ImGui::Separator();
 
-		if (mDefines.at("gNoGI")) {
-			defineCheckbox("ReSTIR DI", "gReSTIR_DI");
-			if (mDefines.at("gReSTIR_DI")) {
-				ImGui::Indent();
-				pushConstantField.operator()<uint32_t>("DI candidate samples", "mDICandidateSamples", 0, 128, 0.25f);
-				defineCheckbox("ReSTIR DI reuse", "gReSTIR_DI_Reuse");
-				defineCheckbox("ReSTIR DI reuse visibility", "gReSTIR_DI_Reuse_Visibility");
-				pushConstantField.operator()<float>("DI max M", "mDIMaxM", 0, 10, .1f);
-				pushConstantField.operator()<float>("DI reuse radius", "mDIReuseRadius", 0, 1000);
-				ImGui::Unindent();
-			}
-		} else {
+		{
 			defineCheckbox("ReSTIR GI", "gReSTIR_GI");
 			if (mDefines.at("gReSTIR_GI")) {
 				ImGui::Indent();
 				pushConstantField.operator()<uint32_t>("GI candidate samples", "mGICandidateSamples", 0, 128, 0.25f);
 				defineCheckbox("ReSTIR GI reuse", "gReSTIR_GI_Reuse");
 				if (mDefines.at("gReSTIR_GI_Reuse")) {
-					pushConstantField.operator()<float>   ("GI max M", "mGIMaxM", 0, 10, .1f);
-					pushConstantField.operator()<float>   ("GI reuse radius", "mGIReuseRadius", 0, 1000);
-					pushConstantField.operator()<uint32_t>("GI reuse samples", "mGIReuseSamples", 0, 32);
 					defineCheckbox("Enable reconnection", "gUseReconnection");
 					defineCheckbox("Temporal reuse", "gTemporalReuse");
+					if (mDefines.at("gTemporalReuse"))
+						pushConstantField.operator()<float>   ("GI max M", "mGIMaxM", 0, 10, .1f);
+					pushConstantField.operator()<float>   ("GI reuse radius", "mGIReuseRadius", 0, 1000);
+					pushConstantField.operator()<uint32_t>("GI reuse samples", "mGIReuseSamples", 0, 32);
 				}
 				ImGui::Unindent();
 			}
@@ -201,7 +181,7 @@ void ReSTIRPT::drawGui() {
 		ImGui::Separator();
 
 		ImGui::Checkbox("Visualize reconnection vertices", &mShowRcVertices);
-		if (mShowRcVertices && !mDefines.at("gNoGI") && mDefines.at("gReSTIR_GI")) {
+		if (mShowRcVertices && mDefines.at("gReSTIR_GI")) {
 			ImGui::Indent();
 			Gui::scalarField<float>("Line radius", &mRasterPushConstants.at("mLineRadius").get<float>(), 0, 1, .01f);
 			Gui::scalarField<float>("Line length", &mRasterPushConstants.at("mLineLength").get<float>(), 0, 1, .01f);
@@ -342,45 +322,25 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 	descriptors[{ "gPathTracer.mFramebuffer.mDebugCounters", 0u }] = mDebugCounters.mBuffer;
 	descriptors[{ "gPathTracer.mScene.mRayCount", 0u }]            = mRayCount.mBuffer;
 
-	mPushConstants["mReservoirHistoryValid"] = 1u;
-	for (uint32_t i = 0; i < mPrevReservoirDataDI.size(); i++) {
-		const string id = "mReservoirDataDI["+to_string(i)+"]";
-		const Image::View& prev = mPrevReservoirDataDI[i];
-		const Image::View reservoirData = mResourcePool.getImage(commandBuffer.mDevice, id, Image::Metadata{
-			.mFormat = vk::Format::eR32G32B32A32Sfloat,
-			.mExtent = extent,
-			.mUsage = vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eTransferSrc|vk::ImageUsageFlagBits::eTransferDst,
-		});
-		descriptors[{ "gPathTracer.mFramebuffer.mReservoirDataDI", i }] = ImageDescriptor{ reservoirData, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
-		descriptors[{ "gPathTracer.mFramebuffer.mPrevReservoirDataDI", i }] = ImageDescriptor{ prev ? prev : reservoirData, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderRead, {} };
-		if (!prev)
-			mPushConstants["mReservoirHistoryValid"] = 0u;
-
-		if (mDefines.at("gReSTIR_DI_Reuse"))
-			reservoirData.clearColor(commandBuffer, vk::ClearColorValue{array<float,4>{0,0,0,0}});
-
-		mPrevReservoirDataDI[i] = reservoirData;
-	}
-	for (uint32_t i = 0; i < mPrevReservoirDataGI.size(); i++) {
+	mPushConstants["mReservoirHistoryValid"] = ImGui::IsKeyDown(ImGuiKey_F5) ? 0u : 1u;
+	for (uint32_t i = 0; i < mPrevPathReservoirData.size(); i++) {
 		const string id = "mReservoirDataGI["+to_string(i)+"]";
-		const Image::View& prev = mPrevReservoirDataGI[i];
+		const Image::View& prev = mPrevPathReservoirData[i];
 		const Image::View reservoirData = mResourcePool.getImage(commandBuffer.mDevice, id, Image::Metadata{
 			.mFormat = vk::Format::eR32G32B32A32Sfloat,
 			.mExtent = extent,
 			.mUsage = vk::ImageUsageFlagBits::eStorage|vk::ImageUsageFlagBits::eSampled|vk::ImageUsageFlagBits::eTransferSrc|vk::ImageUsageFlagBits::eTransferDst,
 		});
-		descriptors[{ "gPathTracer.mFramebuffer.mReservoirDataGI", i }] = ImageDescriptor{ reservoirData, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
-		descriptors[{ "gPathTracer.mFramebuffer.mPrevReservoirDataGI", i }] = ImageDescriptor{ prev ? prev : reservoirData, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderRead, {} };
+		descriptors[{ "gPathTracer.mFramebuffer.mPathReservoirData", i }] = ImageDescriptor{ reservoirData, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderWrite, {} };
+		descriptors[{ "gPathTracer.mFramebuffer.mPrevPathReservoirData", i }] = ImageDescriptor{ prev ? prev : reservoirData, vk::ImageLayout::eGeneral, vk::AccessFlagBits::eShaderRead, {} };
 		if (!prev)
 			mPushConstants["mReservoirHistoryValid"] = 0u;
 
 		if (mDefines.at("gReSTIR_GI"))
 			reservoirData.clearColor(commandBuffer, vk::ClearColorValue{array<float,4>{0,0,0,0}});
 
-		mPrevReservoirDataGI[i] = reservoirData;
+		mPrevPathReservoirData[i] = reservoirData;
 	}
-	if (ImGui::IsKeyDown(ImGuiKey_F5))
-		mPushConstants["mReservoirHistoryValid"] = 0u;
 
 	bool changed = false;
 	bool hasMedia = false;
@@ -595,7 +555,7 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 	}
 
 	// rasterize reconnection vertices
-	if (mShowRcVertices && !mDefines.at("gNoGI") && mDefines.at("gReSTIR_GI")) {
+	if (mShowRcVertices && mDefines.at("gReSTIR_GI")) {
 		if (!mRasterPipeline || renderTarget.image()->format() != mRasterPipeline.pipelineMetadata().mDynamicRenderingState->mColorFormats[0]) {
 			GraphicsPipeline::GraphicsMetadata gmd;
 			gmd.mColorBlendState = GraphicsPipeline::ColorBlendState();

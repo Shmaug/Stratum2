@@ -108,7 +108,7 @@ extension PathTracer {
 
         PackedPathReservoir r;
 
-        const float4 data3 = mFramebuffer.mPrevReservoirDataGI[3][pixelIndex];
+        const float4 data3 = mFramebuffer.mPrevPathReservoirData[3][pixelIndex];
         r.W = data3.x;
         r.M = data3.y;
         r.mCachedTargetWeight = data3.z;
@@ -117,9 +117,9 @@ extension PathTracer {
         if (r.M <= 0) // null reservoir
             return none;
 
-        r.mBaseVertex  = reinterpret<PackedVertex>(mFramebuffer.mPrevReservoirDataGI[0][pixelIndex]);
-        r.mSuffix.mRngSeed    = reinterpret<uint4>(mFramebuffer.mPrevReservoirDataGI[1][pixelIndex]);
-        r.mSuffix.mPackedData = reinterpret<uint4>(mFramebuffer.mPrevReservoirDataGI[2][pixelIndex]);
+        r.mBaseVertex  = reinterpret<PackedVertex>(mFramebuffer.mPrevPathReservoirData[0][pixelIndex]);
+        r.mSuffix.mRngSeed    = reinterpret<uint4>(mFramebuffer.mPrevPathReservoirData[1][pixelIndex]);
+        r.mSuffix.mPackedData = reinterpret<uint4>(mFramebuffer.mPrevPathReservoirData[2][pixelIndex]);
 
 		#ifdef gUseReconnection
         r.mSuffix.mReconnectionVertex = LoadPrevReconnectionVertex(mFramebuffer, pixelIndex);
@@ -132,16 +132,14 @@ extension PathTracer {
 		baseVertex.mLocalPosition = mScene.mInstanceInverseTransforms[vertex.mInstanceIndex].transformPoint(vertex.mShadingData.mPosition);
         baseVertex.mInstancePrimitiveIndex = vertex.mInstancePrimitiveIndex;
 
-        mFramebuffer.mReservoirDataGI[0][sPixelIndex] = reinterpret<float4>(baseVertex);
-        mFramebuffer.mReservoirDataGI[1][sPixelIndex] = reinterpret<float4>(r.p.mSuffix.mRngSeed);
-        mFramebuffer.mReservoirDataGI[2][sPixelIndex] = reinterpret<float4>(r.p.mSuffix.mPackedData);
-        mFramebuffer.mReservoirDataGI[3][sPixelIndex] = float4(
+        mFramebuffer.mPathReservoirData[0][sPixelIndex] = reinterpret<float4>(baseVertex);
+        mFramebuffer.mPathReservoirData[1][sPixelIndex] = reinterpret<float4>(r.p.mSuffix.mRngSeed);
+        mFramebuffer.mPathReservoirData[2][sPixelIndex] = reinterpret<float4>(r.p.mSuffix.mPackedData);
+        mFramebuffer.mPathReservoirData[3][sPixelIndex] = float4(
             r.GetSampleTargetWeight() > 0 ? r.W : 0,
             min(r.M, gPushConstants.mGIMaxM),
             0,
             0);
-
-        DebugPrintf(sPixelIndex + uint2(0, 1), "\tStoring neighbor | Contrib: %f | W: %f | M: %f\n", luminance(r.p.mContribution), r.W, r.M);
 
         #ifdef gUseReconnection
 		StoreReconnectionVertex(mFramebuffer, sPixelIndex, r.p.mSuffix.mReconnectionVertex);
@@ -187,11 +185,8 @@ extension PathTracer {
 
                 if (r.Merge(rng, ri, ri.M, jacobian)) {
                     selected_i = int(i);
-                    DebugPrintf(sPixelIndex, "Selecting %u | Contrib: %f | W: %f | M: %f | Jacobian: %f |      ", i, luminance(ri.p.mContribution), ri.W, ri.M, jacobian);
                 }
             }
-
-            DebugPrintf(sPixelIndex, "Done merging. Selected %d | Contrib: %f | W: %f |      ", selected_i, luminance(r.p.mContribution), r.W);
 
 			// finalize MIS weight
             if (r.W > 0) {
@@ -213,10 +208,7 @@ extension PathTracer {
                 }
                 const float before = r.W;
                 r.W = safe_divide(r.W, Z);
-                DebugPrintf(sPixelIndex, "r.W before: %f | After: %f", before, r.W);
             }
-
-            DebugPrintf(sPixelIndex, "\n");
 
             r.FinalizeMerge();
 		}

@@ -37,8 +37,7 @@ private:
 	bool mShowRcVertices = false;
 	GraphicsPipelineCache mRasterPipeline;
 
-	array<Image::View, 3> mPrevReservoirDataDI;
-	array<Image::View, 6> mPrevReservoirDataGI;
+	array<Image::View, 6> mPrevPathReservoirData;
 
 	chrono::high_resolution_clock::time_point mLastSceneVersion;
 

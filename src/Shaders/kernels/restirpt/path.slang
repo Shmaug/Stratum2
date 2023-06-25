@@ -1,8 +1,8 @@
 #pragma once
 
-#include "pt.slang"
+#include "di.slang"
 
-#define gMinReconnectionDistance 0.1
+#define gMinReconnectionDistance 0.0
 
 struct PathSuffix {
     uint4 mRngSeed;
@@ -21,8 +21,13 @@ struct PathSuffix {
     };
     // number of path segments in the whole path
     property uint mPathLength {
-        get { return BF_GET(mPackedData[0],           8, 16); }
-        set {        BF_SET(mPackedData[0], newValue, 8, 16); }
+        get { return BF_GET(mPackedData[0],           16, 8); }
+        set {        BF_SET(mPackedData[0], newValue, 16, 8); }
+    };
+	// specifies whether the last vertex was sampled with next event estimation. Always false if a reconnection vertex exists.
+    property bool mReplayNee {
+        get { return bool(BF_GET(mPackedData[0],                 24, 1)); }
+        set {        bool(BF_SET(mPackedData[0], uint(newValue), 24, 1)); }
     };
     // path pdf before the reconnection vertex
     property float mPrefixPdfW {
@@ -81,21 +86,29 @@ struct Path {
 
     // Called when a reconnectable vertex is found
 	// must be called BEFORE mContribution and mPdfW are modified with directionSample's reflectance and pdf
+	// when directionSample is none, the reconnection vertex is an emissive vertex
+	// Note: mReconnectionVertex.mRadiance temporarily stored here, then finalized in Terminate()
 	[mutating]
     void SetReconnectionVertex(const SceneParameters scene, const PathVertex vertex, const Optional<DirectionSampleRecord> directionSample = none) {
 		mSuffix.mReconnectionVertex.mVertex.mLocalPosition = scene.mInstanceInverseTransforms[vertex.mInstanceIndex].transformPoint(vertex.mShadingData.mPosition);
         mSuffix.mReconnectionVertex.mVertex.mInstancePrimitiveIndex = vertex.mInstancePrimitiveIndex;
-        mSuffix.mReconnectionVertex.mLocalDirOut = directionSample.hasValue ? directionSample.value.mDirection : 0;
-        mSuffix.mReconnectionVertex.mRadiance = mContribution * (directionSample.hasValue ? directionSample.value.mReflectance : 1); // temporarily stored here, finalized in Terminate()
+        if (directionSample.hasValue) {
+            mSuffix.mReconnectionVertex.mLocalDirOut = directionSample.value.mDirection;
+            mSuffix.mReconnectionVertex.mRadiance = mContribution * directionSample.value.mReflectance; // temporarily stored here, finalized in Terminate()
+        } else {
+            mSuffix.mReconnectionVertex.mLocalDirOut = 0;
+            mSuffix.mReconnectionVertex.mRadiance = mContribution; // temporarily stored here, finalized in Terminate()
+		}
         mSuffix.mPrefixLength = mLength;
         mSuffix.mSuffixDiffuseBounces = mDiffuseBounces; // temporarily stored here, finalized in Terminate()
         mSuffix.mPrefixPdfW = mPrevPdfW;
         mSuffix.mReconnectionDist = mPrevDist;
         mSuffix.mReconnectionCos = abs(vertex.mLocalDirIn.z);
+        mSuffix.mReplayNee = false;
 	}
 
 	[mutating]
-    void Terminate(const float3 emission) {
+    void Terminate(const float3 emission, const bool isNee = false) {
         mContribution *= emission;
         // finalize the reconnection vertex
         if (mSuffix.HasReconnectionVertex()) {
@@ -104,8 +117,10 @@ struct Path {
             mSuffix.mReconnectionVertex.mRadiance.g = safe_divide(mContribution.g, mSuffix.mReconnectionVertex.mRadiance.g);
             mSuffix.mReconnectionVertex.mRadiance.b = safe_divide(mContribution.b, mSuffix.mReconnectionVertex.mRadiance.b);
             mSuffix.mSuffixDiffuseBounces = mDiffuseBounces - mSuffix.mSuffixDiffuseBounces;
-        } else
+        } else {
             mSuffix.mPrefixPdfW = mPdfW;
+            mSuffix.mReplayNee = isNee;
+        }
 		mSuffix.mPathLength = mLength;
         mTerminated = true;
 	}
@@ -196,7 +211,7 @@ extension PathTracer {
 
         p.mRcJacobian = safe_divide(cos_rcv, basePath.mReconnectionCos) * pow2(safe_divide(basePath.mReconnectionDist, dist));
 
-		p.mSuffix = basePath;
+        p.mSuffix = basePath;
         p.mSuffix.mPrefixPdfW = p.mPdfW;
         p.mSuffix.mReconnectionCos = cos_rcv;
         p.mSuffix.mReconnectionDist = dist;
@@ -247,39 +262,47 @@ extension PathTracer {
         }
 
         // sample direction
-        DirectionSampleRecord s = bsdf.sampleDirection<false>(rng.nextFloat().xyz, vertex.mLocalDirIn);
-        if (!isMedium)
-            s.mReflectance *= vertex.mShadingData.shadingNormalCorrection<false>(vertex.mLocalDirIn, s.mDirection);
-
-        if (all(s.mReflectance <= 0) || s.mFwdPdfW <= 0) {
+        const DirectionSampleRecord s = bsdf.sampleDirection<false>(rng.nextFloat().xyz, vertex.mLocalDirIn);
+        if (all(p.mContribution <= 0) || s.mFwdPdfW <= 0) {
             p.Terminate(0);
             return 0;
         }
 
-        if (isDiffuse)
-            p.mDiffuseBounces++;
+		// connection strategies
+        if (isDiffuse) {
+			p.mDiffuseBounces++;
 
-		#ifdef gUseReconnection
-        // attempt to connect to basePath
-        if (!isCanonical && isDiffuse && basePath.value.HasReconnectionVertex()) {
-            Reconnect(p, vertex, bsdf, rng, basePath.value);
-			if (p.mTerminated)
-            	return 0;
-		}
+			// next event estimation
+			#ifdef gNee
+            const DirectIlluminationSample s = DirectIllumination(vertex, bsdf, rng);
+			#endif
 
-        // store first reconnectable vertex
-        if (isCanonical && p.mIsPrevVertexDiffuse && isDiffuse && !p.mSuffix.HasReconnectionVertex() && p.mPrevDist >= gMinReconnectionDistance) {
-            p.SetReconnectionVertex(mScene, vertex, s);
+			#ifdef gUseReconnection
+			// attempt to connect to basePath
+			if (!isCanonical && basePath.value.HasReconnectionVertex()) {
+				Reconnect(p, vertex, bsdf, rng, basePath.value);
+				if (p.mTerminated)
+					return 0;
+			}
+
+			// store first reconnectable vertex
+			if (isCanonical && p.mIsPrevVertexDiffuse && !p.mSuffix.HasReconnectionVertex() && p.mPrevDist >= gMinReconnectionDistance) {
+				p.SetReconnectionVertex(mScene, vertex, s);
+			}
+			#endif
         }
-		#endif
-
-		// modify throughput and pdf, return sampled direction
 
         p.mPrevPdfW = p.mPdfW;
-		p.mContribution *= s.mReflectance;
-		p.mPdfW         *= s.mFwdPdfW;
         p.mIsPrevVertexDiffuse = isDiffuse;
 
+        // modify contribution and pdf
+		p.mPdfW         *= s.mFwdPdfW;
+        p.mContribution *= s.mReflectance;
+        if (!isMedium)
+            p.mContribution *= vertex.mShadingData.shadingNormalCorrection<false>(vertex.mLocalDirIn, s.mDirection);
+
+
+		// return sampled direction
         return isMedium ? s.mDirection : vertex.mShadingData.toWorld(s.mDirection);
     }
 

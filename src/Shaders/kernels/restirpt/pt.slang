@@ -47,12 +47,6 @@ struct PushConstants {
 #include "common/lights.hlsli"
 #include "rcv.slang"
 
-enum ReuseMISType : uint {
-    eTalbot,
-    ePairwise,
-    eSimple
-};
-
 struct PathVertex {
     ShadingData mShadingData;
     uint mInstancePrimitiveIndex;
@@ -99,7 +93,7 @@ struct PathTracer {
 	static uint2 sPixelIndex;
 
 	// samples a camera ray
-	PathVertex SampleVisibility(const uint2 index, inout RandomSampler rng, out float3 throughput) {
+	PathVertex SampleVisibility(const uint2 index, inout RandomSampler rng, out Spectrum throughput) {
 		const uint viewIndex = getViewIndex(index, gPushConstants.mOutputExtent, gPushConstants.mViewCount);
 
 		float2 uv;
@@ -167,3 +161,5 @@ interface Interaction {
 };
 extension PackedMaterialData : Interaction {};
 extension Medium : Interaction {};
+
+// path tracing functions in path.slang

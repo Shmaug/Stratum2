@@ -18,11 +18,8 @@ struct RenderParams {
 
     RWStructuredBuffer<uint> mDebugCounters;
 
-    RWTexture2D<float4> mReservoirDataDI[3];
-    RWTexture2D<float4> mPrevReservoirDataDI[3];
-
-    RWTexture2D<float4> mReservoirDataGI[6];
-    RWTexture2D<float4> mPrevReservoirDataGI[6];
+    RWTexture2D<float4> mPathReservoirData[6];
+    RWTexture2D<float4> mPrevPathReservoirData[6];
 };
 
 typedef float3 Vector3;
@@ -68,11 +65,11 @@ struct ReconnectionVertex {
 };
 ReconnectionVertex LoadPrevReconnectionVertex(const RenderParams framebuffer, const uint2 pixelIndex) {
     ReconnectionVertex r;
-	r.mVertex = reinterpret<PackedVertex>(framebuffer.mPrevReservoirDataGI[4][pixelIndex]);
-	r.mPackedData = reinterpret<uint4>(framebuffer.mPrevReservoirDataGI[5][pixelIndex]);
+	r.mVertex = reinterpret<PackedVertex>(framebuffer.mPrevPathReservoirData[4][pixelIndex]);
+	r.mPackedData = reinterpret<uint4>(framebuffer.mPrevPathReservoirData[5][pixelIndex]);
 	return r;
 }
 void StoreReconnectionVertex(const RenderParams framebuffer, const uint2 pixelIndex, const ReconnectionVertex rcv) {
-	framebuffer.mReservoirDataGI[4][pixelIndex] = reinterpret<float4>(rcv.mVertex);
-	framebuffer.mReservoirDataGI[5][pixelIndex] = reinterpret<float4>(rcv.mPackedData);
+	framebuffer.mPathReservoirData[4][pixelIndex] = reinterpret<float4>(rcv.mVertex);
+	framebuffer.mPathReservoirData[5][pixelIndex] = reinterpret<float4>(rcv.mPackedData);
 }
