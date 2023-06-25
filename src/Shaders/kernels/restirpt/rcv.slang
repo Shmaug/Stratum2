@@ -2,6 +2,8 @@
 
 #include "common/shading_data.hlsli"
 
+// this is a separate file so that it can be included by the path tracer and the rcv visualizer (rcv_vis.slang)
+
 struct RenderParams {
     StructuredBuffer<ViewData> mViews;
     StructuredBuffer<TransformData> mViewTransforms;

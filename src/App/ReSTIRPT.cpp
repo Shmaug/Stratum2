@@ -26,7 +26,6 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 		mDefines["gDebugFastBRDF"]  = false;
 		mDefines["gDebugPixel"]     = false;
 
-		mFixSeed = false;
 		mPushConstants["mMaxDepth"] = 8u;
 		mPushConstants["mMaxDiffuseBounces"] = 3u;
 		mPushConstants["mMaxNullCollisions"] = 1000u;
@@ -48,10 +47,6 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 		mDefines["gUseReconnection"] = false;
 		mDefines["gTemporalReuse"] = false;
 
-		mDenoise = true;
-		mTonemap = true;
-
-		mShowRcVertices = false;
 		mRasterPushConstants["mLineRadius"] = .0025f;
 		mRasterPushConstants["mLineLength"] = .02f;
 	}
@@ -127,6 +122,24 @@ void ReSTIRPT::drawGui() {
 	}
 	ImGui::SliderFloat("Render scale", &mRenderScale, 0.01f, 2.f);
 
+	ImGui::Checkbox("Pause", &mPauseRender);
+	if (mPauseRender) {
+		ImGui::SameLine();
+		if (ImGui::Button("Render once")) {
+			mRenderOnce = true;
+		}
+	}
+
+	const shared_ptr<Denoiser> denoiser = mDenoise ? mNode.findDescendant<Denoiser>() : nullptr;
+	if (denoiser) {
+		ImGui::Text("%u frames accumulated", denoiser->accumulatedFrames());
+		ImGui::SameLine();
+		if (ImGui::Button("Reset"))
+		denoiser->resetAccumulation();
+	}
+
+	ImGui::Separator();
+
 	{
 		auto defineCheckbox = [&](const char* label, const char* name) {
 			if (ImGui::Checkbox(label, &mDefines.at(name)))
@@ -196,11 +209,8 @@ void ReSTIRPT::drawGui() {
 		}
 	}
 
-	if (changed && mDenoise) {
-		const shared_ptr<Denoiser> denoiser = mNode.findDescendant<Denoiser>();
-		if (denoiser)
-			denoiser->resetAccumulation();
-	}
+	if (changed && denoiser)
+		denoiser->resetAccumulation();
 
 	if (ImGui::CollapsingHeader("Resources")) {
 		ImGui::Indent();
@@ -212,6 +222,13 @@ void ReSTIRPT::drawGui() {
 }
 
 void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTarget) {
+	if (mPauseRender) {
+		if (mRenderOnce)
+			mRenderOnce = false;
+		else
+			return;
+	}
+
 	ProfilerScope ps("TestRenderer::render", &commandBuffer);
 
 	mResourcePool.clean();
@@ -326,9 +343,9 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 	descriptors[{ "gPathTracer.mScene.mRayCount", 0u }]            = mRayCount.mBuffer;
 
 	mPushConstants["mReservoirHistoryValid"] = 1u;
-	for (uint32_t i = 0; i < 3; i++) {
+	for (uint32_t i = 0; i < mPrevReservoirDataDI.size(); i++) {
 		const string id = "mReservoirDataDI["+to_string(i)+"]";
-		const Image::View prev = mResourcePool.getLastImage(id);
+		const Image::View& prev = mPrevReservoirDataDI[i];
 		const Image::View reservoirData = mResourcePool.getImage(commandBuffer.mDevice, id, Image::Metadata{
 			.mFormat = vk::Format::eR32G32B32A32Sfloat,
 			.mExtent = extent,
@@ -341,10 +358,12 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 
 		if (mDefines.at("gReSTIR_DI_Reuse"))
 			reservoirData.clearColor(commandBuffer, vk::ClearColorValue{array<float,4>{0,0,0,0}});
+
+		mPrevReservoirDataDI[i] = reservoirData;
 	}
-	for (uint32_t i = 0; i < 6; i++) {
+	for (uint32_t i = 0; i < mPrevReservoirDataGI.size(); i++) {
 		const string id = "mReservoirDataGI["+to_string(i)+"]";
-		const Image::View prev = mResourcePool.getLastImage(id);
+		const Image::View& prev = mPrevReservoirDataGI[i];
 		const Image::View reservoirData = mResourcePool.getImage(commandBuffer.mDevice, id, Image::Metadata{
 			.mFormat = vk::Format::eR32G32B32A32Sfloat,
 			.mExtent = extent,
@@ -357,6 +376,8 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 
 		if (mDefines.at("gReSTIR_GI"))
 			reservoirData.clearColor(commandBuffer, vk::ClearColorValue{array<float,4>{0,0,0,0}});
+
+		mPrevReservoirDataGI[i] = reservoirData;
 	}
 	if (ImGui::IsKeyDown(ImGuiKey_F5))
 		mPushConstants["mReservoirHistoryValid"] = 0u;
@@ -463,8 +484,10 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 		sphere[3] = length<float,3>(sceneData.mAabbMax - sphere.head<3>());
 		mPushConstants["mSceneSphere"] = sphere;
 
-		if (changed && !mFixSeed && mDenoise && denoiser && !denoiser->reprojection())
+		if (changed && !mFixSeed && mDenoise && denoiser && !denoiser->reprojection()) {
 			denoiser->resetAccumulation();
+			mPushConstants["mReservoirHistoryValid"] = 0u;
+		}
 
 		if (mFixSeed)
 			mPushConstants["mRandomSeed"] = 0u;

@@ -6,26 +6,6 @@
 #define gGIMis ReuseMISType::eSimple
 #endif
 
-struct SampleLocationGenerator {
-    RandomSampler mSeed;
-    int2 mCenter;
-
-    __init(inout RandomSampler rng, const int2 center) {
-        mSeed = rng;
-        rng.skipNext(gPushConstants.mGIReuseSamples);
-        mCenter = center;
-	}
-
-    __subscript(uint index) -> int2 {
-        get {
-			RandomSampler tmp_rng = mSeed;
-			tmp_rng.skipNext(index);
-            const float2 discRng = tmp_rng.nextFloat().xy;
-            return mCenter + int2(sampleConcentricDisc(discRng.x, discRng.y) * gPushConstants.mGIReuseRadius);
-        }
-    }
-};
-
 struct PathReservoir {
     Path p;
     float W;
@@ -74,9 +54,9 @@ struct PathReservoir {
     }
 
     [mutating]
-    bool Merge(inout RandomSampler rng, const PathReservoir r, const float misWeight = 1) {
+    bool Merge(inout RandomSampler rng, const PathReservoir r, const float misWeight = 1, const float jacobian = 1) {
         M += r.M;
-        const float w = r.GetResamplingWeight() * misWeight;
+        const float w = r.GetResamplingWeight() * jacobian * misWeight;
         W += w;
         if (rng.nextFloat().x * W <= w) {
             p = r.p;
@@ -85,35 +65,61 @@ struct PathReservoir {
         return false;
 	}
 };
+struct PackedPathReservoir {
+    PackedVertex mBaseVertex;
+    PathSuffix mSuffix;
+    float W;
+    float M;
+    float mCachedTargetWeight;
+    uint mLocalDirIn;
 
-// ReSTIR estimator
+    PathVertex GetBaseVertex(const SceneParameters scene, const RenderParams framebuffer) {
+        const ShadingData sd = mBaseVertex.getShadingData(scene);
+        const float3 localDirIn = sd.toLocal(normalize(framebuffer.mViewTransforms[0].transformPoint(0) - sd.mPosition));
+        return PathVertex(scene, sd, mBaseVertex.mInstancePrimitiveIndex, -1, packNormal(localDirIn));
+    }
+};
+
+// Spatial reuse pattern
+struct SampleLocationGenerator {
+    RandomSampler mSeed;
+    int2 mCenter;
+
+    __init(inout RandomSampler rng, const int2 center) {
+        mSeed = rng;
+        rng.skipNext(gPushConstants.mGIReuseSamples);
+        mCenter = center;
+	}
+
+    __subscript(uint index) -> int2 {
+        get {
+			RandomSampler tmp_rng = mSeed;
+			tmp_rng.skipNext(index);
+            const float2 discRng = tmp_rng.nextFloat().xy;
+            return mCenter + int2(sampleConcentricDisc(discRng.x, discRng.y) * gPushConstants.mGIReuseRadius);
+        }
+    }
+};
 
 extension PathTracer {
-	struct PathReservoirData {
-		PackedVertex mBaseVertex;
-        PathSuffix mSuffix;
-		float W;
-        float M;
-        float mCachedTargetWeight;
-        uint mLocalDirIn;
+    Optional<PackedPathReservoir> LoadReservoir(const int2 pixelIndex) {
+        if (any(pixelIndex < 0) || any(pixelIndex >= gPushConstants.mOutputExtent))
+            return none;
 
-        PathVertex GetBaseVertex(const SceneParameters scene, const RenderParams fb) {
-            const ShadingData sd = mBaseVertex.getShadingData(scene);
-            const float3 localDirIn = sd.toLocal(normalize(fb.mViewTransforms[0].transformPoint(0) - sd.mPosition));
-            return PathVertex(scene, sd, mBaseVertex.mInstancePrimitiveIndex, -1, packNormal(localDirIn));
-		}
-    };
-    PathReservoirData LoadReservoir(const uint2 pixelIndex) {
-        PathReservoirData r;
-        r.mBaseVertex  = reinterpret<PackedVertex>(mFramebuffer.mPrevReservoirDataGI[0][pixelIndex]);
-        r.mSuffix.mRngSeed    = reinterpret<uint4>(mFramebuffer.mPrevReservoirDataGI[1][pixelIndex]);
-        r.mSuffix.mPackedData = reinterpret<uint4>(mFramebuffer.mPrevReservoirDataGI[2][pixelIndex]);
+        PackedPathReservoir r;
 
         const float4 data3 = mFramebuffer.mPrevReservoirDataGI[3][pixelIndex];
         r.W = data3.x;
         r.M = data3.y;
         r.mCachedTargetWeight = data3.z;
         r.mLocalDirIn = asuint(data3.w);
+
+        if (r.M <= 0) // null reservoir
+            return none;
+
+        r.mBaseVertex  = reinterpret<PackedVertex>(mFramebuffer.mPrevReservoirDataGI[0][pixelIndex]);
+        r.mSuffix.mRngSeed    = reinterpret<uint4>(mFramebuffer.mPrevReservoirDataGI[1][pixelIndex]);
+        r.mSuffix.mPackedData = reinterpret<uint4>(mFramebuffer.mPrevReservoirDataGI[2][pixelIndex]);
 
 		#ifdef gUseReconnection
         r.mSuffix.mReconnectionVertex = LoadPrevReconnectionVertex(mFramebuffer, pixelIndex);
@@ -131,14 +137,18 @@ extension PathTracer {
         mFramebuffer.mReservoirDataGI[2][sPixelIndex] = reinterpret<float4>(r.p.mSuffix.mPackedData);
         mFramebuffer.mReservoirDataGI[3][sPixelIndex] = float4(
             r.GetSampleTargetWeight() > 0 ? r.W : 0,
-            min(r.M, gPushConstants.mGIMaxM * max(gPushConstants.mGICandidateSamples, 1)),
-            r.GetSampleTargetWeight(),
-            asfloat(vertex.mPackedLocalDirIn));
+            min(r.M, gPushConstants.mGIMaxM),
+            0,
+            0);
+
+        DebugPrintf(sPixelIndex + uint2(0, 1), "\tStoring neighbor | Contrib: %f | W: %f | M: %f\n", luminance(r.p.mContribution), r.W, r.M);
+
         #ifdef gUseReconnection
 		StoreReconnectionVertex(mFramebuffer, sPixelIndex, r.p.mSuffix.mReconnectionVertex);
 		#endif
     }
 
+    // Store reservoir for reuse & merge with neighbors
     void ReservoirReuse(const PathVertex vertex, inout RandomSampler rng, inout PathReservoir r) {
 		#ifndef gTemporalReuse
 		// without temporal reuse, we store the reservoir before merging with previous reservoirs
@@ -147,7 +157,6 @@ extension PathTracer {
 
 		if (gPushConstants.mReservoirHistoryValid != 0) {
 			const float2 prevPixel = sPixelIndex + 0.5; //mFramebuffer.mPrevUVs[sPixelIndex] * gPushConstants.mOutputExtent;
-
 			const SampleLocationGenerator sg = SampleLocationGenerator(rng, int2(prevPixel));
 
             // apply mis weight to current sample
@@ -156,58 +165,58 @@ extension PathTracer {
             int selected_i = -1;
 
 			for (uint i = 0; i < gPushConstants.mGIReuseSamples; i++) {
-                const int2 ci = sg[i];
-				if (any(ci < 0) || any(ci >= gPushConstants.mOutputExtent))
-					continue;
-                const PathReservoirData candidateData = LoadReservoir(ci);
-                if (candidateData.M <= 0)
-					continue;
+                const Optional<PackedPathReservoir> candidate = LoadReservoir(sg[i]);
+                if (!candidate.hasValue)
+                    continue;
 
-                if (candidateData.W <= 0) {
-                    r.M += candidateData.M;
+                if (candidate.value.W <= 0) {
+                    r.M += candidate.value.M;
                     continue;
                 }
 
                 PathReservoir ri;
-                ri.M = candidateData.M;
-                ri.W = candidateData.W;
+                ri.M = candidate.value.M;
+                ri.W = candidate.value.W;
                 float jacobian;
-                ri.p = GenerateShiftedPath(vertex, candidateData.mSuffix, jacobian);
+                ri.p = GenerateShiftedPath(vertex, candidate.value.mSuffix, jacobian);
                 if (jacobian <= 0) {
+					// shift failed
                     r.M += ri.M;
                     continue;
                 }
 
-                ri.W *= jacobian;
-
-                if (r.Merge(rng, ri, ri.M)) {
+                if (r.Merge(rng, ri, ri.M, jacobian)) {
                     selected_i = int(i);
+                    DebugPrintf(sPixelIndex, "Selecting %u | Contrib: %f | W: %f | M: %f | Jacobian: %f |      ", i, luminance(ri.p.mContribution), ri.W, ri.M, jacobian);
                 }
             }
+
+            DebugPrintf(sPixelIndex, "Done merging. Selected %d | Contrib: %f | W: %f |      ", selected_i, luminance(r.p.mContribution), r.W);
 
 			// finalize MIS weight
             if (r.W > 0) {
                 float Z = gPushConstants.mGICandidateSamples;
                 for (uint i = 0; i < gPushConstants.mGIReuseSamples; i++) {
-                    const int2 ci = sg[i];
-                    if (any(ci < 0) || any(ci >= gPushConstants.mOutputExtent))
-                        continue;
-                    const PathReservoirData candidateData = LoadReservoir(ci);
-                    if (candidateData.M <= 0)
+                    const Optional<PackedPathReservoir> candidate = LoadReservoir(sg[i]);
+                    if (!candidate.hasValue)
                         continue;
 
-                    if (i == selected_i) {
-                        Z += candidateData.M;
+					if (i == selected_i) {
+                        Z += candidate.value.M;
                         continue;
                     }
 
                     float jacobian;
-                    const Path pi = GenerateShiftedPath(candidateData.GetBaseVertex(mScene, mFramebuffer), r.p.mSuffix, jacobian);
+                    const Path pi = GenerateShiftedPath(candidate.value.GetBaseVertex(mScene, mFramebuffer), r.p.mSuffix, jacobian);
                     if (any(pi.mContribution > 0) && jacobian > 0)
-                        Z += candidateData.M;
+                        Z += candidate.value.M;
                 }
+                const float before = r.W;
                 r.W = safe_divide(r.W, Z);
+                DebugPrintf(sPixelIndex, "r.W before: %f | After: %f", before, r.W);
             }
+
+            DebugPrintf(sPixelIndex, "\n");
 
             r.FinalizeMerge();
 		}
@@ -218,6 +227,7 @@ extension PathTracer {
 		#endif
 	}
 
+    // ReSTIR estimator
     Spectrum EstimateRadianceReSTIR(const PathVertex vertex, inout RandomSampler rng) {
         PathReservoir r = PathReservoir();
 

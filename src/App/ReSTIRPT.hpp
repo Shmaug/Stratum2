@@ -28,11 +28,17 @@ private:
 
 	float mRenderScale = 1.f;
 
-	bool mFixSeed;
-	bool mDenoise;
-	bool mTonemap;
-	bool mShowRcVertices;
+	bool mPauseRender = false;
+	bool mRenderOnce = false;
+
+	bool mFixSeed = false;
+	bool mDenoise = true;
+	bool mTonemap = true;
+	bool mShowRcVertices = false;
 	GraphicsPipelineCache mRasterPipeline;
+
+	array<Image::View, 3> mPrevReservoirDataDI;
+	array<Image::View, 6> mPrevReservoirDataGI;
 
 	chrono::high_resolution_clock::time_point mLastSceneVersion;
 

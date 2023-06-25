@@ -23,9 +23,8 @@ struct PushConstants {
 };
 [[vk::push_constant]] ConstantBuffer<PushConstants> gPushConstants;
 
-// Use the Vulkan Configurator to redirect DebugPrintf to stdout (requires --debugMessenger)
 #ifdef gDebugPixel
-#define IsDebugPixel(pixel) ((pixel.y * gPushConstants.mOutputExtent.x + pixel.x) == gPushConstants.mDebugPixelIndex)
+#define IsDebugPixel(pixel) (((pixel).y * gPushConstants.mOutputExtent.x + (pixel).x) == gPushConstants.mDebugPixelIndex)
 #define DebugPrintf(pixel, ...) if (IsDebugPixel(pixel)) { printf(__VA_ARGS__); }
 #else
 #define IsDebugPixel(pixel) (false)

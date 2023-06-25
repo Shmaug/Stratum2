@@ -126,8 +126,8 @@ Image::View Denoiser::denoise(
 
 	Image::View accumColor, accumMoments;
 	array<Image::View,2> temp;
-	auto prevAccumColor   = mResourcePool.getLastImage("mAccumColor");
-	auto prevAccumMoments = mResourcePool.getLastImage("mAccumMoments");
+	const Image::View& prevAccumColor   = mPrevAccumColor;
+	const Image::View& prevAccumMoments = mPrevAccumMoments;
 
 	{
 		ProfilerScope ps("Create images");
@@ -243,10 +243,13 @@ Image::View Denoiser::denoise(
 		mAccumulatedFrames++;
 	} else {
 		accumColor.clearColor(commandBuffer, vk::ClearColorValue{ array<float,4>{ 0.f, 0.f, 0.f, 0.f } });
+		accumMoments.clearColor(commandBuffer, vk::ClearColorValue{ array<float,4>{ 0.f, 0.f, 0.f, 0.f } });
 		mResetAccumulation = false;
 		mAccumulatedFrames = 0;
 	}
 
+	mPrevAccumColor = accumColor;
+	mPrevAccumMoments = accumMoments;
 	mPrevVisibility = visibility;
 	mPrevDepth = depth;
 

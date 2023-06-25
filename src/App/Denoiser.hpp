@@ -64,6 +64,8 @@ private:
 
 	DeviceResourcePool mResourcePool;
 
+	Image::View mPrevAccumColor;
+	Image::View mPrevAccumMoments;
 	Image::View mPrevVisibility;
 	Image::View mPrevDepth;
 };

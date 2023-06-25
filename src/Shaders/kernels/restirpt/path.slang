@@ -2,8 +2,7 @@
 
 #include "pt.slang"
 
-#define gReconnectionDistance 0.02
-#define gReconnectionCos 0.0
+#define gMinReconnectionDistance 0.1
 
 struct PathSuffix {
     uint4 mRngSeed;
@@ -121,13 +120,10 @@ extension PathTracer {
 			return;
 		}
 
-        DebugPrintf(sPixelIndex, "\tAttempting to connect vertex %u to base path vertex %u/%u\n", p.mLength + 1, basePath.mPrefixLength + 1, basePath.mPathLength + 1);
-
         if (p.mLength + 1 > basePath.mPrefixLength || p.mDiffuseBounces + basePath.mSuffixDiffuseBounces > gPushConstants.mMaxDiffuseBounces) {
 			// path too long - can't reconnect
             p.Terminate(0);
             p.mRcJacobian = 0;
-            DebugPrintf(sPixelIndex, "\t\tReconnection failed: path too long\n");
             return;
         }
 
@@ -142,14 +138,9 @@ extension PathTracer {
         const float dist = sqrt(dist2);
         toRcv /= dist;
 
-        DebugPrintf(sPixelIndex, "\t\tConnecting to %0.3f %0.3f %0.3f from %0.3f %0.3f %0.3f\n",
-				sd_rcv.mPosition.x, sd_rcv.mPosition.y, sd_rcv.mPosition.z,
-				vertex.mShadingData.mPosition.x, vertex.mShadingData.mPosition.y, vertex.mShadingData.mPosition.z);
-
-        if (dist < gReconnectionDistance) {
+        if (dist < gMinReconnectionDistance) {
             p.Terminate(0);
 			p.mRcJacobian = 0;
-            DebugPrintf(sPixelIndex, "\t\tReconnection failed: dist < gReconnectionDistance\n");
             return;
         }
 
@@ -163,7 +154,6 @@ extension PathTracer {
             if (s.mFwdPdfW <= 0) {
                 p.Terminate(0);
                 p.mRcJacobian = 0;
-                DebugPrintf(sPixelIndex, "\t\tReconnection failed: BSDF sampling not possible at rcv-1\n");
                 return;
 			}
         }
@@ -182,7 +172,6 @@ extension PathTracer {
                 if (s.mFwdPdfW <= 0) {
                     p.Terminate(0);
                     p.mRcJacobian = 0;
-                    DebugPrintf(sPixelIndex, "\t\tReconnection failed: BSDF sampling not possible at rcv\n");
                     return;
                 }
 			}
@@ -200,22 +189,19 @@ extension PathTracer {
                 if (s.mFwdPdfW <= 0) {
                     p.Terminate(0);
                     p.mRcJacobian = 0;
-                    DebugPrintf(sPixelIndex, "\t\tReconnection failed: BSDF sampling not possible at rcv\n");
                     return;
 				}
 			}
         }
 
-        if (cos_rcv < gReconnectionCos) {
-            p.Terminate(0);
-            p.mRcJacobian = 0;
-            DebugPrintf(sPixelIndex, "\t\tReconnection failed: cos_rcv < gReconnectionCos\n");
-            return;
-		}
-
         p.mRcJacobian = safe_divide(cos_rcv, basePath.mReconnectionCos) * pow2(safe_divide(basePath.mReconnectionDist, dist));
 
-		// trace visibility ray
+		p.mSuffix = basePath;
+        p.mSuffix.mPrefixPdfW = p.mPdfW;
+        p.mSuffix.mReconnectionCos = cos_rcv;
+        p.mSuffix.mReconnectionDist = dist;
+
+        // trace visibility ray
         {
             float transDirPdf, transNeePdf;
             mScene.traceVisibilityRay(makeRay(rayOffset(vertex.mShadingData, toRcv), toRcv, 0, AdjustIntersectionDistance(dist)), rng, vertex.mCurrentMedium, p.mContribution, transDirPdf, transNeePdf);
@@ -223,13 +209,9 @@ extension PathTracer {
             if (transNeePdf <= 0) {
                 p.Terminate(0);
                 p.mRcJacobian = 0;
-                DebugPrintf(sPixelIndex, "\t\tReconnection failed: Occluded\n");
                 return;
             }
         }
-
-        DebugPrintf(sPixelIndex, "\tReconnection jacobian: %f\n", p.mRcJacobian);
-        DebugPrintf(sPixelIndex, "\tPath reconnected. Contribution: %f\n", luminance(p.mContribution));
     }
 
     // Evaluates emission, performs reconnection, samples the BSDF, and returns the sampled direction
@@ -249,12 +231,11 @@ extension PathTracer {
             if (any(le > 0)) {
 				#ifdef gUseReconnection
                 // store reconnection vertex if a reconnection vertex hasn't been found yet
-                if (isCanonical && p.mIsPrevVertexDiffuse && !p.mSuffix.HasReconnectionVertex() && p.mPrevDist >= gReconnectionDistance && abs(vertex.mLocalDirIn.z) >= gReconnectionCos) {
+                if (isCanonical && p.mIsPrevVertexDiffuse && !p.mSuffix.HasReconnectionVertex() && p.mPrevDist >= gMinReconnectionDistance) {
                     p.SetReconnectionVertex(mScene, vertex);
                 }
 				#endif
                 p.Terminate(le);
-        		DebugPrintf(sPixelIndex, "\tPath terminated. Contribution: %f | PDF: %f\n", luminance(p.mContribution), p.mPdfW);
                 return 0;
 			}
 		}
@@ -287,9 +268,8 @@ extension PathTracer {
 		}
 
         // store first reconnectable vertex
-        if (isCanonical && p.mIsPrevVertexDiffuse && isDiffuse && !p.mSuffix.HasReconnectionVertex() && p.mPrevDist >= gReconnectionDistance && abs(vertex.mLocalDirIn.z) >= gReconnectionCos) {
+        if (isCanonical && p.mIsPrevVertexDiffuse && isDiffuse && !p.mSuffix.HasReconnectionVertex() && p.mPrevDist >= gMinReconnectionDistance) {
             p.SetReconnectionVertex(mScene, vertex, s);
-            DebugPrintf(sPixelIndex, "\t\tStoring rcv at %u (prefix pdf: %f)\n", p.mLength+1, p.mSuffix.mPrefixPdfW);
         }
 		#endif
 
@@ -325,9 +305,6 @@ extension PathTracer {
 
     // Generates a path with unidirectional path tracing. Attempts to reconnect to basePath is specified.
     Path GeneratePath(PathVertex vertex, inout RandomSampler rng, const Optional<PathSuffix> basePath = none) {
-        DebugPrintf(sPixelIndex, "Generating path with seed %u %u %u %u\n", rng.mState.x, rng.mState.y, rng.mState.z, rng.mState.w);
-		DebugPrintf(sPixelIndex, "\tat %0.3f %0.3f %0.3f\n", vertex.mShadingData.mPosition.x, vertex.mShadingData.mPosition.y, vertex.mShadingData.mPosition.z);
-
         Path p = Path(rng);
 
         while (!p.mTerminated) {
@@ -350,9 +327,6 @@ extension PathTracer {
             }
 		}
 
-        if (basePath.hasValue)
-            p.mSuffix = basePath.value;
-
 		#ifdef gCountRays
         if (!basePath.hasValue) {
 			InterlockedAdd(mFramebuffer.mDebugCounters[4], 1);
@@ -372,10 +346,6 @@ extension PathTracer {
             jacobian = safe_divide(basePath.mPrefixPdfW, p.mPdfW);
             if (p.mRcJacobian != -1)
                 jacobian *= p.mRcJacobian;
-
-            DebugPrintf(sPixelIndex, "Shift jacobian: %f | Rc jacobian: %f\n", jacobian, p.mRcJacobian);
-        } else {
-            DebugPrintf(sPixelIndex, "Shift failed: shifted %u != base %u\n", p.mLength, basePath.mPathLength);
         }
 
         if (isnan(jacobian) || isinf(jacobian))
