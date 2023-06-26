@@ -232,7 +232,7 @@ extension PathTracer {
 
 		#ifdef gReSTIR_GI_Reuse
 		// no resampling for paths with no bounces
-        if (!(r.p.mLength == 1 && max3(r.p.mContribution) > 0 && r.W > 0))
+        if (!(r.p.mSuffix.mPathLength == 1 && max3(r.p.mContribution) > 0 && r.W > 0))
             ReservoirReuse(vertex, rng, r);
         #endif
 
