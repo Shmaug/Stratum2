@@ -1,6 +1,6 @@
 #pragma once
 
-#include "di.slang"
+#include "pt.slang"
 
 #define gMinReconnectionDistance 0.0
 
@@ -90,8 +90,13 @@ struct Path {
 	// Note: mReconnectionVertex.mRadiance temporarily stored here, then finalized in Terminate()
 	[mutating]
     void SetReconnectionVertex(const SceneParameters scene, const PathVertex vertex, const Optional<DirectionSampleRecord> directionSample = none) {
-		mSuffix.mReconnectionVertex.mVertex.mLocalPosition = scene.mInstanceInverseTransforms[vertex.mInstanceIndex].transformPoint(vertex.mShadingData.mPosition);
+        if (vertex.mShadingData.isEnvironment()) {
+            mSuffix.mReconnectionVertex.mVertex.mLocalPosition = vertex.mShadingData.mPosition;
+        } else {
+            mSuffix.mReconnectionVertex.mVertex.mLocalPosition = scene.mInstanceInverseTransforms[vertex.mInstanceIndex].transformPoint(vertex.mShadingData.mPosition);
+        }
         mSuffix.mReconnectionVertex.mVertex.mInstancePrimitiveIndex = vertex.mInstancePrimitiveIndex;
+
         if (directionSample.hasValue) {
             mSuffix.mReconnectionVertex.mLocalDirOut = directionSample.value.mDirection;
             mSuffix.mReconnectionVertex.mRadiance = mContribution * directionSample.value.mReflectance; // temporarily stored here, finalized in Terminate()
@@ -142,16 +147,17 @@ extension PathTracer {
             return;
         }
 
-        // terminate path into rcv vertex
-		p.mLength = basePath.mPathLength;
-		p.mDiffuseBounces += basePath.mSuffixDiffuseBounces;
-        p.mTerminated = true;
-
         const ShadingData sd_rcv = basePath.mReconnectionVertex.mVertex.getShadingData(mScene);
-        Vector3 toRcv = sd_rcv.mPosition - vertex.mShadingData.mPosition;
-        const float dist2 = dot(toRcv, toRcv);
-        const float dist = sqrt(dist2);
-        toRcv /= dist;
+        Vector3 toRcv;
+        float dist;
+        if (sd_rcv.isEnvironment()) {
+            basePath.mReconnectionVertex.mVertex.mLocalPosition;
+            dist = POS_INFINITY;
+        } else {
+			toRcv = sd_rcv.mPosition - vertex.mShadingData.mPosition;
+			dist = length(toRcv);
+			toRcv /= dist;
+        }
 
         if (dist < gMinReconnectionDistance) {
             p.Terminate(0);
@@ -173,43 +179,43 @@ extension PathTracer {
 			}
         }
 
-		// evaluate bsdf or emission at rcv
-		float cos_rcv = 1;
-		if (gHasMedia && sd_rcv.isMedium()) {
-			const Medium bsdf_rcv = Medium(mScene, sd_rcv.getMaterialAddress());
-			const float3 le = bsdf_rcv.emission();
-            if (any(le > 0)) {
-                p.mContribution *= le;
-            } else {
-                const ReflectanceEvalRecord s = bsdf_rcv.evaluateReflectance<false>(-toRcv, basePath.mReconnectionVertex.mLocalDirOut);
-                p.mContribution *= s.mReflectance;
-                p.mContribution *= basePath.mReconnectionVertex.mRadiance;
-                if (s.mFwdPdfW <= 0) {
-                    p.Terminate(0);
-                    p.mRcJacobian = 0;
-                    return;
-                }
-			}
-		} else { // surface
-            const PackedMaterialData bsdf_rcv = mScene.LoadMaterial(sd_rcv);
-            const Vector3 localDirIn_rcv = sd_rcv.toLocal(-toRcv);
-			cos_rcv = abs(localDirIn_rcv.z);
-			const Spectrum le = bsdf_rcv.emission();
-            if (any(le > 0)) {
-                p.mContribution *= le;
-            } else {
+        // evaluate bsdf at rcv
+        if (p.mLength + 1 < basePath.mPathLength) {
+			if (gHasMedia && sd_rcv.isMedium()) {
+				const Medium bsdf_rcv = Medium(mScene, sd_rcv.getMaterialAddress());
+				const ReflectanceEvalRecord s = bsdf_rcv.evaluateReflectance<false>(-toRcv, basePath.mReconnectionVertex.mLocalDirOut);
+				p.mContribution *= s.mReflectance;
+				if (s.mFwdPdfW <= 0) {
+					p.Terminate(0);
+					p.mRcJacobian = 0;
+					return;
+				}
+			} else if (sd_rcv.isSurface()) {
+				const PackedMaterialData bsdf_rcv = mScene.LoadMaterial(sd_rcv);
+				const Vector3 localDirIn_rcv = sd_rcv.toLocal(-toRcv);
                 const ReflectanceEvalRecord s = bsdf_rcv.evaluateReflectance<false>(localDirIn_rcv, basePath.mReconnectionVertex.mLocalDirOut);
-                p.mContribution *= s.mReflectance * vertex.mShadingData.shadingNormalCorrection<false>(localDirIn_rcv, basePath.mReconnectionVertex.mLocalDirOut);
-                p.mContribution *= basePath.mReconnectionVertex.mRadiance;
-                if (s.mFwdPdfW <= 0) {
-                    p.Terminate(0);
-                    p.mRcJacobian = 0;
-                    return;
+                p.mContribution *= s.mReflectance;
+                p.mContribution *= vertex.mShadingData.shadingNormalCorrection<false>(localDirIn_rcv, basePath.mReconnectionVertex.mLocalDirOut);
+				if (s.mFwdPdfW <= 0 || all(p.mContribution <= 0)) {
+					p.Terminate(0);
+					p.mRcJacobian = 0;
+					return;
 				}
 			}
         }
+		p.mContribution *= basePath.mReconnectionVertex.mRadiance;
 
-        p.mRcJacobian = safe_divide(cos_rcv, basePath.mReconnectionCos) * pow2(safe_divide(basePath.mReconnectionDist, dist));
+        const float cos_rcv = sd_rcv.isSurface() ? sd_rcv.toLocal(-toRcv).z : 1;
+
+        if (sd_rcv.isEnvironment())
+            p.mRcJacobian = 1;
+		else
+            p.mRcJacobian = safe_divide(cos_rcv, basePath.mReconnectionCos) * pow2(safe_divide(basePath.mReconnectionDist, dist));
+
+        // terminate path into rcv vertex
+		p.mLength = basePath.mPathLength;
+		p.mDiffuseBounces += basePath.mSuffixDiffuseBounces;
+        p.mTerminated = true;
 
         p.mSuffix = basePath;
         p.mSuffix.mPrefixPdfW = p.mPdfW;
@@ -340,7 +346,13 @@ extension PathTracer {
                 const PackedMaterialData m = mScene.LoadMaterial(vertex.mShadingData);
                 dir = IntegrateVertex(p, vertex, m, rng, basePath);
             } else /*if (vertex.mShadingData.isEnvironment())*/ {
-                float envPdfW;
+				#ifdef gUseReconnection
+                // store reconnection vertex if a reconnection vertex hasn't been found yet
+                if (!basePath.hasValue && p.mIsPrevVertexDiffuse && !p.mSuffix.HasReconnectionVertex()) {
+					p.SetReconnectionVertex(mScene, vertex);
+                }
+				#endif
+				float envPdfW;
                 p.Terminate(mScene.EvaluateEnvironment(-vertex.mLocalDirIn, envPdfW));
             }
 

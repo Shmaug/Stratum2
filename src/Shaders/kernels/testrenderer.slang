@@ -560,8 +560,8 @@ float ComputeMIS_DI(const IlluminationSampleRecord r, const ReflectanceEvalRecor
 	#elif defined(gSampleDirectIlluminationOnly)
 		return 1;
 	#else
-		// mis with BSDF sampling
-        return mis(r.mPdf, f.mFwdPdfW / AtoW);
+    // mis with BSDF sampling
+    return mis(r.mPdf, f.mFwdPdfW / AtoW);
 	#endif
 }
 
@@ -788,14 +788,14 @@ void ConnectToLight(const Interaction bsdf, const ShadingData shadingData, const
 void AddEmission(const float3 emission, const float directPdfA, const float emissionPdfW, const float WtoA) {
 	float w = 1;
 	if (sPathState.mPathLength > 1 && !sPathState.isSpecular) {
-        #ifdef gUseVC
-			// Partial eye sub-path MIS weight [tech. rep. (43)].
-			// If the last hit was specular, then dVCM == 0.
-			const float wCamera = mis(directPdfA) * sPathState.dVCM + mis(emissionPdfW) * sPathState.dVC;
-            w = 1 / (1 + wCamera);
+		#ifdef gUseVC
+		// Partial eye sub-path MIS weight [tech. rep. (43)].
+		// If the last hit was specular, then dVCM == 0.
+		const float wCamera = mis(directPdfA) * sPathState.dVCM + mis(emissionPdfW) * sPathState.dVC;
+		w = 1 / (1 + wCamera);
 		#elif defined(gSampleDirectIllumination)
-			if (sPathState.mDirPdfW > 0)
-				w = mis(sPathState.mDirPdfW*WtoA, directPdfA);
+        if (sPathState.mDirPdfW > 0)
+            w = mis(sPathState.mDirPdfW*WtoA, directPdfA);
 		#endif
 	}
 
@@ -982,7 +982,7 @@ void InitializeCameraPath(const uint2 index) {
 }
 void InitializeLightPath(const uint2 index) {
     sPathState.mRng = RandomSampler(gPushConstants.mRandomSeed, index, 0xFFFF);
-    const IlluminationSampleRecord r = gScene.SampleIllumination(sPathState.mRng.nextFloat());
+    const IlluminationSampleRecord r = gScene.SampleIllumination(sPathState.mRng.nextFloat(), 0);
     sPathState.isFiniteLight = r.isFinite;
 
     sPathState.mThroughput = r.mRadiance / r.mPdf;

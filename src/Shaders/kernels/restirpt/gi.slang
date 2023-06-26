@@ -2,10 +2,6 @@
 
 #include "path.slang"
 
-#ifndef gGIMis
-#define gGIMis ReuseMISType::eSimple
-#endif
-
 struct PathReservoir {
     Path p;
     float W;

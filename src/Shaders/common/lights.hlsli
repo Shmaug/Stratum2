@@ -13,6 +13,22 @@
 #define gSceneSphere float4(0)
 #endif
 
+struct EmissionSampleRecord {
+    ShadingData mShadingData;
+    uint mInstancePrimitiveIndex;
+    float mPdf;
+    bool isSingular; // unused (only area lights are implemented)
+
+    property uint mInstanceIndex {
+        get { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
+        set { BF_SET(mInstancePrimitiveIndex, newValue, 0, 16); }
+    }
+    property uint mPrimitiveIndex {
+        get { return BF_GET(mInstancePrimitiveIndex, 16, 16); }
+        set { BF_SET(mInstancePrimitiveIndex, newValue, 16, 16); }
+    }
+};
+
 struct IlluminationSampleRecord {
     float3 mRadiance;
     float mPdf; // area-measure except for environment lights
@@ -23,7 +39,7 @@ struct IlluminationSampleRecord {
 
     float mCosLight;
     bool isFinite;
-    bool isSingular;
+    bool isSingular; // unused (only area lights are implemented)
 
     float3 getNormal() { return unpackNormal(mPackedNormal); }
 };
@@ -147,81 +163,93 @@ extension SceneParameters {
     }
 
     // uniformly samples a light instance and primitive index, then uniformly samples the primitive's area
-    IlluminationSampleRecord SampleIllumination(const float4 rnd) {
-        IlluminationSampleRecord r;
+    EmissionSampleRecord SampleEmission(const float4 rnd) {
+        EmissionSampleRecord r;
         r.isSingular = false;
-        if (gEnvironmentMaterialAddress != -1) {
-            if (gLightCount == 0 || rnd.w < gEnvironmentSampleProbability) {
-				// sample environment light
-                r.mDistanceToLight = POS_INFINITY;
-                r.mPosition = POS_INFINITY;
-                r.mCosLight = 1;
-                r.isFinite = false;
+        if (gEnvironmentMaterialAddress != -1 && (gLightCount == 0 || rnd.w < gEnvironmentSampleProbability)) {
+            // sample environment light
+            r.mShadingData.mShapeArea = -1;
+            r.mInstanceIndex = INVALID_INSTANCE;
 
-                const uint4 packedData = mMaterialData.Load<uint4>((int)gEnvironmentMaterialAddress);
-                r.mRadiance = asfloat(packedData.rgb);
-                const uint environmentImage = packedData.w;
-
-                if (environmentImage < gImageCount) {
-                    const float2 uv = SampleTexel(mImages[environmentImage], rnd.xy, r.mPdf);
-                    r.mRadiance *= mImages[environmentImage].SampleLevel(mStaticSampler, uv, 0).rgb;
-                    r.mDirectionToLight = sphericalUvToCartesian(uv);
-                    r.mPdf /= (2 * M_PI * M_PI * sqrt(1 - r.mDirectionToLight.y * r.mDirectionToLight.y));
-                } else {
-                    r.mDirectionToLight = sampleUniformSphere(rnd.x, rnd.y);
-                    r.mPdf = 1 / (4 * M_PI);
-                }
-                if (gLightCount > 0)
-                    r.mPdf *= gEnvironmentSampleProbability;
-				return r;
+			const uint4 packedData = mMaterialData.Load<uint4>((int)gEnvironmentMaterialAddress);
+			const uint environmentImage = packedData.w;
+			if (environmentImage < gImageCount) {
+                r.mShadingData.mPosition = sphericalUvToCartesian(SampleTexel(mImages[environmentImage], rnd.xy, r.mPdf));
+                // jacobian from sphericalUvToCartesian
+                r.mPdf /= (2 * M_PI * M_PI * sqrt(1 - pow2(r.mShadingData.mPosition.y)));
+            } else {
+                r.mShadingData.mPosition = sampleUniformSphere(rnd.x, rnd.y);
+				r.mPdf = 1 / (4 * M_PI);
 			}
+
+			if (gLightCount > 0)
+				r.mPdf *= gEnvironmentSampleProbability;
+			return r;
+        }
+
+        if (gLightCount == 0)
+            return { 0, 0 };
+
+        r.mInstanceIndex = mLightInstanceMap[uint(rnd.z * gLightCount) % gLightCount];
+        r.mPdf = 1 / (float)gLightCount;
+
+        if (gEnvironmentMaterialAddress != -1)
+            r.mPdf *= 1 - gEnvironmentSampleProbability;
+
+        const InstanceData instance = mInstances[r.mInstanceIndex];
+        const TransformData transform = mInstanceTransforms[r.mInstanceIndex];
+
+		if (instance.getType() == InstanceType::eMesh) {
+            // triangle
+            const MeshInstanceData mesh = reinterpret<MeshInstanceData>(instance);
+            r.mPdf /= (float)mesh.primitiveCount();
+            r.mPrimitiveIndex = uint(rnd.w * mesh.primitiveCount()) % mesh.primitiveCount();
+            r.mShadingData = makeTriangleShadingData(mesh, transform, r.mPrimitiveIndex, sampleUniformTriangle(rnd.x, rnd.y));
+        } else if (instance.getType() == InstanceType::eSphere) {
+            // sphere
+            const SphereInstanceData sphere = reinterpret<SphereInstanceData>(instance);
+            r.mShadingData = makeSphereShadingData(sphere, transform, sphere.radius() * sampleUniformSphere(rnd.x, rnd.y));
+        } else
+            return { 0 }; // volume lights are unsupported
+
+        r.mPdf /= r.mShadingData.mShapeArea;
+        return r;
+    }
+    // uniformly samples a light instance and primitive index, then uniformly samples the primitive's area
+    IlluminationSampleRecord SampleIllumination(const float4 rnd, const float3 referencePosition) {
+        const EmissionSampleRecord emissionVertex = SampleEmission(rnd);
+
+        IlluminationSampleRecord r;
+        r.mPdf = emissionVertex.mPdf;
+        r.isSingular = false;
+        if (emissionVertex.mShadingData.isEnvironment()) {
+			// sample environment light
+			r.mDistanceToLight = POS_INFINITY;
+			r.mPosition = POS_INFINITY;
+			r.mCosLight = 1;
+			r.isFinite = false;
+
+            float tmp;
+            r.mRadiance = EvaluateEnvironment(emissionVertex.mShadingData.mPosition, tmp);
+            return r;
 		}
 
 		if (gLightCount == 0)
 			return { 0, 0 };
 
-		const uint lightInstanceIndex = mLightInstanceMap[uint(rnd.z * gLightCount) % gLightCount];
-		const InstanceData instance = mInstances[lightInstanceIndex];
-		const TransformData transform = mInstanceTransforms[lightInstanceIndex];
-
         r.isFinite = true;
 
-        r.mPdf = 1 / (float)gLightCount;
-        if (gEnvironmentMaterialAddress != -1)
-			r.mPdf *= 1 - gEnvironmentSampleProbability;
-
-		ShadingData shadingData;
-		if (instance.getType() == InstanceType::eMesh) {
-			// triangle
-			const MeshInstanceData mesh = reinterpret<MeshInstanceData>(instance);
-            r.mPdf /= (float)mesh.primitiveCount();
-			const uint primitiveIndex = uint(rnd.w * mesh.primitiveCount()) % mesh.primitiveCount();
-            shadingData = makeTriangleShadingData(mesh, transform, primitiveIndex, sampleUniformTriangle(rnd.x, rnd.y));
-		} else if (instance.getType() == InstanceType::eSphere) {
-			// sphere
-			const SphereInstanceData sphere = reinterpret<SphereInstanceData>(instance);
-			shadingData = makeSphereShadingData(sphere, transform, sphere.radius() * sampleUniformSphere(rnd.x, rnd.y));
-		} else
-			return { 0 }; // volume lights are unsupported
-
-		r.mPdf /= shadingData.mShapeArea;
-        r.mPosition = shadingData.mPosition;
-        r.mPackedNormal = shadingData.mPackedShadingNormal;
-        r.mRadiance = LoadMaterial(shadingData).getEmission();
-        return r;
-    }
-    IlluminationSampleRecord SampleIllumination(const float4 rnd, const float3 referencePosition) {
-        IlluminationSampleRecord r = SampleIllumination(rnd);
-        if (r.isFinite) {
-			r.mDirectionToLight = r.mPosition - referencePosition;
-			r.mDistanceToLight  = length(r.mDirectionToLight);
-			r.mDirectionToLight /= r.mDistanceToLight;
-            r.mCosLight = -dot(r.getNormal(), r.mDirectionToLight);
-            if (r.mCosLight <= 0) {
-                r.mRadiance = 0;
-                r.mPdf = 0;
-            }
-        }
+        r.mRadiance = LoadMaterial(emissionVertex.mShadingData).getEmission();
+        r.mPosition = emissionVertex.mShadingData.mPosition;
+        r.mPackedNormal = emissionVertex.mShadingData.mPackedShadingNormal;
+		r.mDirectionToLight = r.mPosition - referencePosition;
+		r.mDistanceToLight  = length(r.mDirectionToLight);
+		r.mDirectionToLight /= r.mDistanceToLight;
+        r.mCosLight = -dot(r.getNormal(), r.mDirectionToLight);
+        if (r.mCosLight <= 0) {
+			// lights are one-sided
+            return { 0, 0 };
+		}
         return r;
     }
 }

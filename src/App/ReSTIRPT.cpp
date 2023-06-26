@@ -322,7 +322,7 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 	descriptors[{ "gPathTracer.mFramebuffer.mDebugCounters", 0u }] = mDebugCounters.mBuffer;
 	descriptors[{ "gPathTracer.mScene.mRayCount", 0u }]            = mRayCount.mBuffer;
 
-	mPushConstants["mReservoirHistoryValid"] = ImGui::IsKeyDown(ImGuiKey_F5) ? 0u : 1u;
+	mPushConstants["mReservoirHistoryValid"] = ImGui::IsKeyDown(ImGuiKey_F5) || (mDenoise && denoiser && denoiser->accumulatedFrames() == 0) ? 0u : 1u;
 	for (uint32_t i = 0; i < mPrevPathReservoirData.size(); i++) {
 		const string id = "mReservoirDataGI["+to_string(i)+"]";
 		const Image::View& prev = mPrevPathReservoirData[i];

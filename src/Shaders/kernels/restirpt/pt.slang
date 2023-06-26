@@ -140,6 +140,16 @@ struct PathTracer {
 			mFramebuffer.mDepth[index] = reinterpret<float4>(d);
 		}
 
+		// store albedo
+        {
+            if (vertex.mShadingData.isEnvironment())
+                mFramebuffer.mAlbedo[sPixelIndex] = 0;
+			else if (vertex.mShadingData.isMedium())
+				mFramebuffer.mAlbedo[sPixelIndex] = float4(Medium(mScene, vertex.mShadingData.getMaterialAddress()).albedo(), 1);
+			else
+				mFramebuffer.mAlbedo[sPixelIndex] = float4(mScene.LoadMaterial(vertex.mShadingData).albedo(), 1);
+        }
+
         return vertex;
 	}
 };

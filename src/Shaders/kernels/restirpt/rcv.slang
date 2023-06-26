@@ -39,7 +39,12 @@ struct PackedVertex {
 	}
 
     ShadingData getShadingData(const SceneParameters scene) {
-        ShadingData sd = scene.makeShadingData(scene.mInstances[mInstanceIndex], scene.mInstanceTransforms[mInstanceIndex], mLocalPosition, mPrimitiveIndex);
+        ShadingData sd;
+        if (mInstanceIndex == INVALID_INSTANCE) {
+            sd.mPosition = mLocalPosition;
+            sd.mShapeArea = -1;
+		} else
+        	sd = scene.makeShadingData(scene.mInstances[mInstanceIndex], scene.mInstanceTransforms[mInstanceIndex], mLocalPosition, mPrimitiveIndex);
         sd.mTexcoordScreenSize = 0;
         return sd;
     }
