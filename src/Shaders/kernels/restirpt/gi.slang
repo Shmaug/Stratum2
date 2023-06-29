@@ -1,6 +1,7 @@
 #pragma once
 
 #include "path.slang"
+#include "rcv.slang"
 
 struct PathReservoir {
     Path p;

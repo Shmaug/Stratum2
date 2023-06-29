@@ -1,6 +1,6 @@
 #pragma once
 
-#include "pt.slang"
+#include "common.slang"
 
 #ifdef gReconnection
 static bool gEnableReconnection = true;

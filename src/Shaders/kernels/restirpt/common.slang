@@ -45,7 +45,6 @@ struct PushConstants {
 
 #include "common/intersection.hlsli"
 #include "common/lights.hlsli"
-#include "rcv.slang"
 
 struct PathVertex {
     ShadingData mShadingData;
