@@ -3,6 +3,17 @@
 #include "path.slang"
 #include "rcv.slang"
 
+#ifdef gReSTIR_GI
+static const bool gEnableReSTIR = false;
+#else
+static const bool gEnableReSTIR = false;
+#endif
+#ifdef gReSTIR_GI_Reuse
+static const bool gEnableReuse = true;
+#else
+static const bool gEnableReuse = false;
+#endif
+
 struct PathReservoir {
     Path p;
     float W;
@@ -204,9 +215,13 @@ extension PathTracer {
 		r.FinalizeMerge();
 	}
 
-    // ReSTIR estimator
-    Spectrum EstimateRadianceReSTIR(const PathVertex vertex, inout RandomSampler rng) {
-        PathReservoir r = PathReservoir();
+    Spectrum EstimateRadiance(const PathVertex vertex, inout RandomSampler rng) {
+        if (!gEnableReSTIR) {
+			const Path p = GeneratePath(vertex, rng);
+			return p.mContribution * p.W;
+		}
+
+		PathReservoir r = PathReservoir();
 
         // sample canonical paths
         {
@@ -217,22 +232,20 @@ extension PathTracer {
 			r.FinalizeMerge();
         }
 
-		#ifdef gReSTIR_GI_Reuse
         // no resampling for paths with no bounces
-        if (!(r.p.mSuffix.mPathLength == 1 && max3(r.p.mContribution) > 0 && r.W > 0)) {
+        if (gEnableReuse && (r.p.mSuffix.mPathLength > 1 || (all(r.p.mContribution <= 0) || r.W <= 0))) {
 			#ifndef gTemporalReuse
 			// without temporal reuse, we store the reservoir before merging with previous reservoirs
 			StoreReservoir(r, vertex);
 			#endif
 
-            MergeWithPreviousReservoirs(vertex, rng, r);
+			MergeWithPreviousReservoirs(vertex, rng, r);
 
 			#ifdef gTemporalReuse
 			// with temporal reuse, we store the reservior after merging with previous reservoirs
 			StoreReservoir(r, vertex);
 			#endif
-        }
-        #endif
+		}
 
 		return r.GetEstimate();
 	}

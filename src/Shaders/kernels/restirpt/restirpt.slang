@@ -18,11 +18,7 @@ extension PathTracer {
 			return;
 		}
 
-		#ifdef gReSTIR_GI
-        mFramebuffer.mOutput[sPixelIndex] = float4(throughput * EstimateRadianceReSTIR(primaryVertex, rng), 1);
-		#else
         mFramebuffer.mOutput[sPixelIndex] = float4(throughput * EstimateRadiance(primaryVertex, rng), 1);
-		#endif
 	}
 };
 

@@ -172,7 +172,7 @@ struct PathState {
 	}
 };
 
-// path generation + basic path tracing estimator
+// path generation
 
 extension PathTracer {
     void Reconnect(inout PathState p, const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, const PathSuffix basePath, inout Path result) {
@@ -482,6 +482,7 @@ extension PathTracer {
         PathState p = PathState(rng);
         const Path result = GeneratePath(p, vertex, rng, basePath);
 
+		// compute jacobian
 		jacobian = 0;
         if (any(p.mContribution > 0) && p.mLength == basePath.mPathLength) {
             jacobian = safe_divide(basePath.mPrefixPdfW, p.mSuffix.mPrefixPdfW);
@@ -503,10 +504,4 @@ extension PathTracer {
 
         return result;
     }
-
-	// Basic path tracing estimator
-	Spectrum EstimateRadiance(const PathVertex vertex, inout RandomSampler rng) {
-        const Path p = GeneratePath(vertex, rng);
-        return p.mContribution * p.W;
-	}
 }
