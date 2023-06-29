@@ -127,8 +127,7 @@ struct App {
 		auto denoiserNode = mRendererNode->addChild("Post process");
 		denoiserNode->makeComponent<Denoiser>(*mRendererNode);
 		denoiserNode->makeComponent<Tonemapper>(*mRendererNode);
-
-		mImageComparer = mRendererNode->addChild("Image comparer")->makeComponent<ImageComparer>(*mRendererNode);
+		mImageComparer = denoiserNode->makeComponent<ImageComparer>(*mRendererNode);
 	}
 	inline ~App() {
 		(*mDevice)->waitIdle();
