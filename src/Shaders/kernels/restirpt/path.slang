@@ -2,6 +2,11 @@
 
 #include "pt.slang"
 
+#ifdef gReconnection
+static bool gEnableReconnection = true;
+#else
+static bool gEnableReconnection = false;
+#endif
 #define gMinReconnectionDistance 0.0
 
 struct PathSuffix {
@@ -53,18 +58,33 @@ struct PathSuffix {
 
 struct Path {
     Spectrum mContribution;
-    float mPdfW;
+    float W; // only for canonical paths
     PathSuffix mSuffix;
 
     __init() {
         mContribution = 0;
+        W = 0;
         mSuffix = PathSuffix({0});
 	}
 };
 
+Path MergePaths(const Path p0, const Path p1, inout RandomSampler rng) {
+    if (p0.W <= 0) return p1;
+    if (p1.W <= 0) return p0;
+
+    const float w0 = luminance(p0.mContribution) * p0.W;
+    const float w1 = luminance(p1.mContribution) * p1.W;
+    const float wsum = w0 + w1;
+
+    if (rng.nextFloat().x*wsum <= w0)
+		return { p0.mContribution, safe_divide(wsum, luminance(p0.mContribution)), p0.mSuffix };
+	else
+    	return { p1.mContribution, safe_divide(wsum, luminance(p1.mContribution)), p1.mSuffix };
+}
+
 struct PathState {
     Spectrum mContribution;
-	float mPdfW;
+	float mPdfW; // full path pdfW
 	uint mLength;
     uint mDiffuseBounces;
     bool mTerminated;
@@ -74,6 +94,9 @@ struct PathState {
     float mPrevPdfW;
     float mPrevDist;
     bool mIsPrevVertexDiffuse;
+
+    float mBsdfPdfW;
+    float mLightSamplePdfA; // NEE pdf of the current vertex
 
     __init(const RandomSampler rng) {
 		mContribution = 1;
@@ -86,6 +109,8 @@ struct PathState {
         mRcJacobian = -1;
         mPrevPdfW = 0;
         mPrevDist = 0;
+        mBsdfPdfW = 0;
+        mLightSamplePdfA = 0;
         mIsPrevVertexDiffuse = false;
 	}
 
@@ -93,7 +118,7 @@ struct PathState {
     // Called when a reconnectable vertex is found
 	// must be called BEFORE mContribution and mPdfW are modified with directionSample's reflectance and pdf
 	// when directionSample is none, the reconnection vertex is an emissive vertex
-	// Note: mReconnectionVertex.mRadiance temporarily stored here, then finalized in Terminate()
+	// Note: mReconnectionVertex.mRadiance temporarily stored here, then finalized in Terminate
 	[mutating]
     void SetReconnectionVertex(const SceneParameters scene, const PathVertex vertex, const Optional<DirectionSampleRecord> directionSample = none) {
         if (vertex.mShadingData.isEnvironment()) {
@@ -105,20 +130,29 @@ struct PathState {
 
         if (directionSample.hasValue) {
             mSuffix.mReconnectionVertex.mLocalDirOut = directionSample.value.mDirection;
-            mSuffix.mReconnectionVertex.mRadiance = mContribution * directionSample.value.mReflectance; // temporarily stored here, finalized in Terminate()
+            mSuffix.mReconnectionVertex.mRadiance = mContribution * directionSample.value.mReflectance; // temporarily stored here, finalized in Terminate
         } else {
             mSuffix.mReconnectionVertex.mLocalDirOut = 0;
-            mSuffix.mReconnectionVertex.mRadiance = mContribution; // temporarily stored here, finalized in Terminate()
+            mSuffix.mReconnectionVertex.mRadiance = mContribution; // temporarily stored here, finalized in Terminate
 		}
         mSuffix.mPrefixLength = mLength;
-        mSuffix.mSuffixDiffuseBounces = mDiffuseBounces; // temporarily stored here, finalized in Terminate()
+        mSuffix.mSuffixDiffuseBounces = mDiffuseBounces; // temporarily stored here, finalized in Terminate
         mSuffix.mPrefixPdfW = mPrevPdfW;
         mSuffix.mReconnectionDist = mPrevDist;
-        mSuffix.mReconnectionCos = abs(vertex.mLocalDirIn.z);
+        mSuffix.mReconnectionCos = vertex.mShadingData.isSurface() ? abs(vertex.mLocalDirIn.z) : 1;
 	}
 
+    [mutating]
+    void Kill() {
+        mContribution = 0;
+        mSuffix.mReconnectionVertex.mRadiance = 0;
+        mSuffix.mPrefixPdfW = 0;
+        mTerminated = true;
+	}
+
+	// called when an emissive vertex is found
 	[mutating]
-    void Terminate(const float3 emission) {
+    void Terminate(const float3 emission, inout Path result, inout RandomSampler rng) {
         mContribution *= emission;
         // finalize the reconnection vertex
         if (mSuffix.HasReconnectionVertex()) {
@@ -132,21 +166,16 @@ struct PathState {
         }
 		mSuffix.mPathLength = mLength;
         mTerminated = true;
-	}
 
-    [mutating]
-    void Kill() {
-        mContribution = 0;
-        mSuffix.mReconnectionVertex.mRadiance = 0;
-        mSuffix.mPrefixPdfW = 0;
-        mTerminated = true;
+        // randomly replace result using resampling
+        result = MergePaths(result, { mContribution, safe_divide(1, mPdfW), mSuffix }, rng);
 	}
 };
 
 // path generation + basic path tracing estimator
 
 extension PathTracer {
-    void Reconnect(inout PathState p, const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, const PathSuffix basePath) {
+    void Reconnect(inout PathState p, const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, const PathSuffix basePath, inout Path result) {
         if (p.mLength + 1 < basePath.mPrefixLength) {
 			// need more bounces before we can reconnect. don't terminate yet.
 			return;
@@ -162,7 +191,7 @@ extension PathTracer {
         Vector3 toRcv;
         float dist;
         if (sd_rcv.isEnvironment()) {
-            basePath.mReconnectionVertex.mVertex.mLocalPosition;
+            toRcv = basePath.mReconnectionVertex.mVertex.mLocalPosition;
             dist = POS_INFINITY;
         } else {
 			toRcv = sd_rcv.mPosition - vertex.mShadingData.mPosition;
@@ -195,7 +224,7 @@ extension PathTracer {
 			}
         }
 
-        // evaluate bsdf at rcv
+        // evaluate bsdf at rcv, if rcv is not the last vertex in the path
         if (p.mLength + 1 < basePath.mPathLength) {
 			if (gHasMedia && sd_rcv.isMedium()) {
 				const Medium bsdf_rcv = Medium(mScene, sd_rcv.getMaterialAddress());
@@ -240,31 +269,103 @@ extension PathTracer {
             }
         }
 
+		// no resampling for shifted paths, just assign directly
+		result = { p.mContribution, safe_divide(1, p.mPdfW), p.mSuffix };
     }
 
-    void SampleNee(inout PathState p, const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, inout Path result) {
+    void SampleNee(PathState p, const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, inout Path result) {
         const EmissionSampleRecord emission = mScene.SampleEmission(rng.nextFloat());
 
+        Vector3 toLight;
+        float dist;
+        if (emission.mShadingData.isEnvironment()) {
+            toLight = emission.mShadingData.mPosition;
+            dist = POS_INFINITY;
+        } else {
+			toLight = emission.mShadingData.mPosition - vertex.mShadingData.mPosition;
+			dist = length(toLight);
+			toLight /= dist;
+        }
+
+        const float cos_rcv = emission.mShadingData.isSurface() ? dot(-toLight, emission.mShadingData.getShadingNormal()) : 1;
+        if (cos_rcv <= 0)
+            return;
+
+		// store rcv if no rcv exists
+        if (!p.mSuffix.HasReconnectionVertex() && dist >= gMinReconnectionDistance)
+            p.SetReconnectionVertex(mScene, PathVertex(mScene, emission.mShadingData, emission.mInstancePrimitiveIndex, vertex.mCurrentMedium, -toLight));
+
+        float lightPdfW = emission.mPdf;
+		if (!emission.mShadingData.isEnvironment())
+			lightPdfW *= pow2(dist);
+		if (emission.mShadingData.isSurface())
+			lightPdfW /= cos_rcv;
+		p.mPdfW *= lightPdfW;
+
+		// evaluate bsdf at vertex
+		{
+			const Vector3 localDirOut = vertex.mShadingData.isSurface() ? vertex.mShadingData.toLocal(toLight) : toLight;
+			const ReflectanceEvalRecord s = bsdf.evaluateReflectance<false>(vertex.mLocalDirIn, localDirOut);
+			p.mContribution *= s.mReflectance;
+			if (vertex.mShadingData.isSurface())
+                p.mContribution *= vertex.mShadingData.shadingNormalCorrection<false>(vertex.mLocalDirIn, localDirOut);
+            if (all(p.mContribution <= 0))
+                return;
+
+            // NEE MIS
+        	p.mContribution *= pow2(lightPdfW) / (pow2(lightPdfW) + pow2(s.mFwdPdfW));
+		}
+
+        // trace visibility ray
+        {
+            float transDirPdf, transNeePdf;
+            mScene.traceVisibilityRay(
+				makeRay(rayOffset(vertex.mShadingData, toLight), toLight, 0, AdjustIntersectionDistance(dist)),
+				rng, vertex.mCurrentMedium, p.mContribution, transDirPdf, transNeePdf);
+			if (transNeePdf <= 0) {
+				p.Kill();
+				return;
+			}
+			p.mContribution /= transNeePdf;
+        }
+
+        Spectrum radiance;
+        if (emission.mShadingData.isSurface()) {
+            radiance = mScene.LoadMaterial(emission.mShadingData).emission();
+        } else if (emission.mShadingData.isMedium()) {
+            radiance = Medium(mScene, emission.mShadingData.getMaterialAddress()).emission();
+        } else /*if (emission.mShadingData.isEnvironment())*/ {
+            float tmp;
+            radiance = mScene.EvaluateEnvironment(toLight, tmp);
+		}
+
+        p.Terminate(radiance, result, rng);
 	}
 
     // Evaluates emission, performs reconnection, samples the BSDF, and returns the sampled direction
     Vector3 IntegrateVertex(inout PathState p, const PathVertex vertex, const Interaction bsdf, inout RandomSampler rng, const Optional<PathSuffix> basePath, inout Path result) {
         const bool isCanonical = !basePath.hasValue;
-
-        const bool isMedium = gHasMedia && vertex.mShadingData.isMedium();
+		const bool isMedium = gHasMedia && vertex.mShadingData.isMedium();
         const bool isDiffuse = !bsdf.isSingular();
 
         // evaluate emission
         if (isMedium || vertex.mLocalDirIn.z > 0) {
             const Spectrum le = bsdf.emission();
             if (any(le > 0)) {
-				#ifdef gUseReconnection
                 // store reconnection vertex if a reconnection vertex hasn't been found yet
-                if (isCanonical && p.mIsPrevVertexDiffuse && !p.mSuffix.HasReconnectionVertex() && p.mPrevDist >= gMinReconnectionDistance) {
+                if (gEnableReconnection && isCanonical && p.mIsPrevVertexDiffuse && !p.mSuffix.HasReconnectionVertex() && p.mPrevDist >= gMinReconnectionDistance)
                     p.SetReconnectionVertex(mScene, vertex);
-                }
+				#ifdef gNee
+                // NEE MIS
+                if (p.mIsPrevVertexDiffuse)
+                	p.mContribution *= pow2(p.mBsdfPdfW) / (pow2(p.mBsdfPdfW) + pow2(p.mLightSamplePdfA * pow2(p.mPrevDist) / vertex.mLocalDirIn.z));
+				#ifdef gDebugNee
+				if (p.mIsPrevVertexDiffuse)
+                	p.Kill();
+				else
 				#endif
-                p.Terminate(le);
+				#endif
+				p.Terminate(le, result, rng);
                 return 0;
 			}
 		}
@@ -280,16 +381,15 @@ extension PathTracer {
 
 		// attempt to connect to basePath
 		if (!isCanonical && isDiffuse && basePath.value.HasReconnectionVertex()) {
-			Reconnect(p, vertex, bsdf, rng, basePath.value);
+			Reconnect(p, vertex, bsdf, rng, basePath.value, result);
 			if (p.mTerminated)
 				return 0;
 		}
 
 		// next event estimation
 		#ifdef gNee
-		if (isCanonical && isDiffuse) {
-			SampleNee(p, vertex, bsdf, rng, result);
-        }
+		if (isCanonical && isDiffuse)
+            SampleNee(p, vertex, bsdf, rng, result);
 		#endif
 
         // sample direction
@@ -299,18 +399,16 @@ extension PathTracer {
             return 0;
         }
 
-		// store first reconnectable vertex
-		#ifdef gUseReconnection
-        if (isCanonical && isDiffuse && p.mIsPrevVertexDiffuse && !p.mSuffix.HasReconnectionVertex() && p.mPrevDist >= gMinReconnectionDistance) {
+        // store first reconnectable vertex
+        if (gEnableReconnection && isCanonical && isDiffuse && p.mIsPrevVertexDiffuse && !p.mSuffix.HasReconnectionVertex() && p.mPrevDist >= gMinReconnectionDistance)
 			p.SetReconnectionVertex(mScene, vertex, s);
-		}
-		#endif
 
-        p.mPrevPdfW = p.mPdfW;
         p.mIsPrevVertexDiffuse = isDiffuse;
 
         // modify contribution and pdf
-		p.mPdfW         *= s.mFwdPdfW;
+        p.mPrevPdfW = p.mPdfW;
+		p.mPdfW    *= s.mFwdPdfW;
+        p.mBsdfPdfW = s.mFwdPdfW;
         p.mContribution *= s.mReflectance;
         if (!isMedium)
             p.mContribution *= vertex.mShadingData.shadingNormalCorrection<false>(vertex.mLocalDirIn, s.mDirection);
@@ -319,9 +417,9 @@ extension PathTracer {
         return isMedium ? s.mDirection : vertex.mShadingData.toWorld(s.mDirection);
     }
 
-    // Generates a path with unidirectional path tracing. Attempts to reconnect to basePath is specified.
+    // Generates a path with unidirectional path tracing. Attempts to reconnect to basePath if specified.
     Path GeneratePath(inout PathState p, inout PathVertex vertex, inout RandomSampler rng, const Optional<PathSuffix> basePath) {
-        Path result;
+        Path result = Path();
 
         while (!p.mTerminated) {
 			// Integrate current vertex
@@ -333,14 +431,13 @@ extension PathTracer {
 				const PackedMaterialData m = mScene.LoadMaterial(vertex.mShadingData);
 				direction = IntegrateVertex(p, vertex, m, rng, basePath, result);
 			} else /*if (vertex.mShadingData.isEnvironment())*/ {
-				#ifdef gUseReconnection
 				// store reconnection vertex if a reconnection vertex hasn't been found yet
-				if (!basePath.hasValue && p.mIsPrevVertexDiffuse && !p.mSuffix.HasReconnectionVertex()) {
-					p.SetReconnectionVertex(mScene, vertex);
-				}
-				#endif
+                if (gEnableReconnection && !basePath.hasValue && p.mIsPrevVertexDiffuse && !p.mSuffix.HasReconnectionVertex())
+                    p.SetReconnectionVertex(mScene, vertex);
+				// NEE MIS
+                p.mContribution *= pow2(p.mBsdfPdfW) / (pow2(p.mBsdfPdfW) + pow2(p.mLightSamplePdfA));
 				float envPdfW;
-				p.Terminate(mScene.EvaluateEnvironment(-vertex.mLocalDirIn, envPdfW));
+				p.Terminate(mScene.EvaluateEnvironment(-vertex.mLocalDirIn, envPdfW), result, rng);
 			}
 
 			// Trace ray to find next vertex
@@ -352,10 +449,11 @@ extension PathTracer {
 				mScene.traceScatteringRay(makeRay(rayOffset(vertex.mShadingData, direction), direction), rng, medium, p.mContribution, transDirPdf, transNeePdf, isect);
 				isect.mShadingData.mTexcoordScreenSize = 0; // disable mipmaps for now
 
-				p.mPdfW *= transDirPdf;
+                p.mPdfW *= transDirPdf;
+                p.mLightSamplePdfA = isect.LightSamplePdfA();
 				p.mLength++;
 
-				vertex = PathVertex(mScene, isect.mShadingData, isect.mInstancePrimitiveIndex, medium, -direction);
+                vertex = PathVertex(mScene, isect.mShadingData, isect.mInstancePrimitiveIndex, medium, -direction);
 
 				if (vertex.mShadingData.isEnvironment())
 					p.mPrevDist = POS_INFINITY;
@@ -364,7 +462,7 @@ extension PathTracer {
             }
         }
 
-        return { p.mContribution, p.mPdfW, p.mSuffix };
+        return result;
     }
 
     Path GeneratePath(PathVertex vertex, inout RandomSampler rng) {
@@ -408,7 +506,7 @@ extension PathTracer {
 
 	// Basic path tracing estimator
 	Spectrum EstimateRadiance(const PathVertex vertex, inout RandomSampler rng) {
-		const Path p = GeneratePath(vertex, rng);
-		return p.mContribution * safe_divide(1, p.mPdfW);
+        const Path p = GeneratePath(vertex, rng);
+        return p.mContribution * p.W;
 	}
 }

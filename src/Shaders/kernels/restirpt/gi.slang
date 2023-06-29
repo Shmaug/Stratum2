@@ -14,7 +14,7 @@ struct PathReservoir {
     }
     __init(const Path p) {
         this.p = p;
-        this.W = safe_divide(1, p.mPdfW);
+        this.W = p.W;
         this.M = 1;
     }
     __init(const Path p, const float W, const float M) {
@@ -117,9 +117,8 @@ extension PathTracer {
         r.mSuffix.mRngSeed    = reinterpret<uint4>(mFramebuffer.mPrevPathReservoirData[1][pixelIndex]);
         r.mSuffix.mPackedData = reinterpret<uint4>(mFramebuffer.mPrevPathReservoirData[2][pixelIndex]);
 
-		#ifdef gUseReconnection
-        r.mSuffix.mReconnectionVertex = LoadPrevReconnectionVertex(mFramebuffer, pixelIndex);
-		#endif
+        if (gEnableReconnection)
+	        r.mSuffix.mReconnectionVertex = LoadPrevReconnectionVertex(mFramebuffer, pixelIndex);
 
 		return r;
     }
@@ -137,82 +136,71 @@ extension PathTracer {
             0,
             0);
 
-        #ifdef gUseReconnection
-		StoreReconnectionVertex(mFramebuffer, sPixelIndex, r.p.mSuffix.mReconnectionVertex);
-		#endif
+        if (gEnableReconnection)
+			StoreReconnectionVertex(mFramebuffer, sPixelIndex, r.p.mSuffix.mReconnectionVertex);
     }
 
     // Store reservoir for reuse & merge with neighbors
-    void ReservoirReuse(const PathVertex vertex, inout RandomSampler rng, inout PathReservoir r) {
-		#ifndef gTemporalReuse
-		// without temporal reuse, we store the reservoir before merging with previous reservoirs
-        StoreReservoir(r, vertex);
-		#endif
+    void MergeWithPreviousReservoirs(const PathVertex vertex, inout RandomSampler rng, inout PathReservoir r) {
+        if (gPushConstants.mReservoirHistoryValid == 0)
+            return;
 
-		if (gPushConstants.mReservoirHistoryValid != 0) {
-			const float2 prevPixel = sPixelIndex + 0.5; //mFramebuffer.mPrevUVs[sPixelIndex] * gPushConstants.mOutputExtent;
-			const SampleLocationGenerator sg = SampleLocationGenerator(rng, int2(prevPixel));
+		const float2 prevPixel = sPixelIndex + 0.5; //mFramebuffer.mPrevUVs[sPixelIndex] * gPushConstants.mOutputExtent;
+		const SampleLocationGenerator sg = SampleLocationGenerator(rng, int2(prevPixel));
 
-            // apply mis weight to current sample
-            r.PrepareMerge(gPushConstants.mGICandidateSamples);
+		// apply mis weight to current sample
+		r.PrepareMerge(gPushConstants.mGICandidateSamples);
 
-            int selected_i = -1;
+		int selected_i = -1;
 
-			for (uint i = 0; i < gPushConstants.mGIReuseSamples; i++) {
-                const Optional<PackedPathReservoir> candidate = LoadReservoir(sg[i]);
-                if (!candidate.hasValue)
-                    continue;
+		for (uint i = 0; i < gPushConstants.mGIReuseSamples; i++) {
+			const Optional<PackedPathReservoir> candidate = LoadReservoir(sg[i]);
+			if (!candidate.hasValue)
+				continue;
 
-                if (candidate.value.W <= 0) {
-                    r.M += candidate.value.M;
-                    continue;
-                }
+			if (candidate.value.W <= 0) {
+				r.M += candidate.value.M;
+				continue;
+			}
 
-                PathReservoir ri;
-                ri.M = candidate.value.M;
-                ri.W = candidate.value.W;
-                float jacobian;
-                ri.p = GenerateShiftedPath(vertex, candidate.value.mSuffix, jacobian);
-                if (jacobian <= 0) {
-					// shift failed
-                    r.M += ri.M;
-                    continue;
-                }
+			PathReservoir ri;
+			ri.M = candidate.value.M;
+			ri.W = candidate.value.W;
+			float jacobian;
+			ri.p = GenerateShiftedPath(vertex, candidate.value.mSuffix, jacobian);
+			if (jacobian <= 0) {
+				// shift failed
+				r.M += ri.M;
+				continue;
+			}
 
-                if (r.Merge(rng, ri, ri.M, jacobian)) {
-                    selected_i = int(i);
-                }
-            }
-
-			// finalize MIS weight
-            if (r.W > 0) {
-                float Z = gPushConstants.mGICandidateSamples;
-                for (uint i = 0; i < gPushConstants.mGIReuseSamples; i++) {
-                    const Optional<PackedPathReservoir> candidate = LoadReservoir(sg[i]);
-                    if (!candidate.hasValue)
-                        continue;
-
-					if (i == selected_i) {
-                        Z += candidate.value.M;
-                        continue;
-                    }
-
-                    float jacobian;
-                    const Path pi = GenerateShiftedPath(candidate.value.GetBaseVertex(mScene, mFramebuffer), r.p.mSuffix, jacobian);
-                    if (any(pi.mContribution > 0) && jacobian > 0)
-                        Z += candidate.value.M;
-                }
-                const float before = r.W;
-                r.W = safe_divide(r.W, Z);
-            }
-
-            r.FinalizeMerge();
+			if (r.Merge(rng, ri, ri.M, jacobian)) {
+				selected_i = int(i);
+			}
 		}
 
-		#ifdef gTemporalReuse
-		// with temporal reuse, we store the reservior after merging with previous reservoirs
-        StoreReservoir(r, vertex);
-		#endif
+		// finalize MIS weight
+		if (r.W > 0) {
+			float Z = gPushConstants.mGICandidateSamples;
+			for (uint i = 0; i < gPushConstants.mGIReuseSamples; i++) {
+				const Optional<PackedPathReservoir> candidate = LoadReservoir(sg[i]);
+				if (!candidate.hasValue)
+					continue;
+
+				if (i == selected_i) {
+					Z += candidate.value.M;
+					continue;
+				}
+
+				float jacobian;
+				const Path pi = GenerateShiftedPath(candidate.value.GetBaseVertex(mScene, mFramebuffer), r.p.mSuffix, jacobian);
+				if (any(pi.mContribution > 0) && jacobian > 0)
+					Z += candidate.value.M;
+			}
+			r.W = safe_divide(r.W, Z);
+		}
+
+		r.FinalizeMerge();
 	}
 
     // ReSTIR estimator
@@ -221,19 +209,28 @@ extension PathTracer {
 
         // sample canonical paths
         {
+            const float inv_m = 1.0 / gPushConstants.mGICandidateSamples;
             for (uint i = 0; i < gPushConstants.mGICandidateSamples; i++) {
-                r.Merge(rng, PathReservoir(GeneratePath(vertex, rng)));
+                r.Merge(rng, PathReservoir(GeneratePath(vertex, rng)), inv_m);
             }
-            r.FinalizeMerge();
-            // Equivalent to multiplying each sample's weight by 1/M
-            if (r.M > 0)
-                r.W /= r.M;
+			r.FinalizeMerge();
         }
 
 		#ifdef gReSTIR_GI_Reuse
-		// no resampling for paths with no bounces
-        if (!(r.p.mSuffix.mPathLength == 1 && max3(r.p.mContribution) > 0 && r.W > 0))
-            ReservoirReuse(vertex, rng, r);
+        // no resampling for paths with no bounces
+        if (!(r.p.mSuffix.mPathLength == 1 && max3(r.p.mContribution) > 0 && r.W > 0)) {
+			#ifndef gTemporalReuse
+			// without temporal reuse, we store the reservoir before merging with previous reservoirs
+			StoreReservoir(r, vertex);
+			#endif
+
+            MergeWithPreviousReservoirs(vertex, rng, r);
+
+			#ifdef gTemporalReuse
+			// with temporal reuse, we store the reservior after merging with previous reservoirs
+			StoreReservoir(r, vertex);
+			#endif
+        }
         #endif
 
 		return r.GetEstimate();

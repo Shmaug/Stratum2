@@ -21,9 +21,11 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 		mDefines["gAlphaTest"]      = false;
 		mDefines["gShadingNormals"] = true;
 		mDefines["gNormalMaps"]     = true;
+		mDefines["gNee"]            = false;
 		mDefines["gLambertian"]     = false;
 		mDefines["gDebugFastBRDF"]  = false;
 		mDefines["gDebugPixel"]     = false;
+		mDefines["gDebugNee"]       = false;
 
 		mPushConstants["mMaxDepth"] = 8u;
 		mPushConstants["mMaxDiffuseBounces"] = 3u;
@@ -36,7 +38,7 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 		mPushConstants["mGIMaxM"]         = 4.f;
 		mPushConstants["mGIReuseRadius"]  = 16.f;
 		mPushConstants["mGIReuseSamples"] = 3u;
-		mDefines["gUseReconnection"] = false;
+		mDefines["gReconnection"] = false;
 		mDefines["gTemporalReuse"] = false;
 
 		mRasterPushConstants["mLineRadius"] = .0025f;
@@ -145,6 +147,8 @@ void ReSTIRPT::drawGui() {
 		defineCheckbox("Shading normals",    "gShadingNormals");
 		defineCheckbox("Normal maps",        "gNormalMaps");
 		defineCheckbox("Force lambertian",   "gLambertian");
+		defineCheckbox("NEE",                "gNee");
+		defineCheckbox("Debug NEE",          "gDebugNee");
 		defineCheckbox("Debug fast BRDF",    "gDebugFastBRDF");
 		defineCheckbox("Debug pixel (ctrl)", "gDebugPixel");
 		defineCheckbox("Count rays",         "gCountRays");
@@ -164,7 +168,7 @@ void ReSTIRPT::drawGui() {
 				pushConstantField.operator()<uint32_t>("GI candidate samples", "mGICandidateSamples", 0, 128, 0.25f);
 				defineCheckbox("ReSTIR GI reuse", "gReSTIR_GI_Reuse");
 				if (mDefines.at("gReSTIR_GI_Reuse")) {
-					defineCheckbox("Enable reconnection", "gUseReconnection");
+					defineCheckbox("Enable reconnection", "gReconnection");
 					defineCheckbox("Temporal reuse", "gTemporalReuse");
 					if (mDefines.at("gTemporalReuse"))
 						pushConstantField.operator()<float>   ("GI max M", "mGIMaxM", 0, 10, .1f);

@@ -163,32 +163,39 @@ extension SceneParameters {
     }
 
     // uniformly samples a light instance and primitive index, then uniformly samples the primitive's area
-    EmissionSampleRecord SampleEmission(const float4 rnd) {
+    EmissionSampleRecord SampleEmission(float4 rnd) {
         EmissionSampleRecord r;
         r.isSingular = false;
-        if (gEnvironmentMaterialAddress != -1 && (gLightCount == 0 || rnd.w < gEnvironmentSampleProbability)) {
-            // sample environment light
-            r.mShadingData.mShapeArea = -1;
-            r.mInstanceIndex = INVALID_INSTANCE;
 
-			const uint4 packedData = mMaterialData.Load<uint4>((int)gEnvironmentMaterialAddress);
-			const uint environmentImage = packedData.w;
-			if (environmentImage < gImageCount) {
-                r.mShadingData.mPosition = sphericalUvToCartesian(SampleTexel(mImages[environmentImage], rnd.xy, r.mPdf));
-                // jacobian from sphericalUvToCartesian
-                r.mPdf /= (2 * M_PI * M_PI * sqrt(1 - pow2(r.mShadingData.mPosition.y)));
-            } else {
-                r.mShadingData.mPosition = sampleUniformSphere(rnd.x, rnd.y);
-				r.mPdf = 1 / (4 * M_PI);
-			}
+        if (gEnvironmentMaterialAddress != -1) {
+			if (gLightCount == 0 || rnd.w < gEnvironmentSampleProbability) {
+				// sample environment light
+				r.mShadingData.mShapeArea = -1;
+				r.mInstanceIndex = INVALID_INSTANCE;
 
-			if (gLightCount > 0)
-				r.mPdf *= gEnvironmentSampleProbability;
-			return r;
+				const uint4 packedData = mMaterialData.Load<uint4>((int)gEnvironmentMaterialAddress);
+				const uint environmentImage = packedData.w;
+				if (environmentImage < gImageCount) {
+					r.mShadingData.mPosition = sphericalUvToCartesian(SampleTexel(mImages[environmentImage], rnd.xy, r.mPdf));
+					// jacobian from sphericalUvToCartesian
+					r.mPdf /= (2 * M_PI * M_PI * sqrt(1 - pow2(r.mShadingData.mPosition.y)));
+				} else {
+					r.mShadingData.mPosition = sampleUniformSphere(rnd.x, rnd.y);
+					r.mPdf = 1 / (4 * M_PI);
+				}
+
+				if (gLightCount > 0)
+					r.mPdf *= gEnvironmentSampleProbability;
+				return r;
+            }
+
+            // remap rnd.w from [gEnvironmentSampleProbability,1] to [0,1]
+            if (gLightCount > 0)
+                rnd.w = (rnd.w - gEnvironmentSampleProbability) / (1 - gEnvironmentSampleProbability);
         }
 
         if (gLightCount == 0)
-            return { 0, 0 };
+            return {};
 
         r.mInstanceIndex = mLightInstanceMap[uint(rnd.z * gLightCount) % gLightCount];
         r.mPdf = 1 / (float)gLightCount;
@@ -196,21 +203,22 @@ extension SceneParameters {
         if (gEnvironmentMaterialAddress != -1)
             r.mPdf *= 1 - gEnvironmentSampleProbability;
 
-        const InstanceData instance = mInstances[r.mInstanceIndex];
+        const InstanceData instance   = mInstances[r.mInstanceIndex];
         const TransformData transform = mInstanceTransforms[r.mInstanceIndex];
 
 		if (instance.getType() == InstanceType::eMesh) {
             // triangle
             const MeshInstanceData mesh = reinterpret<MeshInstanceData>(instance);
-            r.mPdf /= (float)mesh.primitiveCount();
             r.mPrimitiveIndex = uint(rnd.w * mesh.primitiveCount()) % mesh.primitiveCount();
+            r.mPdf /= (float)mesh.primitiveCount();
             r.mShadingData = makeTriangleShadingData(mesh, transform, r.mPrimitiveIndex, sampleUniformTriangle(rnd.x, rnd.y));
         } else if (instance.getType() == InstanceType::eSphere) {
             // sphere
+            r.mPrimitiveIndex = INVALID_PRIMITIVE;
             const SphereInstanceData sphere = reinterpret<SphereInstanceData>(instance);
             r.mShadingData = makeSphereShadingData(sphere, transform, sphere.radius() * sampleUniformSphere(rnd.x, rnd.y));
         } else
-            return { 0 }; // volume lights are unsupported
+            return {}; // volume lights are unsupported
 
         r.mPdf /= r.mShadingData.mShapeArea;
         return r;
@@ -221,7 +229,8 @@ extension SceneParameters {
 
         IlluminationSampleRecord r;
         r.mPdf = emissionVertex.mPdf;
-        r.isSingular = false;
+        r.isSingular = emissionVertex.isSingular;
+
         if (emissionVertex.mShadingData.isEnvironment()) {
 			// sample environment light
 			r.mDistanceToLight = POS_INFINITY;
@@ -234,14 +243,11 @@ extension SceneParameters {
             return r;
 		}
 
-		if (gLightCount == 0)
-			return { 0, 0 };
-
         r.isFinite = true;
 
         r.mRadiance = LoadMaterial(emissionVertex.mShadingData).getEmission();
         r.mPosition = emissionVertex.mShadingData.mPosition;
-        r.mPackedNormal = emissionVertex.mShadingData.mPackedShadingNormal;
+        r.mPackedNormal = emissionVertex.mShadingData.mPackedGeometryNormal;
 		r.mDirectionToLight = r.mPosition - referencePosition;
 		r.mDistanceToLight  = length(r.mDirectionToLight);
 		r.mDirectionToLight /= r.mDistanceToLight;

@@ -44,10 +44,10 @@ RayDesc makeRay(const float3 origin, const float3 direction, const float tmin = 
 }
 
 struct IntersectionResult {
+	ShadingData mShadingData;
 	uint mInstancePrimitiveIndex;
 	float mPrimitivePickPdf;
 	float mDistance;
-	ShadingData mShadingData;
 
 	property uint mInstanceIndex {
         get { return BF_GET(mInstancePrimitiveIndex, 0, 16); }
