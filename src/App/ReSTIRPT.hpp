@@ -25,6 +25,7 @@ private:
 	PushConstants mPushConstants;
 	PushConstants mRasterPushConstants;
 	unordered_map<string, bool> mDefines;
+	uint32_t mMisType = 0;
 
 	float mRenderScale = 1.f;
 

@@ -162,18 +162,20 @@ void ReSTIRPT::drawGui() {
 		ImGui::Separator();
 
 		{
-			defineCheckbox("ReSTIR GI", "gReSTIR_GI");
+			defineCheckbox("Path resampling", "gReSTIR_GI");
 			if (mDefines.at("gReSTIR_GI")) {
 				ImGui::Indent();
-				pushConstantField.operator()<uint32_t>("GI candidate samples", "mGICandidateSamples", 0, 128, 0.25f);
-				defineCheckbox("ReSTIR GI reuse", "gReSTIR_GI_Reuse");
+				pushConstantField.operator()<uint32_t>("Canonical samples", "mGICandidateSamples", 0, 128, 0.25f);
+				defineCheckbox("Sample reuse", "gReSTIR_GI_Reuse");
 				if (mDefines.at("gReSTIR_GI_Reuse")) {
 					defineCheckbox("Enable reconnection", "gReconnection");
 					defineCheckbox("Temporal reuse", "gTemporalReuse");
 					if (mDefines.at("gTemporalReuse"))
-						pushConstantField.operator()<float>   ("GI max M", "mGIMaxM", 0, 10, .1f);
-					pushConstantField.operator()<float>   ("GI reuse radius", "mGIReuseRadius", 0, 1000);
-					pushConstantField.operator()<uint32_t>("GI reuse samples", "mGIReuseSamples", 0, 32);
+						pushConstantField.operator()<float>   ("Max M", "mGIMaxM", 0, 10, .1f);
+					pushConstantField.operator()<float>   ("Reuse radius", "mGIReuseRadius", 0, 1000);
+					pushConstantField.operator()<uint32_t>("Reuse samples", "mGIReuseSamples", 0, 32);
+					if (Gui::scalarField<uint32_t>("MIS Type", &mMisType, 0, 2, 0.1))
+						changed = true;
 				}
 				ImGui::Unindent();
 			}
@@ -470,6 +472,7 @@ void ReSTIRPT::render(CommandBuffer& commandBuffer, const Image::View& renderTar
 	for (const auto&[define,enabled] : mDefines)
 		if (enabled)
 			defines[define] = to_string(enabled);
+	defines.emplace("gMisTypeIndex", to_string(mMisType));
 
 	if (hasMedia)
 		defines.emplace("gHasMedia", "true");

@@ -4,7 +4,7 @@
 #include "rcv.slang"
 
 #ifdef gReSTIR_GI
-static const bool gEnableReSTIR = false;
+static const bool gEnableReSTIR = true;
 #else
 static const bool gEnableReSTIR = false;
 #endif
@@ -12,6 +12,17 @@ static const bool gEnableReSTIR = false;
 static const bool gEnableReuse = true;
 #else
 static const bool gEnableReuse = false;
+#endif
+
+enum MisType {
+	eBiased = 0,
+    eFast   = 1,
+	eFull   = 2,
+};
+#ifdef gMisTypeIndex
+static const MisType gMisType = MisType(gMisTypeIndex);
+#else
+static const MisType gMisType = MisType::eFast;
 #endif
 
 struct PathReservoir {
@@ -35,11 +46,12 @@ struct PathReservoir {
         this.M = M;
     }
 
+	// The final monte carlo estimate
     Spectrum GetEstimate() {
         return p.mContribution * W;
     }
 
-    // Target PDF
+    // Target PDF for resampling
     float GetSampleTargetWeight() {
         return luminance(p.mContribution);
     }
@@ -152,18 +164,47 @@ extension PathTracer {
 			StoreReconnectionVertex(mFramebuffer, sPixelIndex, r.p.mSuffix.mReconnectionVertex);
     }
 
+	// Computes the sum of M values from pixels which could have generated 'sample'
+	// this is called Z in the unbiased reuse algorithm from ReSTIR DI
+    float ComputeZ(const SampleLocationGenerator sg, const PathSuffix sample, const int selected_i) {
+		// We know the destination pixel could have generated 'sample' since this function wouldn't have been called otherwise
+        float Z = gPushConstants.mGICandidateSamples;
+        for (uint i = 0; i < gPushConstants.mGIReuseSamples; i++) {
+            const Optional<PackedPathReservoir> candidate = LoadReservoir(sg[i]);
+            if (!candidate.hasValue)
+                continue;
+
+            if (i == selected_i) {
+                Z += candidate.value.M;
+                continue;
+            }
+
+			// shift sample to pixel i
+            float jacobian;
+            const Path pi = GenerateShiftedPath(candidate.value.GetBaseVertex(mScene, mFramebuffer), sample, jacobian);
+            if (any(pi.mContribution > 0) && jacobian > 0)
+                Z += candidate.value.M;
+        }
+        return Z;
+    }
+
     // Store reservoir for reuse & merge with neighbors
     void MergeWithPreviousReservoirs(const PathVertex vertex, inout RandomSampler rng, inout PathReservoir r) {
         if (gPushConstants.mReservoirHistoryValid == 0)
             return;
 
-		const float2 prevPixel = sPixelIndex + 0.5; //mFramebuffer.mPrevUVs[sPixelIndex] * gPushConstants.mOutputExtent;
+		const float2 prevPixel = mFramebuffer.mPrevUVs[sPixelIndex] * gPushConstants.mOutputExtent;
 		const SampleLocationGenerator sg = SampleLocationGenerator(rng, int2(prevPixel));
 
-		// apply mis weight to current sample
-		r.PrepareMerge(gPushConstants.mGICandidateSamples);
+        // apply mis weight to current sample
+        {
+            float misWeight = r.M;
+            if (gMisType == MisType::eFull)
+                misWeight = safe_divide(r.M, ComputeZ(sg, r.p.mSuffix, -1));
+            r.PrepareMerge(misWeight);
+        }
 
-		int selected_i = -1;
+        int selected_i = -1;
 
 		for (uint i = 0; i < gPushConstants.mGIReuseSamples; i++) {
 			const Optional<PackedPathReservoir> candidate = LoadReservoir(sg[i]);
@@ -186,31 +227,22 @@ extension PathTracer {
 				continue;
 			}
 
-			if (r.Merge(rng, ri, ri.M, jacobian)) {
+            float misWeight = ri.M;;
+            if (gMisType == MisType::eFull)
+                misWeight = safe_divide(ri.M, ComputeZ(sg, ri.p.mSuffix, i));
+
+            if (r.Merge(rng, ri, misWeight, jacobian)) {
 				selected_i = int(i);
 			}
 		}
 
-		// finalize MIS weight
-		if (r.W > 0) {
-			float Z = gPushConstants.mGICandidateSamples;
-			for (uint i = 0; i < gPushConstants.mGIReuseSamples; i++) {
-				const Optional<PackedPathReservoir> candidate = LoadReservoir(sg[i]);
-				if (!candidate.hasValue)
-					continue;
-
-				if (i == selected_i) {
-					Z += candidate.value.M;
-					continue;
-				}
-
-				float jacobian;
-				const Path pi = GenerateShiftedPath(candidate.value.GetBaseVertex(mScene, mFramebuffer), r.p.mSuffix, jacobian);
-				if (any(pi.mContribution > 0) && jacobian > 0)
-					Z += candidate.value.M;
-			}
-			r.W = safe_divide(r.W, Z);
-		}
+        // finalize MIS weight
+        if (r.W > 0) {
+			if (gMisType == MisType::eBiased)
+				r.W = safe_divide(r.W, r.M);
+			else if (gMisType == MisType::eFast)
+				r.W = safe_divide(r.W, ComputeZ(sg, r.p.mSuffix, selected_i));
+        }
 
 		r.FinalizeMerge();
 	}
@@ -232,10 +264,15 @@ extension PathTracer {
 			r.FinalizeMerge();
         }
 
-        // no resampling for paths with no bounces
-        if (gEnableReuse && (r.p.mSuffix.mPathLength > 1 || (all(r.p.mContribution <= 0) || r.W <= 0))) {
+        // resample neighbor paths
+        if (gEnableReuse) {
+			// no resampling for paths with no bounces
+			if (r.p.mSuffix.mPathLength == 1 && r.W > 0 && any(r.p.mContribution > 0))
+				return r.GetEstimate();
+
 			#ifndef gTemporalReuse
 			// without temporal reuse, we store the reservoir before merging with previous reservoirs
+			// note: technically this means we are one frame behind
 			StoreReservoir(r, vertex);
 			#endif
 

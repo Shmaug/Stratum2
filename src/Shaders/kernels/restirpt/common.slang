@@ -112,15 +112,15 @@ struct PathTracer {
 		isect.mShadingData.mTexcoordScreenSize = 0; // disable mipmaps for now
 		const PathVertex vertex = PathVertex(mScene, isect.mShadingData, isect.mInstancePrimitiveIndex, medium, -direction);
 
-		// store aux data (depth/normals/etc)
+		// store aux data (depth/normals/motion)
         {
 			float2 prevPixelCoord = index + 0.5;
 
 			const float depth = length(mFramebuffer.mViewInverseTransforms[0].transformPoint(vertex.mShadingData.mPosition));
 
 			float prevDepth = depth;
-			if (vertex.mInstanceIndex != INVALID_INSTANCE) {
-				const float3 prevCameraPos = mFramebuffer.mPrevViewInverseTransforms[0].transformPoint(mScene.mInstanceMotionTransforms[vertex.mPrimitiveIndex].transformPoint(vertex.mShadingData.mPosition));
+            if (vertex.mInstanceIndex != INVALID_INSTANCE) {
+                const float3 prevCameraPos = tmul(mFramebuffer.mPrevViewInverseTransforms[0], mScene.mInstanceMotionTransforms[vertex.mInstanceIndex]).transformPoint(vertex.mShadingData.mPosition);
 				prevDepth = length(prevCameraPos);
 				mFramebuffer.mViews[0].toRaster(prevCameraPos, prevPixelCoord);
 			}
