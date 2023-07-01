@@ -188,13 +188,17 @@ extension PathTracer {
         return Z;
     }
 
-    // Store reservoir for reuse & merge with neighbors
+    // Merge with neighbors
     void MergeWithPreviousReservoirs(const PathVertex vertex, inout RandomSampler rng, inout PathReservoir r) {
         if (gPushConstants.mReservoirHistoryValid == 0)
             return;
 
 		const float2 prevPixel = mFramebuffer.mPrevUVs[sPixelIndex] * gPushConstants.mOutputExtent;
-		const SampleLocationGenerator sg = SampleLocationGenerator(rng, int2(prevPixel));
+		SampleLocationGenerator sg = SampleLocationGenerator(rng, int2(prevPixel));
+		#ifdef gCoherentSpatialRNG
+		sg.mSeed.mState = WaveReadLaneFirst(sg.mSeed.mState);
+		sg.mCenter = WaveReadLaneFirst(sg.mCenter);
+		#endif
 
         // apply mis weight to current sample
         {

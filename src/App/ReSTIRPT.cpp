@@ -26,6 +26,8 @@ ReSTIRPT::ReSTIRPT(Node& node) : mNode(node) {
 		mDefines["gDebugFastBRDF"]  = false;
 		mDefines["gDebugPixel"]     = false;
 		mDefines["gDebugNee"]       = false;
+		mDefines["gCoherentRNG"]    = false;
+		mDefines["gCoherentSpatialRNG"] = false;
 
 		mPushConstants["mMaxDepth"] = 8u;
 		mPushConstants["mMaxDiffuseBounces"] = 3u;
@@ -148,6 +150,8 @@ void ReSTIRPT::drawGui() {
 		defineCheckbox("Normal maps",        "gNormalMaps");
 		defineCheckbox("Force lambertian",   "gLambertian");
 		defineCheckbox("NEE",                "gNee");
+		defineCheckbox("Coherent RNG",       "gCoherentRNG");
+		defineCheckbox("Coherent Spatial RNG", "gCoherentSpatialRNG");
 		defineCheckbox("Debug NEE",          "gDebugNee");
 		defineCheckbox("Debug fast BRDF",    "gDebugFastBRDF");
 		defineCheckbox("Debug pixel (ctrl)", "gDebugPixel");

@@ -11,11 +11,8 @@ struct PushConstants {
     uint mLightCount;
     uint mEnvironmentMaterialAddress;
     float mEnvironmentSampleProbability;
-    uint mDICandidateSamples;
     uint mGICandidateSamples;
-    float mDIMaxM;
     float mGIMaxM;
-    float mDIReuseRadius;
     float mGIReuseRadius;
     uint mGIReuseSamples;
     uint mReservoirHistoryValid;
